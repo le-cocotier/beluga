@@ -1,4 +1,4 @@
-#include <ctype.h>
+#include "main.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +14,7 @@ struct termios orig_termios;
 /* terminal */
 
 void die(const char *s) {
+  wipeScreen();
   perror(s);
   exit(1);
 }
@@ -43,26 +44,46 @@ void enableRawMode() {
   }
 }
 
+char editorReadKey() {
+  int nread;
+  char c;
+  while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+    if (nread == -1 && errno != EAGAIN) {
+      die("read");
+    }
+  }
+  return c;
+}
+
+/* output */
+
+void wipeScreen() {
+  /* Clear the screen */
+  write(STDOUT_FILENO, "\x1b[2J", 4);
+  /* Put the cursor at the top left corner */
+  write(STDOUT_FILENO, "\x1b[H", 3);
+}
+
+/* input */
+void editorProcessKeypress() {
+  char c = editorReadKey();
+
+  switch (c) {
+  case CTRL_KEY('q'):
+    exit(0);
+    break;
+  }
+}
+
 /* init */
 
 int main() {
-  char c;
 
   enableRawMode();
 
   while (1) {
-    c = '\0';
-    if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN) {
-      die("read");
-    }
-    if (iscntrl(c)) {
-      printf("%d\r\n", c);
-    } else {
-      printf("%d ('%c')\r\n", c, c);
-    }
-    if (c == CTRL_KEY('q')) {
-      break;
-    }
+    wipeScreen();
+    editorProcessKeypress();
   }
   return 0;
 }
