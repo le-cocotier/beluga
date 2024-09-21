@@ -25,6 +25,6 @@ debug:  main.c main.h
 	$(CC) main.c -o $(BELUGA_OUTPUT)/$(DEBUG_DIR)/beluga $(DEBUG_FLAGS)
 
 clean:
-	rm -rf $(BELUGA-OUTPUT)
+	rm -rf $(BELUGA_OUTPUT)
 
 # end
