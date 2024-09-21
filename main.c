@@ -1,3 +1,10 @@
+/**
+ * \file main.c
+ * \author Arthur Barraux
+ * \brief Base file of Beluga text editor. Contain fonctions for terminal
+ * interactions. \version 0.1 \date 21 septembre 2024
+ */
+
 #include "main.h"
 #include <errno.h>
 #include <stdio.h>
@@ -13,6 +20,11 @@ struct termios orig_termios;
 
 /* terminal */
 
+/**
+ * \fn void die(const char *s)
+ * \brief Exit program and return s error message.
+ * \param *s Error string
+ * */
 void die(const char *s) {
   wipeScreen();
   perror(s);
@@ -70,6 +82,7 @@ void editorProcessKeypress() {
 
   switch (c) {
   case CTRL_KEY('q'):
+    wipeScreen();
     exit(0);
     break;
   }
