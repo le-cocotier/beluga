@@ -54,3 +54,7 @@ dkms.conf
 # documentation
 
 doc/*
+
+
+# build directory
+beluga-output/
