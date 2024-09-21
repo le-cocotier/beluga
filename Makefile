@@ -14,6 +14,7 @@ build: main.c main.h
 	if [ ! -d beluga-output ]; then mkdir beluga-output; fi
 	if [ ! -d beluga-output/build ]; then mkdir beluga-output/build; fi
 	$(CC) main.c -o $(BELUGA_OUTPUT)/$(BUILD_DIR)/beluga $(BUILD_FLAGS)
+	doxygen
 
 DEBUG_DIR=debug
 
@@ -26,5 +27,6 @@ debug:  main.c main.h
 
 clean:
 	rm -rf $(BELUGA_OUTPUT)
+	rm -rf doc/
 
 # end

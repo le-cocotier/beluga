@@ -9,6 +9,8 @@ char editorReadKey();
 
 /* output */
 void wipeScreen();
+void editorDrawRows();
+void editorRefreshScreen();
 
 /* input */
 void editorProcessKeypress();
