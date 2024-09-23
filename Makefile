@@ -4,29 +4,26 @@
 # @file
 # @version 0.1
 
-BELUGA_OUTPUT=beluga-output
+BELUGA_OUTPUT=bin
 
 BUILD_DIR=build
 
 BUILD_FLAGS=-Wall -Wextra -pedantic
 
-build: main.c
-	if [ ! -d beluga-output ]; then mkdir beluga-output; fi
-	if [ ! -d beluga-output/build ]; then mkdir beluga-output/build; fi
-	$(CC) main.c -o $(BELUGA_OUTPUT)/$(BUILD_DIR)/beluga $(BUILD_FLAGS)
+build: main.c src/*
+	if [ ! -d $(BELUGA_OUTPUT) ]; then mkdir $(BELUGA_OUTPUT); fi
+	if [ ! -d doc/ ]; then mkdir doc; fi
+	$(CC) main.c -o $(BELUGA_OUTPUT)/beluga src/*
 	doxygen
-
-DEBUG_DIR=debug
 
 DEBUG_FLAGS=-Wall -Wextra -pedantic -Werror -fsanitize=address,undefined -g
 
-debug:  main.c
-	if [ ! -d beluga-output ]; then mkdir beluga-output; fi
-	if [ ! -d beluga-output/debug ]; then mkdir beluga-output/debug; fi
-	$(CC) main.c -o $(BELUGA_OUTPUT)/$(DEBUG_DIR)/beluga $(DEBUG_FLAGS)
+debug:  main.c src/*
+	if [ ! -d $(BELUGA_OUTPUT) ]; then mkdir $(BELUGA_OUTPUT); fi
+	$(CC) main.c -o $(BELUGA_OUTPUT)/beluga src/* $(DEBUG_FLAGS)
 
 clean:
-	rm -rf $(BELUGA_OUTPUT)
+	rm -r $(BELUGA_OUTPUT)/*
 	rm -rf doc/
 
 # end
