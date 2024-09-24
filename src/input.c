@@ -2,13 +2,13 @@
 
 void editorMoveCursor(struct editorConfig *E, int key) {
   switch (key) {
-  case CURSOR_LEFT:
+  case CURSOR_RIGHT:
     if (E->cursor_x != 0) {
       --E->cursor_x;
     }
     break;
   case CURSOR_DOWN:
-    if (E->cursor_x != E->screencols - 1) {
+    if (E->cursor_y != E->screenrows - 1) {
       ++E->cursor_y;
     }
     break;
@@ -17,8 +17,8 @@ void editorMoveCursor(struct editorConfig *E, int key) {
       --E->cursor_y;
     }
     break;
-  case CURSOR_RIGHT:
-    if (E->cursor_y != E->screenrows - 1) {
+  case CURSOR_LEFT:
+    if (E->cursor_x != E->screencols - 1) {
       ++E->cursor_x;
     }
     break;
