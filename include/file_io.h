@@ -8,6 +8,10 @@
 #include <stdlib.h>
 #include <sys/types.h>
 
+char *editorRowsToString(struct editorConfig *E, int *buffer_len);
+
 void editorOpen(struct editorConfig *E, char *filename);
+
+void editorSave(struct editorConfig *E);
 
 #endif // FILE_IO_H_

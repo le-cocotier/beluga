@@ -77,9 +77,9 @@ int editorReadKey() {
         case 'B':
           return CURSOR_DOWN;
         case 'C':
-          return CURSOR_LEFT;
-        case 'D':
           return CURSOR_RIGHT;
+        case 'D':
+          return CURSOR_LEFT;
         case 'H':
           return BEG_LINE;
         case 'F':

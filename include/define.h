@@ -9,6 +9,7 @@
 #define ERASE_END_LINE "\x1b[K"
 
 enum editorKey {
+  BACKSPACE = 127,
   CURSOR_LEFT = 1000,
   CURSOR_RIGHT,
   CURSOR_UP,
@@ -23,5 +24,6 @@ enum editorKey {
 #define ABUF_INIT {NULL, 0}
 
 #define BELUGA_VERSION "0.1"
+#define TAB_LENGTH 8
 
 #endif // DEFINE_H_

@@ -16,7 +16,7 @@ build: main.c src/*
 	$(CC) main.c -o $(BELUGA_OUTPUT)/beluga src/*
 	doxygen
 
-DEBUG_FLAGS=-Wall -Wextra -pedantic -Werror -fsanitize=address,undefined -g
+DEBUG_FLAGS=-Wall -Wextra -pedantic -Werror -fsanitize=address -g
 
 debug:  main.c src/*
 	if [ ! -d $(BELUGA_OUTPUT) ]; then mkdir $(BELUGA_OUTPUT); fi

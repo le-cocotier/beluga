@@ -1,7 +1,40 @@
 #include "../include/file_io.h"
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+char *editorRowsToString(struct editorConfig *E, int *buffer_len) {
+  int tot_len = 0;
+  int j;
+  char *buf;
+  char *p;
+
+  for (j = 0; j < E->numrows; ++j) {
+    tot_len += E->row[j].size + 1;
+  }
+  *buffer_len = tot_len;
+  buf = malloc(tot_len);
+  p = buf;
+  for (j = 0; j < E->numrows; ++j) {
+    memcpy(p, E->row[j].chars, E->row[j].size);
+    p += E->row[j].size;
+    *p = '\n';
+    p++;
+  }
+
+  return buf;
+}
 
 void editorOpen(struct editorConfig *E, char *filename) {
-  FILE *fp = fopen(filename, "r");
+  FILE *fp;
+
+  free(E->filename);
+  E->filename = strdup(filename);
+
+  fp = fopen(filename, "r");
   if (!fp)
     die("fopen");
 
@@ -18,4 +51,19 @@ void editorOpen(struct editorConfig *E, char *filename) {
   }
   free(line);
   fclose(fp);
+}
+
+void editorSave(struct editorConfig *E) {
+  int len;
+  char *buf;
+  int fd;
+  if (E->filename == NULL) {
+    return;
+  }
+  buf = editorRowsToString(E, &len);
+  fd = open(E->filename, O_RDWR | O_CREAT, 0644);
+  ftruncate(fd, len);
+  write(fd, buf, len);
+  close(fd);
+  free(buf);
 }
