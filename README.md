@@ -9,7 +9,8 @@ You will only need **make** or **gcc** to compile the editor.
 ## Installation
 
 Here is the installation line :
-```git clone https://github.com/le-cocotier/beluga.git ~/.beluga && cd ~/.beluga && make build```
+
+```git clone --branch V1.0 --single-branch https://github.com/le-cocotier/beluga.git ~/.beluga && cd ~/.beluga && make build```
 
 The executable file will be in `bin/beluga`. Feel free to add it to your path.
 
