@@ -30,6 +30,7 @@ struct editorConfig {
   int screencols;         /**< Terminal width*/
   int numrows;            /**< Number of rows contained */
   erow *row;              /**< Store all the rows printed */
+  int dirty;
   char *filename;
   char status_msg[80];
   time_t status_msg_time;

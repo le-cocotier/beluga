@@ -1,4 +1,6 @@
 #include "../include/file_io.h"
+#include "../include/input.h"
+#include "../include/output.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,10 +49,11 @@ void editorOpen(struct editorConfig *E, char *filename) {
            (line[line_len - 1] == '\n' || line[line_len - 1] == '\r')) {
       --line_len;
     }
-    editorAppendRow(E, line, line_len);
+    editorInsertRow(E, E->numrows, line, line_len);
   }
   free(line);
   fclose(fp);
+  E->dirty = 0;
 }
 
 void editorSave(struct editorConfig *E) {
@@ -58,12 +61,26 @@ void editorSave(struct editorConfig *E) {
   char *buf;
   int fd;
   if (E->filename == NULL) {
-    return;
+    E->filename = editorPrompt(E, "Save as: %s (ESC to cancel)");
+    if (E->filename == NULL) {
+      editorSetStatusMessage(E, "Save aborted");
+      return;
+    }
   }
   buf = editorRowsToString(E, &len);
   fd = open(E->filename, O_RDWR | O_CREAT, 0644);
-  ftruncate(fd, len);
-  write(fd, buf, len);
-  close(fd);
+  if (fd != -1) {
+    if (ftruncate(fd, len) != -1) {
+      if (write(fd, buf, len) == len) {
+        close(fd);
+        free(buf);
+        E->dirty = 0;
+        editorSetStatusMessage(E, "%d bytes written to disk", len);
+        return;
+      }
+    }
+    close(fd);
+  }
   free(buf);
+  editorSetStatusMessage(E, "Can't save! I/O error: %s", strerror(errno));
 }

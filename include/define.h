@@ -3,6 +3,7 @@
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
+#define ESCAPE '\x1b'
 #define CURSOR_TOP_LEFT "\x1b[H"
 #define HIDE_CURSOR "\x1b[?25l"
 #define SHOW_CURSOR "\x1b[?25h"
@@ -10,12 +11,12 @@
 
 enum editorKey {
   BACKSPACE = 127,
-  CURSOR_LEFT = 1000,
-  CURSOR_RIGHT,
-  CURSOR_UP,
-  CURSOR_DOWN,
+  ARROW_LEFT = 1000,
+  ARROW_RIGHT,
+  ARROW_UP,
+  ARROW_DOWN,
+  DEL_KEY,
   BEG_LINE,
-  DELETE,
   END_LINE,
   PAGE_UP,
   PAGE_DOWN,
@@ -23,7 +24,8 @@ enum editorKey {
 
 #define ABUF_INIT {NULL, 0}
 
-#define BELUGA_VERSION "0.1"
-#define TAB_LENGTH 8
+#define BELUGA_VERSION "1.0"
+#define TAB_LENGTH 4
+#define QUIT_TIMES 1
 
 #endif // DEFINE_H_

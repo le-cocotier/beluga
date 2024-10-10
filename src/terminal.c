@@ -56,7 +56,7 @@ int editorReadKey() {
           case '1':
             return BEG_LINE;
           case '3':
-            return DELETE;
+            return DEL_KEY;
           case '4':
             return END_LINE;
           case '5':
@@ -73,13 +73,13 @@ int editorReadKey() {
 
         switch (seq[1]) {
         case 'A':
-          return CURSOR_UP;
+          return ARROW_UP;
         case 'B':
-          return CURSOR_DOWN;
+          return ARROW_DOWN;
         case 'C':
-          return CURSOR_RIGHT;
+          return ARROW_RIGHT;
         case 'D':
-          return CURSOR_LEFT;
+          return ARROW_LEFT;
         case 'H':
           return BEG_LINE;
         case 'F':

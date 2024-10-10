@@ -8,6 +8,7 @@ void initEditor(struct editorConfig *E) {
   E->col_offset = 0;
   E->numrows = 0;
   E->row = NULL;
+  E->dirty = 0;
   E->filename = NULL;
   E->status_msg[0] = '\0';
   E->status_msg_time = 0;

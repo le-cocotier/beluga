@@ -3,6 +3,7 @@
 
 #include "data.h"
 #include "define.h"
+#include "output.h"
 #include "terminal.h"
 #include <unistd.h>
 
@@ -17,6 +18,8 @@
 // HOME \x1b[1~ || <esc>[7~ || <esc>[H  || <esc>OH
 // END \x1b[4~ || <esc>[8~ || <esc>[F  || <esc>OF
 // DELETE \x1b[3~
+
+char *editorPrompt(struct editorConfig *E, char *prompt);
 
 void editorMoveCursor(struct editorConfig *E, int key);
 

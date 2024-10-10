@@ -71,8 +71,9 @@ void editorDrawStatusBar(struct editorConfig *E, struct abuf *ab) {
   char status[80], render_status[80];
 
   abAppend(ab, "\x1b[7m", 4); // inverting colors
-  len = snprintf(status, sizeof(status), "%.20s - %d lines",
-                 E->filename ? E->filename : "[No Name]", E->numrows);
+  len = snprintf(status, sizeof(status), "%.20s - %d lines%s",
+                 E->filename ? E->filename : "[No Name]", E->numrows,
+                 E->dirty ? "*" : "");
   render_len = snprintf(render_status, sizeof(render_status), "%d/%d",
                         E->cursor_y + 1, E->numrows);
   if (len > E->screencols) {
