@@ -31,6 +31,11 @@ char *editorRowsToString(struct editorConfig *E, int *buffer_len) {
 }
 
 void editorOpen(struct editorConfig *E, char *filename) {
+  /**
+     \function void editorOpen(struct editorConfig *E, char *filename)
+     \brief Open filename on editor stream. Throw fopen error if file doesn't
+     exist.
+   */
   FILE *fp;
 
   free(E->filename);

@@ -1,16 +1,75 @@
 #include "../include/input.h"
-#include "../include/editor_op.h"
-#include "../include/file_io.h"
-#include "../include/output.h"
-#include <ctype.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
+#include <string.h>
 
 /**
  * \fn char * editorPrompt(struct editorConfig *E, char *prompt)
  * \brief Return user input in a prompt when enter is hit. */
+
+char *key_to_string(int key) {
+  static char key_str[32];
+
+  char * tmp = malloc(10 * sizeof(char));
+  sprintf(tmp, "%d\n", key);
+  log_string(tmp);
+
+
+  // First test enter key
+
+  if (key == '\r') {
+    strcpy(key_str, "ENTER");
+  } else if (key >= 1 && key <= 26) { // CTRL keys
+    snprintf(key_str, sizeof(key_str), "CTRL-%c", 'a' + key - 1);
+  } else {
+    switch (key) {
+    case ARROW_UP:
+      strcpy(key_str, "ARROW-UP");
+      break;
+    case ARROW_DOWN:
+      strcpy(key_str, "ARROW-DOWN");
+      break;
+    case ARROW_LEFT:
+      strcpy(key_str, "ARROW-LEFT");
+      break;
+    case ARROW_RIGHT:
+      strcpy(key_str, "ARROW-RIGHT");
+      break;
+    case PAGE_UP:
+      strcpy(key_str, "PAGE-UP");
+      break;
+    case PAGE_DOWN:
+      strcpy(key_str, "PAGE-DOWN");
+      break;
+    case DEL_KEY:
+      strcpy(key_str, "DEL");
+      break;
+    case BACKSPACE:
+      strcpy(key_str, "BACKSPACE");
+      break;
+    case '\r':
+      strcpy(key_str, "ENTER");
+      break;
+    case '\x1b':
+      strcpy(key_str, "ESCAPE");
+      break;
+    case BEG_LINE:
+      strcpy(key_str, "HOME");
+      break;
+    case END_LINE:
+      strcpy(key_str, "END");
+      break;
+    default:
+      // For regular characters
+      if (isprint(key)) {
+        snprintf(key_str, sizeof(key_str), "%c", key);
+      } else {
+        snprintf(key_str, sizeof(key_str), "KEY-%d", key);
+      }
+    }
+  }
+  return key_str;
+}
 
 char *editorPrompt(struct editorConfig *E, char *prompt) {
   size_t buf_size = 128;
@@ -51,6 +110,7 @@ char *editorPrompt(struct editorConfig *E, char *prompt) {
 void editorMoveCursor(struct editorConfig *E, int key) {
   erow *row = (E->cursor_y >= E->numrows) ? NULL : &E->row[E->cursor_y];
   int row_len;
+  char *sequence = key_to_string(key);
   switch (key) {
   case ARROW_RIGHT:
     if (row && E->cursor_x < row->size) {
@@ -87,82 +147,78 @@ void editorMoveCursor(struct editorConfig *E, int key) {
   }
 }
 
+key_sequence_t current_sequence = {0};
+
+int handle_key_sequence(struct editorConfig *E, int key) {
+  char *key_str = key_to_string(key);
+
+  log_string(key_str);
+
+  // Add current key to sequence
+  if (current_sequence.sequence_len > 0) {
+    strcat(current_sequence.sequence, " ");
+  }
+  strcat(current_sequence.sequence, key_str);
+  current_sequence.sequence_len++;
+
+  // Check if this sequence matches any binding
+  const char *command =
+      config_get_key_mapping(E->config, current_sequence.sequence);
+  if (command) {
+    log_string("Command found\n");
+    // Found a complete binding - execute it
+    execute_key_binding(E->config, current_sequence.sequence, E);
+
+    // Reset sequence
+    memset(&current_sequence, 0, sizeof(current_sequence));
+    return 1; // Handled
+  }
+
+  // Check if this could be the start of a longer sequence
+  // (This is a simple check - you might want to make it more sophisticated)
+  int potential_match = 0;
+  // You'd implement a function to check for partial matches here
+
+  if (!potential_match) {
+    // No potential matches, reset sequence and handle as single key
+    memset(&current_sequence, 0, sizeof(current_sequence));
+    return 0; // Not handled
+  }
+
+  return 1; // Waiting for more keys in sequence
+}
+
+int execute_key_binding(config_t *config, const char *key_combo,
+                        void *context) {
+  const char *command = config_get_key_mapping(config, key_combo);
+  if (!command) {
+    log_string("No mapping found for key combination: ");
+    log_string(key_combo);
+    log_string("\n");
+    return -1;
+  }
+
+  // Remove the '%' prefix if present
+  const char *func_name = command;
+  if (command[0] == '%') {
+    func_name = command + 1;
+  }
+
+  return execute_command(func_name, context);
+}
+
 void editorProcessKeypress(struct editorConfig *E) {
   static int quit_times = QUIT_TIMES;
   int c = editorReadKey();
-  int times;
 
-  switch (c) {
-
-  case '\r':
-    editorInsertNewLine(E);
-    break;
-  case CTRL_KEY('q'):
-    if (E->dirty && quit_times > 0) {
-      editorSetStatusMessage(E,
-                             "WARNING! Changes hasn't been saved. Press Ctrl-Q "
-                             "another time to quit.");
-      --quit_times;
-      return;
+  if (E->config) {
+    if (handle_key_sequence(E, c)) {
+      quit_times = QUIT_TIMES;
+      return; // Key was handled by config system
     }
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, CURSOR_TOP_LEFT, 3);
-    disableRawMode(E);
-    exit(0);
-    break;
-
-  case CTRL_KEY('s'):
-    editorSave(E);
-    break;
-
-  case BEG_LINE:
-    E->cursor_x = 0;
-    break;
-
-  case END_LINE:
-    if (E->cursor_y < E->numrows) {
-      E->cursor_x = E->row[E->cursor_y].size;
-    }
-    break;
-
-  case BACKSPACE:
-  case CTRL_KEY('h'):
-  case DEL_KEY:
-    if (c == DEL_KEY) {
-      editorMoveCursor(E, ARROW_RIGHT);
-    }
-    editorDelChar(E);
-    break;
-
-  case PAGE_UP:
-  case PAGE_DOWN: {
-    if (c == PAGE_UP) {
-      E->cursor_y = E->row_offset;
-    } else if (c == PAGE_DOWN) {
-      E->cursor_y = E->row_offset + E->screenrows - 1;
-      if (E->cursor_y > E->numrows) {
-        E->cursor_y = E->numrows;
-      }
-    }
-    times = E->screenrows;
-    while (--times) {
-      editorMoveCursor(E, c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
-    }
-  } break;
-
-  case ARROW_UP:
-  case ARROW_DOWN:
-  case ARROW_LEFT:
-  case ARROW_RIGHT:
-    editorMoveCursor(E, c);
-    break;
-
-  case CTRL_KEY('l'):
-  case '\x1b':
-    break;
-  default:
-    editorInsertChar(E, c);
-    break;
   }
-  quit_times = QUIT_TIMES;
+
+  editorInsertChar(E, c);
+  // reset quit times
+  E->quit_times = QUIT_TIMES;
 }

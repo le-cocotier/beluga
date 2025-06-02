@@ -1,4 +1,5 @@
 #include "../include/row_op.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -129,3 +130,10 @@ void editorRowDelchar(struct editorConfig *E, erow *row, int at) {
   editorUpdateRow(row);
   ++E->dirty;
 }
+
+void log_string(char * string){
+  FILE * fd = fopen("tmp/log.txt", "a");
+  fprintf(fd, "%s\n", string);
+  fclose(fd);
+}
+

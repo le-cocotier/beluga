@@ -1,0 +1,21 @@
+// Configuration file
+
+,map-key("ARROW-UP" %move-cursor-up)
+,map-key("ARROW-DOWN" %move-cursor-down)
+,map-key("ARROW-RIGHT" %move-cursor-right)
+,map-key("ARROW-LEFT" %move-cursor-left)
+,map-key("PAGE-UP" %move-cursor-page-up)
+,map-key("PAGE-DOWN" %move-cursor-page-down)
+,map-key("DEL_KEY" %delete-next-char)
+,map-key("BACKSPACE" %delete-previous-char)
+,map-key("ENTER" %editor-insert-new-line)
+,map-key("CTRL-s" %editor-save)
+,map-key("CTRL-q" %editor-quit)
+,map-key("CTRL-a" %move-cursor-beg-line)
+,map-key("CTRL-z" %move-cursor-end-line)
+,map-key("CTRL-f o" %open-file)
+,map-key("CTRL-w s h" %window-split-horizontal)
+,map-key("CTRL-w s v" %window-split-vertical)
+
+,define(theme "dark")
+,define(auto-save true)

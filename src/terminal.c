@@ -1,14 +1,18 @@
 #include "../include/terminal.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 void die(const char *s) {
   write(STDOUT_FILENO, "\x1b[2J", 4);
   write(STDOUT_FILENO, CURSOR_TOP_LEFT, 3);
+
   perror(s);
   exit(1);
 }
 
 void disableRawMode(struct editorConfig *E) {
   if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E->orig_termios) == -1) {
+    free(E);
     die("tcsetattr");
   }
 }
@@ -27,7 +31,7 @@ void enableRawMode(struct editorConfig *E) {
   raw.c_cc[VTIME] = 1;
 
   if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) {
-    die("tcgetattr");
+    die("tcsetattr");
   }
 }
 
@@ -41,6 +45,7 @@ int editorReadKey() {
     }
   }
 
+  fprintf(stderr, "%X (%c)\n", c, c);
   if (c == '\x1b') {
     if (read(STDIN_FILENO, &seq[0], 1) != 1 ||
         read(STDIN_FILENO, &seq[1], 1) != 1) {

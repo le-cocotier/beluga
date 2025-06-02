@@ -5,6 +5,7 @@
  * interactions. \version 0.1 \date 21 septembre 2024
  */
 
+#include <unistd.h>
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
 #define _GNU_SOURCE
@@ -17,15 +18,12 @@
 #include "include/terminal.h"
 
 int main(int argc, char *argv[]) {
-
-  struct editorConfig E;
-
+  static struct editorConfig E;
   enableRawMode(&E);
   initEditor(&E);
   if (argc >= 2) {
     editorOpen(&E, argv[1]);
   }
-
   editorSetStatusMessage(&E, "HELP: Ctrl-S = save | Ctrl-Q = quit");
 
   while (1) {

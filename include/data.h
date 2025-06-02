@@ -3,6 +3,7 @@
 
 #include <termios.h>
 #include <time.h>
+#include "../blisp/include/data.h"
 
 /**
  * \struct erow
@@ -31,10 +32,12 @@ struct editorConfig {
   int numrows;            /**< Number of rows contained */
   erow *row;              /**< Store all the rows printed */
   int dirty;
+  int quit_times;
   char *filename;
   char status_msg[80];
   time_t status_msg_time;
   struct termios orig_termios; /**< Terminal communication interface */
+  config_t *config;
 };
 
 /**
@@ -46,5 +49,13 @@ struct abuf {
   char *b; /**< Text that will be printed */
   int len; /**< Length of the text */
 };
+
+// Enhanced key sequence handling for multi-key bindings like "CTRL-f o"
+typedef struct {
+  char sequence[64];
+  int sequence_len;
+  int last_key_time; // You might want to add timing if needed
+} key_sequence_t;
+
 
 #endif

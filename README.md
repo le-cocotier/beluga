@@ -4,17 +4,17 @@ Beluga is a project of CLI text editor that will fit perfectly with your azerty 
 
 ## Requirements
 
-You will only need **make** or **gcc** to compile the editor.
+You will only need **cmake** and **clang** to compile the editor.
 
 ## Installation
 
 Here is the installation line :
 
-```git clone --branch V1.0 --single-branch https://github.com/le-cocotier/beluga.git ~/.beluga && cd ~/.beluga && make build```
+```git clone --branch V1.0 --single-branch https://github.com/le-cocotier/beluga.git ~/.beluga && cd ~/.beluga && mkdir build && cd build && cmake ../ && make beluga```
 
 The executable file will be in `bin/beluga`. Feel free to add it to your path.
 
-You can either run `make all` if you're interested by the doxygen documentation.
+You can either run `make all` or `make doc_doxygen` if you're interested by the doxygen documentation.
 
 ## Getting start
 

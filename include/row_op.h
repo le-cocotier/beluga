@@ -25,4 +25,6 @@ void editorRowAppendString(struct editorConfig *E, erow *row, char *s,
 
 void editorRowDelchar(struct editorConfig *E, erow *row, int at);
 
+void log_string(char * string);
+
 #endif // ROW_OP_H_

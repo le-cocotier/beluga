@@ -3,7 +3,12 @@
 
 #include "data.h"
 #include "terminal.h"
+#include "builtins.h"
+#include "../blisp/include/config_tools.h"
 #include <stdio.h>
+
+
+void getConfig();
 
 /**
  * \fn void initEditor()

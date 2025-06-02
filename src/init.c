@@ -9,6 +9,7 @@ void initEditor(struct editorConfig *E) {
   E->numrows = 0;
   E->row = NULL;
   E->dirty = 0;
+  E->quit_times = QUIT_TIMES;
   E->filename = NULL;
   E->status_msg[0] = '\0';
   E->status_msg_time = 0;
@@ -16,4 +17,11 @@ void initEditor(struct editorConfig *E) {
     die("getWindowSize");
   }
   E->screenrows -= 2;
+
+  E->config = config_create();
+  config_parse_file(E->config, "../config/init.bl");
+
+  config_print_all(E->config);
+
+  init_function_registry();
 }
