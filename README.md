@@ -8,9 +8,9 @@ You will only need **cmake** and **clang** to compile the editor.
 
 ## Installation
 
-Here is the installation line :
+Here is the installation line for development version:
 
-```git clone --branch V1.0 --single-branch https://github.com/le-cocotier/beluga.git ~/.beluga && cd ~/.beluga && mkdir build && cd build && cmake ../ && make beluga```
+```git clone --recurse-submodules https://github.com/le-cocotier/beluga.git ~/.beluga && cd ~/.beluga && mkdir build && cd build && cmake ../ && make beluga```
 
 The executable file will be in `bin/beluga`. Feel free to add it to your path.
 
