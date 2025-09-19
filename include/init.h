@@ -10,6 +10,6 @@
  * \brief Job's function is to initialize all the fields of editorConfig.
  * */
 
-void initEditor(struct editorConfig *E);
+void initEditor();
 
 #endif // INIT_H_

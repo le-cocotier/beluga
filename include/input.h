@@ -19,15 +19,15 @@
 // END \x1b[4~ || <esc>[8~ || <esc>[F  || <esc>OF
 // DELETE \x1b[3~
 
-char *editorPrompt(struct editorConfig *E, char *prompt);
+char *editorPrompt(char *prompt);
 
-void editorMoveCursor(struct editorConfig *E, int key);
+void editorMoveCursor(int key);
 
 /**
  * \fn void editorProcessKeypress()
  * \brief Get the last key input and do the proper action.
  */
 
-void editorProcessKeypress(struct editorConfig *E);
+void editorProcessKeypress();
 
 #endif // INPUT_H_

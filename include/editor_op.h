@@ -2,10 +2,10 @@
 #define EDITOR_OP_H_
 
 #include "data.h"
-void editorInsertChar(struct editorConfig *E, int c);
+void editorInsertChar(int c);
 
-void editorInsertNewLine(struct editorConfig *E);
+void editorInsertNewLine();
 
-void editorDelChar(struct editorConfig *E);
+void editorDelChar();
 
 #endif // EDITOR_OP_H_

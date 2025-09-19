@@ -12,22 +12,23 @@ extern char *strdup(const char *);
 extern ssize_t getline(char **restrict lineptr, size_t *restrict n,
                        FILE *restrict stream);
 extern int ftruncate(int fd, off_t length);
+extern struct editorConfig E;
 
-char *editorRowsToString(struct editorConfig *E, int *buffer_len) {
+char *editorRowsToString(int *buffer_len) {
   int tot_len = 0;
   int j;
   char *buf;
   char *p;
 
-  for (j = 0; j < E->numrows; ++j) {
-    tot_len += E->row[j].size + 1;
+  for (j = 0; j < E.numrows; ++j) {
+    tot_len += E.row[j].size + 1;
   }
   *buffer_len = tot_len;
   buf = malloc(tot_len);
   p = buf;
-  for (j = 0; j < E->numrows; ++j) {
-    memcpy(p, E->row[j].chars, E->row[j].size);
-    p += E->row[j].size;
+  for (j = 0; j < E.numrows; ++j) {
+    memcpy(p, E.row[j].chars, E.row[j].size);
+    p += E.row[j].size;
     *p = '\n';
     p++;
   }
@@ -35,11 +36,11 @@ char *editorRowsToString(struct editorConfig *E, int *buffer_len) {
   return buf;
 }
 
-void editorOpen(struct editorConfig *E, char *filename) {
+void editorOpen(char *filename) {
   FILE *fp;
 
-  free(E->filename);
-  E->filename = strdup(filename);
+  free(E.filename);
+  E.filename = strdup(filename);
 
   fp = fopen(filename, "r");
   if (!fp)
@@ -54,38 +55,38 @@ void editorOpen(struct editorConfig *E, char *filename) {
            (line[line_len - 1] == '\n' || line[line_len - 1] == '\r')) {
       --line_len;
     }
-    editorInsertRow(E, E->numrows, line, line_len);
+    editorInsertRow(E.numrows, line, line_len);
   }
   free(line);
   fclose(fp);
-  E->dirty = 0;
+  E.dirty = 0;
 }
 
-void editorSave(struct editorConfig *E) {
+void editorSave() {
   int len;
   char *buf;
   int fd;
-  if (E->filename == NULL) {
-    E->filename = editorPrompt(E, "Save as: %s (ESC to cancel)");
-    if (E->filename == NULL) {
-      editorSetStatusMessage(E, "Save aborted");
+  if (E.filename == NULL) {
+    E.filename = editorPrompt("Save as: %s (ESC to cancel)");
+    if (E.filename == NULL) {
+      editorSetStatusMessage("Save aborted");
       return;
     }
   }
-  buf = editorRowsToString(E, &len);
-  fd = open(E->filename, O_RDWR | O_CREAT, 0644);
+  buf = editorRowsToString(&len);
+  fd = open(E.filename, O_RDWR | O_CREAT, 0644);
   if (fd != -1) {
     if (ftruncate(fd, len) != -1) {
       if (write(fd, buf, len) == len) {
         close(fd);
         free(buf);
-        E->dirty = 0;
-        editorSetStatusMessage(E, "%d bytes written to disk", len);
+        E.dirty = 0;
+        editorSetStatusMessage("%d bytes written to disk", len);
         return;
       }
     }
     close(fd);
   }
   free(buf);
-  editorSetStatusMessage(E, "Can't save! I/O error: %s", strerror(errno));
+  editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
 }

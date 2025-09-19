@@ -1,4 +1,5 @@
 #include "../include/terminal.h"
+#include "data.h"
 
 void die(const char *s) {
   write(STDOUT_FILENO, "\x1b[2J", 4);
@@ -7,18 +8,18 @@ void die(const char *s) {
   exit(1);
 }
 
-void disableRawMode(struct editorConfig *E) {
-  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E->orig_termios) == -1) {
+void disableRawMode() {
+  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1) {
     die("tcsetattr");
   }
 }
 
-void enableRawMode(struct editorConfig *E) {
-  if (tcgetattr(STDIN_FILENO, &E->orig_termios) == -1) {
+void enableRawMode() {
+  if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) {
     die("tcgetattr");
   }
 
-  struct termios raw = E->orig_termios;
+  struct termios raw = E.orig_termios;
   raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
   raw.c_oflag &= ~(OPOST);
   raw.c_cflag |= (CS8);

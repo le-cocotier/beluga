@@ -1,6 +1,7 @@
 #ifndef DATA_H_
 #define DATA_H_
 
+#include "../lisp-interpreter/dist/lisp.h"
 #include <termios.h>
 #include <time.h>
 
@@ -35,6 +36,9 @@ struct editorConfig {
   char status_msg[80];
   time_t status_msg_time;
   struct termios orig_termios; /**< Terminal communication interface */
+  LispContext ctx;             /** Lisp context */
+  Lisp ctx_data;               /** Lisp data context */
+  LispError ctx_error;         /** Lisp ctx error */
 };
 
 /**
@@ -46,5 +50,7 @@ struct abuf {
   char *b; /**< Text that will be printed */
   int len; /**< Length of the text */
 };
+
+extern struct editorConfig E;
 
 #endif
