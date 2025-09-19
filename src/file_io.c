@@ -8,6 +8,11 @@
 #include <time.h>
 #include <unistd.h>
 
+extern char *strdup(const char *);
+extern ssize_t getline(char **restrict lineptr, size_t *restrict n,
+                       FILE *restrict stream);
+extern int ftruncate(int fd, off_t length);
+
 char *editorRowsToString(struct editorConfig *E, int *buffer_len) {
   int tot_len = 0;
   int j;
