@@ -1,7 +1,6 @@
 #include "../include/init.h"
-#include "data.h"
+#include "../include/data.h"
 #include <stdio.h>
-#include <stdlib.h>
 
 extern struct editorConfig;
 
@@ -21,4 +20,10 @@ void initEditor() {
     die("getWindowSize");
   }
   E.screenrows -= 2;
+
+  // E.fd_init_file = fopen("../config/init.el", "r");
+
+  // E.ctx = lisp_init();
+  // E.ctx_data = lisp_read_file(E.fd_init_file, &E.ctx_error, E.ctx);
+  // lisp_printf(stderr, E.ctx_data);
 }

@@ -33,7 +33,7 @@ if cc.get_id() == 'clang'
 endif
 
 # Include directory
-inc_dir = include_directories('include', 'lisp-interpreter/dist')
+inc_dir = include_directories('include')
 
 # Source files
 src_files = files(
@@ -49,7 +49,7 @@ src_files = files(
 )
 
 # Executable
-executable('editor',
+executable('beluga',
   src_files,
   include_directories : inc_dir,
   install : true,
