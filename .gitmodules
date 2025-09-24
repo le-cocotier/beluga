@@ -1,3 +1,0 @@
-[submodule "lisp-interpreter"]
-	path = lisp-interpreter
-	url = https://github.com/justinmeiners/lisp-interpreter.git
