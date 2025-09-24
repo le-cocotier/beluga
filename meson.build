@@ -2,12 +2,12 @@ project('editor', 'c',
   version : '1.0.0',
   default_options : [
     'warning_level=2',
-    'c_std=c99'
   ]
 )
 
 # Check if we're using Clang and add Clang-specific options
 cc = meson.get_compiler('c')
+m = cc.find_library('m', required: true)
 if cc.get_id() == 'clang'
   add_project_arguments([
     '-Wextra',
@@ -33,7 +33,7 @@ if cc.get_id() == 'clang'
 endif
 
 # Include directory
-inc_dir = include_directories('include')
+inc_dir = include_directories('include', 'lisp-interpreter/dist')
 
 # Source files
 src_files = files(
@@ -45,12 +45,13 @@ src_files = files(
   'src/input.c',
   'src/output.c',
   'src/row_op.c',
-  'src/terminal.c'
+  'src/terminal.c',
 )
 
 # Executable
 executable('editor',
   src_files,
   include_directories : inc_dir,
-  install : true
+  install : true,
+  dependencies: [m]
 )
