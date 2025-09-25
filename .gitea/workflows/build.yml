@@ -34,3 +34,16 @@ jobs:
         with:
           name: beluga
           path: build/
+
+      - name: Install Doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+
+      - name: Build Doxygen Docs
+        run: doxygen Doxyfile
+
+      - name: Deploy to Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          publish_dir: ./docs/html
+          publish_branch: pages
+          github_token: ${{ secrets.GITEA_TOKEN }}

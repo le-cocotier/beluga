@@ -1,39 +1,15 @@
-project('editor', 'c',
+project('beluga', 'c',
   version : '1.0.0',
   default_options : [
-    'warning_level=2',
+    'c_std=none',
   ]
 )
 
-# Check if we're using Clang and add Clang-specific options
 cc = meson.get_compiler('c')
-m = cc.find_library('m', required: true)
-if cc.get_id() == 'clang'
-  add_project_arguments([
-    '-Wextra',
-    '-Wpedantic',
-    '-Wno-unused-parameter',
-    '-fcolor-diagnostics'  # Colored output
-  ], language : 'c')
-  
-  # Add debug options for debug builds
-  if get_option('buildtype') == 'debug'
-    add_project_arguments([
-      '-fsanitize=address',      # AddressSanitizer
-      '-fsanitize=undefined',    # UndefinedBehaviorSanitizer
-      '-g3',                     # Full debug info
-      '-O0'                      # No optimization
-    ], language : 'c')
-    
-    add_project_link_arguments([
-      '-fsanitize=address',
-      '-fsanitize=undefined'
-    ], language : 'c')
-  endif
-endif
+m = cc.find_library('m', required: false)            
 
 # Include directory
-inc_dir = include_directories('include')
+inc_dir = include_directories('include', 'lisp-interpreter/dist')
 
 # Source files
 src_files = files(
@@ -52,6 +28,5 @@ src_files = files(
 executable('beluga',
   src_files,
   include_directories : inc_dir,
-  install : true,
   dependencies: [m]
 )
