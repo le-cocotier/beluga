@@ -30,7 +30,7 @@ jobs:
         run: meson test -C build --print-errorlogs || true
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: beluga
           path: build/
