@@ -1,9 +1,8 @@
-name: Meson Build and Deploy
+name: Build and Deploy Docs
 
 on:
   push:
-    branches: ["lisp"]
-  pull_request:
+    branches: [ lisp ]   # or your default branch
 
 jobs:
   build:
@@ -12,13 +11,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          tokens: ${{ secrets.GITEA_TOKEN }}
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build gcc
+          sudo apt-get install -y meson ninja-build gcc doxygen graphviz
 
       - name: Configure Meson
         run: meson setup build
@@ -29,19 +26,10 @@ jobs:
       - name: Run tests
         run: meson test -C build --print-errorlogs || true
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: beluga
-          path: build/
-
-      - name: Install Doxygen
-        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
-
       - name: Build Doxygen Docs
         run: doxygen Doxyfile
 
-      - name: Deploy to Pages
+      - name: Deploy to Pages branch
         run: |
           git config user.name "CI Bot"
           git config user.email "ci-bot@homelinuxserver"
@@ -52,4 +40,3 @@ jobs:
           git add .
           git commit -m "Update docs" || echo "No changes to commit"
           git push https://$USERNAME:${{ secrets.GITEA_TOKEN }}@homelinuxserver.ddns.net/git/<username>/<repo>.git pages --force
-
