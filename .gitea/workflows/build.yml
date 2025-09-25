@@ -17,7 +17,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build gcc doxygen graphviz
+          sudo apt-get install -y meson ninja-build gcc
 
       - name: Configure Meson
         run: meson setup build
@@ -27,18 +27,3 @@ jobs:
 
       - name: Run tests
         run: meson test -C build --print-errorlogs || true
-
-      - name: Build Doxygen Docs
-        run: doxygen Doxyfile
-
-      - name: Deploy to Pages branch
-        run: |
-          git config user.name "CI Bot"
-          git config user.email "ci-bot@homelinuxserver"
-          git fetch origin
-          git checkout --orphan pages
-          git rm -rf .
-          cp -r doc/html/* .
-          git add .
-          git commit -m "Update docs" || echo "No changes to commit"
-          git push https://$USERNAME:${{ secrets.GITEA_TOKEN }}@homelinuxserver.ddns.net/git/<username>/<repo>.git pages --force
