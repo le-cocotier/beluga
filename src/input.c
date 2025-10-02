@@ -2,7 +2,6 @@
 #include "../include/editor_op.h"
 #include "../include/output.h"
 #include "../include/define.h"
-#include "data.h"
 #include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -80,12 +79,15 @@ char *key_to_string(int key) {
       break;
     case PAGE_UP:
       strcpy(key_str, "PAGE-UP");
+      fprintf(stderr, "pagr up\n");
       break;
     case PAGE_DOWN:
       strcpy(key_str, "PAGE-DOWN");
       break;
     case DEL_KEY:
+      fprintf(stderr, "delete key\n");
       strcpy(key_str, "DEL");
+      
       break;
     case BACKSPACE:
       strcpy(key_str, "BACKSPACE");

@@ -26,8 +26,9 @@ void initBuiltins() {
   registerBuiltin("EDITOR-INSERT-NEW-LINE", l_editorInsertNewLine);
   registerBuiltin("MOVE-CURSOR-BEG-LINE", moveCursorBeginLine);
   registerBuiltin("MOVE-CURSOR-END-LINE", moveCursorEndLine);
-  
-  
+  registerBuiltin("EDITOR-DELETE-PREVIOUS-CHAR", deletePreviousChar);
+  registerBuiltin("MOVE-CURSOR-PAGE-UP", editorMoveCursorPageUp);
+  registerBuiltin("MOVE-CURSOR-PAGE-DOWN", editorMoveCursorPageDown);
 }
 
 void initEditor() {
@@ -50,7 +51,7 @@ void initEditor() {
   E.number_of_keybinds = 0;
 
   
-  E.fd_init_file = fopen("config/init.el", "r");
+  E.fd_init_file = fopen("config/init.lisp", "r");
   E.ctx = lisp_init();
   E.env = lisp_env(E.ctx);
   lisp_lib_load(E.ctx);

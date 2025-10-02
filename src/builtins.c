@@ -5,11 +5,12 @@
 #include "../include/editor_op.h"
 #include "../include/data.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 Lisp mapKey(Lisp args, LispError *e, LispContext ctx) {
-  const char* key_sequence = lisp_string(lisp_car(args));
+  const char *key_sequence = lisp_string(lisp_car(args));
   args = lisp_cdr(args);
   // second argument
   Lisp func = lisp_car(args);
@@ -25,7 +26,8 @@ Lisp mapKey(Lisp args, LispError *e, LispContext ctx) {
   return lisp_null();
 }
 
-Lisp moveCursor(Lisp args, LispError* e, LispContext ctx) {
+Lisp moveCursor(Lisp args, LispError *e, LispContext ctx) {
+  fprintf(stderr, "Cursor is moving\n");
   const char *direction = lisp_string(lisp_car(args));
   switch (direction[0]) {
   case 'u':
@@ -93,3 +95,34 @@ Lisp moveCursorEndLine(Lisp args, LispError* e, LispContext ctx) {
   }
   return lisp_null();
 }
+
+
+Lisp deletePreviousChar(Lisp args, LispError* e, LispContext ctx) {
+  editorDelChar();
+  return lisp_null();
+}
+
+Lisp editorMoveCursorPageUp(Lisp args, LispError* e, LispContext ctx) {
+  E.cursor_y = E.row_offset;
+  int times = E.screenrows;
+  while (--times) {
+    editorMoveCursor(ARROW_UP);
+  }
+  return lisp_null();
+}
+
+Lisp editorMoveCursorPageDown(Lisp args, LispError* e, LispContext ctx) {
+  E.cursor_y = E.row_offset + E.screenrows - 1;
+  if (E.cursor_y > E.numrows) {
+    E.cursor_y = E.numrows;
+  }
+  int times = E.screenrows;
+  while (--times) {
+    editorMoveCursor(ARROW_DOWN);
+  }
+
+  return lisp_null();
+}
+
+
+

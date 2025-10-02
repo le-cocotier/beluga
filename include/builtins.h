@@ -17,6 +17,12 @@ Lisp l_editorInsertNewLine(Lisp args, LispError* e, LispContext ctx);
 
 Lisp moveCursorBeginLine(Lisp args, LispError *e, LispContext ctx);
 
-Lisp moveCursorEndLine(Lisp args, LispError* e, LispContext ctx);
+Lisp moveCursorEndLine(Lisp args, LispError *e, LispContext ctx);
+
+Lisp deletePreviousChar(Lisp args, LispError *e, LispContext ctx);
+
+Lisp editorMoveCursorPageUp(Lisp args, LispError* e, LispContext ctx);
+
+Lisp editorMoveCursorPageDown(Lisp args, LispError* e, LispContext ctx);
 
 #endif
