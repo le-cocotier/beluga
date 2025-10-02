@@ -1,9 +1,11 @@
 #ifndef DATA_H_
 #define DATA_H_
 
-#include "../lisp-interpreter/dist/lisp.h"
+#include <stdio.h>
 #include <termios.h>
 #include <time.h>
+
+#include "../lisp-interpreter/dist/lisp.h"
 
 /**
  * \struct erow
@@ -17,6 +19,18 @@ typedef struct erow {
   char *chars;  /**< Characters of the line */
   char *render; /**< The actual line we will print */
 } erow;
+
+
+struct const_t {
+  int TAB_LENGTH;
+  int QUIT_TIMES;
+};
+
+struct keyBind_t {
+  char *key_sequence;
+  Lisp command;
+  
+};
 
 /**
  * \struct editorConfig
@@ -36,9 +50,18 @@ struct editorConfig {
   char status_msg[80];
   time_t status_msg_time;
   struct termios orig_termios; /**< Terminal communication interface */
-  LispContext ctx;             /** Lisp context */
-  Lisp ctx_data;               /** Lisp data context */
-  LispError ctx_error;         /** Lisp ctx error */
+
+  struct const_t constantes;
+  int quit_times_buffer;
+
+  FILE *fd_init_file;
+  Lisp env;
+  LispContext ctx;     /** Lisp context */
+  Lisp ctx_data;       /** Lisp data context */
+  LispError ctx_error; /** Lisp ctx error */
+
+  struct keyBind_t* key_binds;
+  int number_of_keybinds;
 };
 
 /**

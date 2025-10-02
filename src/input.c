@@ -1,11 +1,13 @@
 #include "../include/input.h"
 #include "../include/editor_op.h"
-#include "../include/file_io.h"
 #include "../include/output.h"
+#include "../include/define.h"
+#include "data.h"
 #include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 extern struct editorConfig E;
@@ -30,7 +32,6 @@ char *editorPrompt(char *prompt) {
         buf[--buf_len] = '\0';
       }
     } else if (c == ESCAPE) {
-      fprintf(stderr, "escape");
       editorSetStatusMessage("");
       free(buf);
       return NULL;
@@ -49,6 +50,70 @@ char *editorPrompt(char *prompt) {
     }
   }
 }
+
+char *key_to_string(int key) {
+  static char key_str[32];
+
+  char tmp[10];
+  sprintf(tmp, "%d", key);
+
+
+  // First test enter key
+
+  if (key == '\r') {
+    strcpy(key_str, "ENTER");
+  } else if (key >= 1 && key <= 26) { // CTRL keys
+    snprintf(key_str, sizeof(key_str), "CTRL-%c", 'a' + key - 1);
+  } else {
+    switch (key) {
+    case ARROW_UP:
+      strcpy(key_str, "ARROW-UP");
+      break;
+    case ARROW_DOWN:
+      strcpy(key_str, "ARROW-DOWN");
+      break;
+    case ARROW_LEFT:
+      strcpy(key_str, "ARROW-LEFT");
+      break;
+    case ARROW_RIGHT:
+      strcpy(key_str, "ARROW-RIGHT");
+      break;
+    case PAGE_UP:
+      strcpy(key_str, "PAGE-UP");
+      break;
+    case PAGE_DOWN:
+      strcpy(key_str, "PAGE-DOWN");
+      break;
+    case DEL_KEY:
+      strcpy(key_str, "DEL");
+      break;
+    case BACKSPACE:
+      strcpy(key_str, "BACKSPACE");
+      break;
+    case '\r':
+      strcpy(key_str, "ENTER");
+      break;
+    case '\x1b':
+      strcpy(key_str, "ESCAPE");
+      break;
+    case BEG_LINE:
+      strcpy(key_str, "HOME");
+      break;
+    case END_LINE:
+      strcpy(key_str, "END");
+      break;
+    default:
+      // For regular characters
+      if (isprint(key)) {
+        snprintf(key_str, sizeof(key_str), "%c", key);
+      } else {
+        snprintf(key_str, sizeof(key_str), "KEY-%d", key);
+      }
+    }
+  }
+  return key_str;
+}
+
 
 void editorMoveCursor(int key) {
   erow *row = (E.cursor_y >= E.numrows) ? NULL : &E.row[E.cursor_y];
@@ -89,81 +154,28 @@ void editorMoveCursor(int key) {
   }
 }
 
-void editorProcessKeypress() {
-  static int quit_times = QUIT_TIMES;
-  int c = editorReadKey();
-  int times;
-
-  switch (c) {
-
-  case '\r':
-    editorInsertNewLine();
-    break;
-  case CTRL_KEY('q'):
-    if (E.dirty && quit_times > 0) {
-      editorSetStatusMessage("WARNING! Changes hasn't been saved. Press Ctrl-Q "
-                             "another time to quit.");
-      --quit_times;
-      return;
+int executeKeyBind(char *key_sequence) {
+  int i;
+  for (i = 0; i < E.number_of_keybinds; ++i) {
+    if (!strcmp(key_sequence, E.key_binds[i].key_sequence)) {
+  
+        fprintf(stderr, "lisp function %s\n", key_sequence);
+        // It's a symbol, create a function call
+        lisp_eval(lisp_cons(E.key_binds[i].command, lisp_null(), E.ctx),
+                  &E.ctx_error, E.ctx);
+        return 1;
     }
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, CURSOR_TOP_LEFT, 3);
-    disableRawMode();
-    exit(0);
-    break;
-
-  case CTRL_KEY('s'):
-    editorSave();
-    break;
-
-  case BEG_LINE:
-    E.cursor_x = 0;
-    break;
-
-  case END_LINE:
-    if (E.cursor_y < E.numrows) {
-      E.cursor_x = E.row[E.cursor_y].size;
-    }
-    break;
-
-  case BACKSPACE:
-  case CTRL_KEY('h'):
-  case DEL_KEY:
-    if (c == DEL_KEY) {
-      editorMoveCursor(ARROW_RIGHT);
-    }
-    editorDelChar();
-    break;
-
-  case PAGE_UP:
-  case PAGE_DOWN: {
-    if (c == PAGE_UP) {
-      E.cursor_y = E.row_offset;
-    } else if (c == PAGE_DOWN) {
-      E.cursor_y = E.row_offset + E.screenrows - 1;
-      if (E.cursor_y > E.numrows) {
-        E.cursor_y = E.numrows;
-      }
-    }
-    times = E.screenrows;
-    while (--times) {
-      editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
-    }
-  } break;
-
-  case ARROW_UP:
-  case ARROW_DOWN:
-  case ARROW_LEFT:
-  case ARROW_RIGHT:
-    editorMoveCursor(c);
-    break;
-
-  case CTRL_KEY('l'):
-  case '\x1b':
-    break;
-  default:
-    editorInsertChar(c);
-    break;
   }
-  quit_times = QUIT_TIMES;
+  return 0;
+}
+
+void editorProcessKeypress() {
+  int c = editorReadKey();
+
+  if (executeKeyBind(key_to_string(c))) {
+    return;
+  }
+  editorInsertChar(c);
+  E.quit_times_buffer = E.constantes.QUIT_TIMES;
+
 }

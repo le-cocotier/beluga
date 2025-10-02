@@ -5,6 +5,7 @@
  * interactions. \version 0.1 \date 21 septembre 2024
  */
 
+#include <stdio.h>
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
 #define _GNU_SOURCE

@@ -21,7 +21,11 @@
 
 char *editorPrompt(char *prompt);
 
+char *key_to_string(int key);
+
 void editorMoveCursor(int key);
+
+int executeKeyBind(char *key_sequence);
 
 /**
  * \fn void editorProcessKeypress()

@@ -25,7 +25,5 @@ enum editorKey {
 #define ABUF_INIT {NULL, 0}
 
 #define BELUGA_VERSION "1.0"
-#define TAB_LENGTH 4
-#define QUIT_TIMES 1
 
 #endif // DEFINE_H_

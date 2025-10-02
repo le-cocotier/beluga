@@ -22,6 +22,7 @@ src_files = files(
   'src/output.c',
   'src/row_op.c',
   'src/terminal.c',
+  'src/builtins.c',
 )
 
 # Executable

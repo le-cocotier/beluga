@@ -22,7 +22,7 @@ char *editorRowsToString(int *buffer_len) {
 
   for (j = 0; j < E.numrows; ++j) {
     tot_len += E.row[j].size + 1;
-  }
+ }
   *buffer_len = tot_len;
   buf = malloc(tot_len);
   p = buf;
@@ -42,7 +42,7 @@ void editorOpen(char *filename) {
   free(E.filename);
   E.filename = strdup(filename);
 
-  fp = fopen(filename, "r");
+  fp = fopen(filename, "a+");
   if (!fp)
     die("fopen");
 

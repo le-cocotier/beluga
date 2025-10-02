@@ -10,6 +10,8 @@
  * \brief Job's function is to initialize all the fields of editorConfig.
  * */
 
+void initBuiltins();
+
 void initEditor();
 
 #endif // INIT_H_

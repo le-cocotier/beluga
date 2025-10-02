@@ -1,4 +1,6 @@
 #include "../include/row_op.h"
+#include "data.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -10,7 +12,7 @@ int editorRowCxToRx(erow *row, int cursor_x) {
   int i;
   for (i = 0; i < cursor_x; ++i) {
     if (row->chars[i] == '\t') {
-      render_x += (TAB_LENGTH - 1) - (render_x % TAB_LENGTH);
+      render_x += (E.constantes.TAB_LENGTH - 1) - (render_x % E.constantes.TAB_LENGTH);
     }
     render_x++;
   }
@@ -34,8 +36,8 @@ void editorUpdateRow(erow *row) {
   }
 
   free(row->render);
-  row->render = malloc(row->size + tabs * (TAB_LENGTH - 1) +
-                       1); /**< Tabs needs TAB_LENGTH chars so TAB_LENGTH - 1
+  row->render = malloc(row->size + tabs * (E.constantes.TAB_LENGTH - 1) +
+                       1); /**< Tabs needs E.constantes.TAB_LENGTH chars so E.constantes.TAB_LENGTH - 1
                               more than the first already counted. */
 
   // end of counting
@@ -43,7 +45,7 @@ void editorUpdateRow(erow *row) {
   for (i = 0; i < row->size; ++i) {
     if (row->chars[i] == '\t') {
       row->render[i_render++] = ' ';
-      while (i_render % TAB_LENGTH) {
+      while (i_render % E.constantes.TAB_LENGTH) {
         row->render[i_render++] =
             ' '; /**< Addind the right amount of spaces for tabs */
       }
@@ -57,10 +59,14 @@ void editorUpdateRow(erow *row) {
 
 void editorInsertRow(int at, char *s, size_t len) {
   if (at < 0 || at > E.numrows) {
+    
     return;
   }
-
-  E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+  erow *tmp = (erow *)realloc(E.row, sizeof(erow) * (E.numrows + 1));
+  if (!tmp) {
+    return;
+  }
+  E.row = tmp;
   memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
 
   E.row[at].size = len;
