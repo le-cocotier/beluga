@@ -23,6 +23,10 @@ Lisp deletePreviousChar(Lisp args, LispError *e, LispContext ctx);
 
 Lisp editorMoveCursorPageUp(Lisp args, LispError* e, LispContext ctx);
 
-Lisp editorMoveCursorPageDown(Lisp args, LispError* e, LispContext ctx);
+Lisp editorMoveCursorPageDown(Lisp args, LispError *e, LispContext ctx);
+
+Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx);
+
+Lisp editorPrintC(Lisp args, LispError *e, LispContext ctx);
 
 #endif

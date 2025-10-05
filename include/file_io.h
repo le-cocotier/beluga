@@ -10,6 +10,9 @@
 
 char *editorRowsToString(int *buffer_len);
 
+
+void editorCloseFile(void);
+
 void editorOpen(char *filename);
 
 void editorSave();

@@ -1,8 +1,9 @@
-(define TAB-LENGTH 2)
+;; MACROS
+
+(define TAB-LENGTH 4)
 (define QUIT-TIMES 1)
 
-(map-key "CTRL-q" editor-quit)
-(map-key "CTRL-s" editor-save)
+;; FUNCTIONS
 
 (define editor-delete-next-char (lambda () (
                                             (move-cursor "right")
@@ -12,6 +13,10 @@
   )
 
 
+;; KEY MAPPING
+
+(map-key "CTRL-q" editor-quit)
+(map-key "CTRL-s" editor-save)
 (map-key "ARROW-UP" '(move-cursor "up"))
 (map-key "ARROW-DOWN" '(move-cursor "down"))
 (map-key "ARROW-RIGHT" '(move-cursor "right"))
@@ -23,7 +28,7 @@
 (map-key "DEL" editor-delete-next-char)
 (map-key "PAGE-UP" move-cursor-page-up)
 (map-key "PAGE-DOWN" move-cursor-page-down)
+(map-key "CTRL-o" editor-open-file)
 
-; Key binds
 
 

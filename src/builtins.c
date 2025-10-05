@@ -124,5 +124,18 @@ Lisp editorMoveCursorPageDown(Lisp args, LispError* e, LispContext ctx) {
   return lisp_null();
 }
 
+Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
+  char *filename = editorPrompt("Path : %s");
+  if (filename)
+    editorOpen(filename);
 
+  return lisp_null();
+}
+
+
+Lisp editorPrintC(Lisp args, LispError *e, LispContext ctx) {
+  char c = lisp_char(lisp_car(args));
+  editorInsertChar(c);
+  return lisp_null();
+}
 

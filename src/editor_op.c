@@ -1,15 +1,16 @@
 #include "../include/editor_op.h"
 #include "../include/row_op.h"
-#include <stdio.h>
+#include "data.h"
+
 
 extern struct editorConfig E;
 
 void editorInsertChar(int c) {
-  if (E.cursor_y == E.numrows) {
-    editorInsertRow(E.numrows, "", 0);
-  }
-  editorRowInsertChar(&E.row[E.cursor_y], E.cursor_x, c);
-  E.cursor_x++;
+    if (E.cursor_y == E.numrows) {
+      editorInsertRow(E.numrows, "", 0);
+    }
+    editorRowInsertChar(&E.row[E.cursor_y], E.cursor_x, c);
+    E.cursor_x++;
 }
 
 void editorInsertNewLine() {

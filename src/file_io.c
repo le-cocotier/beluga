@@ -1,6 +1,7 @@
 #include "../include/file_io.h"
 #include "../include/input.h"
 #include "../include/output.h"
+#include "data.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,8 +37,28 @@ char *editorRowsToString(int *buffer_len) {
   return buf;
 }
 
+void editorCloseFile(void) {
+  E.cursor_x = 0;
+  E.cursor_y = 0;
+  E.rx = 0;
+  E.row_offset = 0;
+  E.col_offset = 0;
+  E.numrows = 0;
+  E.row = NULL;
+  E.dirty = 0;
+  E.filename = NULL;
+  E.status_msg[0] = '\0';
+  E.status_msg_time = 0;
+
+}
+
 void editorOpen(char *filename) {
   FILE *fp;
+
+  // Test if a file is already open
+  if (E.filename != NULL) {
+    editorCloseFile();
+  }
 
   free(E.filename);
   E.filename = strdup(filename);
@@ -45,7 +66,7 @@ void editorOpen(char *filename) {
   fp = fopen(filename, "a+");
   if (!fp)
     die("fopen");
-
+  
   char *line = NULL;
   size_t line_cap = 0;
   ssize_t line_len;

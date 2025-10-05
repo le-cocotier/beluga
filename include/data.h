@@ -20,6 +20,11 @@ typedef struct erow {
   char *render; /**< The actual line we will print */
 } erow;
 
+enum editorStatus_e {
+  IDLE,
+  READ_ONLY,
+  READ_AND_WRITE, 
+};
 
 struct const_t {
   int TAB_LENGTH;
@@ -47,6 +52,7 @@ struct editorConfig {
   erow *row;              /**< Store all the rows printed */
   int dirty;
   char *filename;
+  enum editorStatus_e state;
   char status_msg[80];
   time_t status_msg_time;
   struct termios orig_termios; /**< Terminal communication interface */

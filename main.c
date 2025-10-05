@@ -24,7 +24,10 @@ int main(int argc, char *argv[]) {
   enableRawMode();
   initEditor();
   if (argc >= 2) {
+    E.state = READ_AND_WRITE;
     editorOpen(argv[1]);
+  } else {
+    editorOpen("assets/beluga.txt");
   }
 
   editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");

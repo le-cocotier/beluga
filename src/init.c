@@ -29,6 +29,8 @@ void initBuiltins() {
   registerBuiltin("EDITOR-DELETE-PREVIOUS-CHAR", deletePreviousChar);
   registerBuiltin("MOVE-CURSOR-PAGE-UP", editorMoveCursorPageUp);
   registerBuiltin("MOVE-CURSOR-PAGE-DOWN", editorMoveCursorPageDown);
+  registerBuiltin("EDITOR-OPEN-FILE", editorOpenFile);
+  registerBuiltin("EDITOR-INSERT-CHAR", editorPrintC);
 }
 
 void initEditor() {
@@ -41,6 +43,7 @@ void initEditor() {
   E.row = NULL;
   E.dirty = 0;
   E.filename = NULL;
+  E.state = READ_ONLY;
   E.status_msg[0] = '\0';
   E.status_msg_time = 0;
   if (getWindowSize(&E.screenrows, &E.screencols) == -1) {

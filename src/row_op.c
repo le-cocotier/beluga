@@ -102,6 +102,8 @@ void editorDelRow(int at) {
  * \param at Index of where we want to insert the char */
 
 void editorRowInsertChar(erow *row, int at, int c) {
+  if (E.state == READ_ONLY)
+    return;
   if (at < 0 || at > row->size) {
     at = row->size;
   }
