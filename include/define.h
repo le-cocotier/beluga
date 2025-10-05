@@ -24,6 +24,6 @@ enum editorKey {
 
 #define ABUF_INIT {NULL, 0}
 
-#define BELUGA_VERSION "1.0"
+#define BELUGA_VERSION "1.1"
 
 #endif // DEFINE_H_
