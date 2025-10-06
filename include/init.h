@@ -1,6 +1,7 @@
 #ifndef INIT_H_
 #define INIT_H_
 
+#include "builtins.h"
 #include "data.h"
 #include "terminal.h"
 #include <stdio.h>

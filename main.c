@@ -5,7 +5,8 @@
  * interactions. \version 0.1 \date 21 septembre 2024
  */
 
-#include <stdio.h>
+#include <unistd.h>
+
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
 #define _GNU_SOURCE
@@ -31,6 +32,7 @@ int main(int argc, char *argv[]) {
   }
 
   editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
+
 
   while (1) {
     editorRefreshScreen();

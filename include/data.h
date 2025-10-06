@@ -68,6 +68,7 @@ struct editorConfig {
 
   struct keyBind_t* key_binds;
   int number_of_keybinds;
+
 };
 
 /**
@@ -81,5 +82,6 @@ struct abuf {
 };
 
 extern struct editorConfig E;
+
 
 #endif
