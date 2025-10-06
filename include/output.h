@@ -13,16 +13,16 @@
  * \brief Draws left rows of the editor.
  */
 
-void editorDrawRows(struct editorConfig *E, struct abuf *ab);
+void editorDrawRows(struct abuf *ab);
 
-void editorRefreshScreen(struct editorConfig *E);
+void editorRefreshScreen();
 
-void editorScroll(struct editorConfig *E);
+void editorScroll();
 
-void editorDrawStatusBar(struct editorConfig *E, struct abuf *ab);
+void editorDrawStatusBar(struct abuf *ab);
 
-void editorDrawMessageBar(struct editorConfig *E, struct abuf *ab);
+void editorDrawMessageBar(struct abuf *ab);
 
-void editorSetStatusMessage(struct editorConfig *E, const char *fmt, ...);
+void editorSetStatusMessage(const char *fmt, ...);
 
 #endif // OUTPUT_H_

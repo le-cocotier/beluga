@@ -1,9 +1,11 @@
 #ifndef DATA_H_
 #define DATA_H_
 
+#include <stdio.h>
 #include <termios.h>
 #include <time.h>
-#include "../blisp/include/data.h"
+
+#include "../lisp-interpreter/dist/lisp.h"
 
 /**
  * \struct erow
@@ -17,6 +19,23 @@ typedef struct erow {
   char *chars;  /**< Characters of the line */
   char *render; /**< The actual line we will print */
 } erow;
+
+enum editorStatus_e {
+  IDLE,
+  READ_ONLY,
+  READ_AND_WRITE, 
+};
+
+struct const_t {
+  int TAB_LENGTH;
+  int QUIT_TIMES;
+};
+
+struct keyBind_t {
+  char *key_sequence;
+  Lisp command;
+  
+};
 
 /**
  * \struct editorConfig
@@ -32,12 +51,24 @@ struct editorConfig {
   int numrows;            /**< Number of rows contained */
   erow *row;              /**< Store all the rows printed */
   int dirty;
-  int quit_times;
   char *filename;
+  enum editorStatus_e state;
   char status_msg[80];
   time_t status_msg_time;
   struct termios orig_termios; /**< Terminal communication interface */
-  config_t *config;
+
+  struct const_t constantes;
+  int quit_times_buffer;
+
+  FILE *fd_init_file;
+  Lisp env;
+  LispContext ctx;     /** Lisp context */
+  Lisp ctx_data;       /** Lisp data context */
+  LispError ctx_error; /** Lisp ctx error */
+
+  struct keyBind_t* key_binds;
+  int number_of_keybinds;
+
 };
 
 /**
@@ -50,12 +81,7 @@ struct abuf {
   int len; /**< Length of the text */
 };
 
-// Enhanced key sequence handling for multi-key bindings like "CTRL-f o"
-typedef struct {
-  char sequence[64];
-  int sequence_len;
-  int last_key_time; // You might want to add timing if needed
-} key_sequence_t;
+extern struct editorConfig E;
 
 
 #endif

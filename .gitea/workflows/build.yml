@@ -1,9 +1,8 @@
-name: CMake Build and Deploy
+name: Build project
 
 on:
   push:
     branches: ["main"]
-  pull_request:
 
 jobs:
   build:
@@ -12,14 +11,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          tokens: ${{ secrets.GITEA_TOKEN }}
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential
+          sudo apt-get install -y meson ninja-build gcc
+
+      - name: Configure Meson
+        run: meson setup build
 
       - name: Build project
-        run: cmake --build build -- -j$(nproc)
+        run: meson compile -C build
 
       - name: Run tests
         run: ctest --test-dir build || true

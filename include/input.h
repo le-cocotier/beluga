@@ -6,7 +6,6 @@
 #include "output.h"
 #include "terminal.h"
 #include "builtins.h"
-#include "../blisp/include/config_tools.h"
 #include <unistd.h>
 
 // KEYS keycode
@@ -21,21 +20,19 @@
 // END \x1b[4~ || <esc>[8~ || <esc>[F  || <esc>OF
 // DELETE \x1b[3~
 
+char *editorPrompt(char *prompt);
+
 char *key_to_string(int key);
 
-int execute_key_binding(config_t *config, const char *key_combo, void *context);
+void editorMoveCursor(int key);
 
-int handle_key_sequence(struct editorConfig *E, int key);
-
-char *editorPrompt(struct editorConfig *E, char *prompt);
-
-void editorMoveCursor(struct editorConfig *E, int key);
+int executeKeyBind(char *key_sequence);
 
 /**
  * \fn void editorProcessKeypress()
  * \brief Get the last key input and do the proper action.
  */
 
-void editorProcessKeypress(struct editorConfig *E);
+void editorProcessKeypress();
 
 #endif // INPUT_H_

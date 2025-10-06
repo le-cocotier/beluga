@@ -6,6 +6,7 @@
  */
 
 #include <unistd.h>
+
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
 #define _GNU_SOURCE
@@ -17,18 +18,25 @@
 #include "include/output.h"
 #include "include/terminal.h"
 
+struct editorConfig E;
+
 int main(int argc, char *argv[]) {
-  static struct editorConfig E;
-  enableRawMode(&E);
-  initEditor(&E);
+
+  enableRawMode();
+  initEditor();
   if (argc >= 2) {
-    editorOpen(&E, argv[1]);
+    E.state = READ_AND_WRITE;
+    editorOpen(argv[1]);
+  } else {
+    editorOpen("assets/beluga.txt");
   }
-  editorSetStatusMessage(&E, "HELP: Ctrl-S = save | Ctrl-Q = quit");
+
+  editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
+
 
   while (1) {
-    editorRefreshScreen(&E);
-    editorProcessKeypress(&E);
+    editorRefreshScreen();
+    editorProcessKeypress();
   }
   return 0;
 }

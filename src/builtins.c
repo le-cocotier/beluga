@@ -1,131 +1,141 @@
-
-// function_registry.c
 #include "../include/builtins.h"
+#include "../include/define.h"
+#include "../include/input.h"
+#include "../include/file_io.h"
+#include "../include/editor_op.h"
+#include "../include/data.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// Static array to hold function mappings
-function_entry_t function_registry[256];
-int registry_count = 0;
+Lisp mapKey(Lisp args, LispError *e, LispContext ctx) {
+  const char *key_sequence = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  // second argument
+  Lisp func = lisp_car(args);
 
-// Initialize the function registry
-void init_function_registry(void) {
-  register_function("editor-save", editorSave);
-  register_function("move-cursor-beg-line", moveCursorBeginLine);
-  register_function("move-cursor-end-line", moveCursorEndLine);
-  register_function("editor-quit", editorQuit);
-  register_function("move-cursor-up", editorMoveCursorUp);
-  register_function("move-cursor-down", editorMoveCursorDown);
-  register_function("move-cursor-right", editorMoveCursorRight);
-  register_function("move-cursor-left", editorMoveCursorLeft);
-  register_function("move-cursor-page-up", editorMoveCursorPageUp);
-  register_function("move-cursor-page-down", editorMoveCursorPageDown);
-  register_function("delete-previous-char", editorDelChar);
-  register_function("delete-next-char", deleteNextChar);
-  register_function("editor-insert-new-line", editorInsertNewLine);
+  E.key_binds =
+      (struct keyBind_t *)realloc(E.key_binds, ++E.number_of_keybinds * sizeof(struct keyBind_t));
+  E.key_binds[E.number_of_keybinds - 1].key_sequence = (char *) malloc(50 * sizeof(char));
+
+  strncpy(E.key_binds[E.number_of_keybinds - 1].key_sequence, key_sequence, 50);
+
+  E.key_binds[E.number_of_keybinds - 1].command = func;
+
+  return lisp_null();
 }
 
-// Register a function with a name
-int register_function(const char *name, command_func_t func) {
-  if (registry_count >= 256) {
-    return -1; // Registry full
+Lisp moveCursor(Lisp args, LispError *e, LispContext ctx) {
+  fprintf(stderr, "Cursor is moving\n");
+  const char *direction = lisp_string(lisp_car(args));
+  switch (direction[0]) {
+  case 'u':
+    editorMoveCursor(ARROW_UP);
+    break;
+  case 'd':
+    editorMoveCursor(ARROW_DOWN);
+    break;
+  case 'r':
+    editorMoveCursor(ARROW_RIGHT);
+    break;
+  case 'l':
+    editorMoveCursor(ARROW_LEFT);
+    break;
   }
 
-  function_registry[registry_count].name = strdup(name);
-  function_registry[registry_count].func = func;
-  registry_count++;
-  return 0;
+
+  return lisp_null();
 }
 
-// Find a function by name
-command_func_t find_function(const char *name) {
-  log_string("registry :");
-  char *tmp = malloc(3 * sizeof(char));
-  sprintf(tmp, "%d\n", registry_count);
-  log_string(tmp);
-  for (int i = 0; i < registry_count; i++) {
-    if (strcmp(function_registry[i].name, name) == 0) {
-      return function_registry[i].func;
-    }
-  }
-  return NULL;
-}
-
-// Execute a command by name
-int execute_command(const char *name, struct editorConfig *E) {
-  log_string(name);
-  command_func_t func = find_function(name);
-  if (func) {
-    func(E);
-    return 0;
-  }
-  log_string("Unknown command: \n");
-  return -1;
-}
-
-// Builtins tools
-
-void moveCursorBeginLine(struct editorConfig *E) { E->cursor_x = 0; }
-
-void moveCursorEndLine(struct editorConfig *E) {
-  if (E->cursor_y < E->numrows) {
-    E->cursor_x = E->row[E->cursor_y].size;
-  }
-}
-
-void editorQuit(struct editorConfig *E) {
-  log_string("time to quit\n");
-  if (E->dirty && E->quit_times > 0) {
-    editorSetStatusMessage(E,
-                           "WARNING! Changes hasn't been saved. Press Ctrl-Q "
+Lisp editorQuit(Lisp args, LispError* e, LispContext ctx) {
+  if (E.dirty && E.quit_times_buffer > 0) {
+    editorSetStatusMessage("WARNING! Changes hasn't been saved. Press Ctrl-Q "
                            "another time to quit.");
-    --E->quit_times;
-    return;
+    --E.quit_times_buffer;
+    return lisp_null();
   }
   write(STDOUT_FILENO, "\x1b[2J", 4);
   write(STDOUT_FILENO, CURSOR_TOP_LEFT, 3);
-  disableRawMode(E);
+  disableRawMode();
   exit(0);
+
+  return lisp_null();
+
+  
 }
 
 
-void editorMoveCursorUp(struct editorConfig *E) {
-  editorMoveCursor(E, ARROW_UP);
+Lisp l_editorSave(Lisp args, LispError* e, LispContext ctx) {
+
+  editorSave();
+  
+  return lisp_null();
+
+  
 }
 
-void editorMoveCursorDown(struct editorConfig *E) {
-  editorMoveCursor(E, ARROW_DOWN);
+Lisp l_editorInsertNewLine(Lisp args, LispError* e, LispContext ctx) {
+
+  editorInsertNewLine();
+  
+  return lisp_null();
+
+  
 }
 
-void editorMoveCursorRight(struct editorConfig *E) {
-  editorMoveCursor(E, ARROW_RIGHT);
+Lisp moveCursorBeginLine(Lisp args, LispError *e, LispContext ctx) {
+  E.cursor_x = 0;
+  return lisp_null();
 }
 
-void editorMoveCursorLeft(struct editorConfig *E) {
-  editorMoveCursor(E, ARROW_LEFT);
+Lisp moveCursorEndLine(Lisp args, LispError* e, LispContext ctx) {
+  if (E.cursor_y < E.numrows) {
+    E.cursor_x = E.row[E.cursor_y].size;
+  }
+  return lisp_null();
 }
 
-void deleteNextChar(struct editorConfig *E) {
-  editorMoveCursorRight(E);
-  editorDelChar(E);
+
+Lisp deletePreviousChar(Lisp args, LispError* e, LispContext ctx) {
+  editorDelChar();
+  return lisp_null();
 }
 
-void editorMoveCursorPageUp(struct editorConfig *E) {
-  E->cursor_y = E->row_offset;
-  int times = E->screenrows;
+Lisp editorMoveCursorPageUp(Lisp args, LispError* e, LispContext ctx) {
+  E.cursor_y = E.row_offset;
+  int times = E.screenrows;
   while (--times) {
-    editorMoveCursor(E, ARROW_UP);
+    editorMoveCursor(ARROW_UP);
   }
+  return lisp_null();
 }
 
-void editorMoveCursorPageDown(struct editorConfig *E) {
-  E->cursor_y = E->row_offset + E->screenrows - 1;
-  if (E->cursor_y > E->numrows) {
-    E->cursor_y = E->numrows;
+Lisp editorMoveCursorPageDown(Lisp args, LispError* e, LispContext ctx) {
+  E.cursor_y = E.row_offset + E.screenrows - 1;
+  if (E.cursor_y > E.numrows) {
+    E.cursor_y = E.numrows;
   }
-  int times = E->screenrows;
+  int times = E.screenrows;
   while (--times) {
-    editorMoveCursor(E, ARROW_DOWN);
+    editorMoveCursor(ARROW_DOWN);
   }
+
+  return lisp_null();
 }
+
+Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
+  char *filename = editorPrompt("Path : %s");
+  if (filename)
+    editorOpen(filename);
+
+  return lisp_null();
+}
+
+
+Lisp editorPrintC(Lisp args, LispError *e, LispContext ctx) {
+  char c = lisp_char(lisp_car(args));
+  editorInsertChar(c);
+  return lisp_null();
+}
+

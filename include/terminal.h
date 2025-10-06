@@ -21,9 +21,9 @@
 
 void die(const char *s);
 
-void disableRawMode(struct editorConfig *E);
+void disableRawMode();
 
-void enableRawMode(struct editorConfig *E);
+void enableRawMode();
 
 int editorReadKey();
 

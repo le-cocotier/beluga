@@ -1,40 +1,32 @@
 #ifndef BUILTINS_H_
 #define BUILTINS_H_
 
-#include "../blisp/include/config_tools.h"
-#include "../include/editor_op.h"
-#include "../include/file_io.h"
-#include "../include/output.h"
-#include "../include/input.h"
-#include "data.h"
-#include "file_io.h"
+#include "../lisp-interpreter/dist/lisp.h"
 
-// Function pointer type for commands
-typedef void (*command_func_t)(struct editorConfig *E);
+Lisp moveCursor(Lisp args, LispError *e, LispContext ctx);
 
-// Structure to hold function mappings
-typedef struct {
-  const char *name;
-  command_func_t func;
-} function_entry_t;
+Lisp mapKey(Lisp args, LispError *e, LispContext ctx);
 
-// Function registry
+void registerBuiltin(char * key_sequence, LispCFunc f);
 
-void init_function_registry(void);
-int register_function(const char *name, command_func_t func);
-command_func_t find_function(const char *name);
-int execute_command(const char *name, struct editorConfig *E);
+Lisp editorQuit(Lisp args, LispError *e, LispContext ctx);
 
-void moveCursorBeginLine(struct editorConfig *E);
-void moveCursorEndLine(struct editorConfig *E);
-void editorQuit(struct editorConfig *E);
+Lisp l_editorSave(Lisp args, LispError *e, LispContext ctx);
 
-void editorMoveCursorUp(struct editorConfig *E);
-void editorMoveCursorDown(struct editorConfig *E);
-void editorMoveCursorLeft(struct editorConfig *E);
-void editorMoveCursorRight(struct editorConfig *E);
-void deleteNextChar(struct editorConfig *E);
-void editorMoveCursorPageUp(struct editorConfig *E);
-void editorMoveCursorPageDown(struct editorConfig *E);
+Lisp l_editorInsertNewLine(Lisp args, LispError* e, LispContext ctx);
+
+Lisp moveCursorBeginLine(Lisp args, LispError *e, LispContext ctx);
+
+Lisp moveCursorEndLine(Lisp args, LispError *e, LispContext ctx);
+
+Lisp deletePreviousChar(Lisp args, LispError *e, LispContext ctx);
+
+Lisp editorMoveCursorPageUp(Lisp args, LispError* e, LispContext ctx);
+
+Lisp editorMoveCursorPageDown(Lisp args, LispError *e, LispContext ctx);
+
+Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx);
+
+Lisp editorPrintC(Lisp args, LispError *e, LispContext ctx);
 
 #endif

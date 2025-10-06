@@ -1,28 +1,28 @@
 #include "../include/terminal.h"
+#include "../include/data.h"
+
 #include <stdio.h>
-#include <stdlib.h>
 
 void die(const char *s) {
   write(STDOUT_FILENO, "\x1b[2J", 4);
   write(STDOUT_FILENO, CURSOR_TOP_LEFT, 3);
-
+  lisp_shutdown(E.ctx);
   perror(s);
   exit(1);
 }
 
-void disableRawMode(struct editorConfig *E) {
-  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E->orig_termios) == -1) {
-    free(E);
+void disableRawMode() {
+  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1) {
     die("tcsetattr");
   }
 }
 
-void enableRawMode(struct editorConfig *E) {
-  if (tcgetattr(STDIN_FILENO, &E->orig_termios) == -1) {
+void enableRawMode() {
+  if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) {
     die("tcgetattr");
   }
 
-  struct termios raw = E->orig_termios;
+  struct termios raw = E.orig_termios;
   raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
   raw.c_oflag &= ~(OPOST);
   raw.c_cflag |= (CS8);
@@ -31,7 +31,7 @@ void enableRawMode(struct editorConfig *E) {
   raw.c_cc[VTIME] = 1;
 
   if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) {
-    die("tcsetattr");
+    die("tcgetattr");
   }
 }
 
@@ -45,7 +45,6 @@ int editorReadKey() {
     }
   }
 
-  fprintf(stderr, "%X (%c)\n", c, c);
   if (c == '\x1b') {
     if (read(STDIN_FILENO, &seq[0], 1) != 1 ||
         read(STDIN_FILENO, &seq[1], 1) != 1) {
