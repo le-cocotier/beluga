@@ -8,9 +8,6 @@ project('beluga', 'c',
 cc = meson.get_compiler('c')
 m = cc.find_library('m', required: false)            
 
-# Include directory
-# inc_dir = include_directories('include', 'lisp-interpreter/dist')
-
 # Source files
 src_files = files(
   'main.c',
