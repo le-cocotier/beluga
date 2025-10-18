@@ -9,7 +9,7 @@ cc = meson.get_compiler('c')
 m = cc.find_library('m', required: false)            
 
 # Include directory
-inc_dir = include_directories('include', 'lisp-interpreter/dist')
+# inc_dir = include_directories('include', 'lisp-interpreter/dist')
 
 # Source files
 src_files = files(
@@ -28,6 +28,5 @@ src_files = files(
 # Executable
 executable('beluga',
   src_files,
-  include_directories : inc_dir,
   dependencies: [m]
 )

@@ -5,7 +5,7 @@
 #include <termios.h>
 #include <time.h>
 
-#include "../lisp-interpreter/dist/lisp.h"
+#include "lisp.h"
 
 /**
  * \struct erow

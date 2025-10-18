@@ -1,7 +1,6 @@
 #include "../include/file_io.h"
 #include "../include/input.h"
 #include "../include/output.h"
-#include "data.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>

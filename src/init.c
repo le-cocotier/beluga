@@ -5,8 +5,8 @@
 #include <stdio.h>
 
 #define LISP_IMPLEMENTATION
-#include "../lisp-interpreter/dist/lisp.h"
-#include "../lisp-interpreter/dist/lisp_lib.h"
+#include "../include/lisp.h"
+#include "../include/lisp_lib.h"
 
 extern struct editorConfig;
 

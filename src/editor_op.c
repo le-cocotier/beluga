@@ -1,6 +1,5 @@
 #include "../include/editor_op.h"
 #include "../include/row_op.h"
-#include "data.h"
 
 
 extern struct editorConfig E;

@@ -1,7 +1,7 @@
 #ifndef BUILTINS_H_
 #define BUILTINS_H_
 
-#include "../lisp-interpreter/dist/lisp.h"
+#include "lisp.h"
 
 Lisp moveCursor(Lisp args, LispError *e, LispContext ctx);
 
