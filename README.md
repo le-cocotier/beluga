@@ -1,6 +1,7 @@
 # Beluga
 
 Beluga is a project of CLI text editor that uses lisp as configuration language.
+It's abviously only working for **Linux**.
 
 ## Requirements
 
