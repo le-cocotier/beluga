@@ -1,26 +1,28 @@
 # Beluga
 
-Beluga is a project of CLI text editor that will fit perfectly with your azerty keyboard.
+Beluga is a project of CLI text editor that uses lisp as configuration language.
 
 ## Requirements
 
-You will only need **cmake** and **clang** to compile the editor.
+You will only need **meson** and a **C compiler** to compile the editor.
 
 ## Installation
 
 Here is the installation line for development version:
 
-```git clone --recurse-submodules https://github.com/le-cocotier/beluga.git ~/.beluga && cd ~/.beluga && mkdir build && cd build && cmake ../ && make beluga```
+```git clone https://homelinuxserver.ddns.net/git/arthur/beluga.git ~/.beluga && cd ~/.beluga && meson setup --reconfigure build && meson compile -C build```
 
-The executable file will be in `bin/beluga`. Feel free to add it to your path.
-
-You can either run `make all` or `make doc_doxygen` if you're interested by the doxygen documentation.
+The executable file will be `build/beluga`. Feel free to add it to your path.
 
 ## Getting start
 
 To open an existing file just type :
-```beluga path_to_my_file```
+```./build/beluga path_to_my_file```
 
-The only keybinds that you will need will be :
- - Ctrl-Q : leave the editor
- - Ctrl-S : Save a file
+Here is some few command that you will need :
+
+| keybind| command          |
+|--------|------------------|
+| Ctrl-Q | leave the editor |
+| Ctrl-S | Save a file      |
+| Ctrl-O | open file        |
