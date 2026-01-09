@@ -39,10 +39,18 @@
                            )
   )
 
+(define open-chevrons (lambda() (
+                                   (editor-insert-char "<")
+                                   (editor-insert-char ">")
+                                   (move-cursor "left")
+                                   )
+                           )
+  )
 
 
-(map-key "(" open-parenthesis)
-(map-key "[" open-brackets)
-(map-key "{" open-curly-brackets)
-(map-key "'" open-single-quotes)
-(map-key "\"" open-double-quotes)
+(map-key "(" open-parenthesis "no-prefix")
+(map-key "[" open-brackets "no-prefix")
+(map-key "{" open-curly-brackets "no-prefix")
+(map-key "'" open-single-quotes "no-prefix")
+(map-key "\"" open-double-quotes "no-prefix")
+(map-key "<" open-chevrons "no-prefix")
