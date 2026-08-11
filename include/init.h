@@ -1,10 +1,6 @@
 #ifndef INIT_H_
 #define INIT_H_
 
-#include "builtins.h"
-#include "data.h"
-#include "terminal.h"
-#include <stdio.h>
 
 /**
  * \fn void initEditor()
@@ -14,5 +10,8 @@
 void initBuiltins();
 
 void initEditor();
+
+void deInitEditor();
+
 
 #endif // INIT_H_

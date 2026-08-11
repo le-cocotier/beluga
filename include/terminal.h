@@ -4,14 +4,13 @@
 
 /* includes */
 
-#include "data.h"
-#include "define.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
+#include "utf8.h"
 
 /**
  * \fn void die(const char *s)
@@ -25,10 +24,14 @@ void disableRawMode();
 
 void enableRawMode();
 
-int editorReadKey();
+Utf8Char* editorReadKey();
 
 int getCursorPosition(int *rows, int *cols);
 
 int getWindowSize(int *rows, int *cols);
+
+char *keyToString(Utf8Char* key);
+
+void appDebug(const char *fmt, ...);
 
 #endif

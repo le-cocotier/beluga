@@ -1,47 +1,253 @@
 #include "../include/editor_op.h"
+
+#include <stdarg.h>
+#include <stdlib.h>
+
 #include "../include/row_op.h"
+#include "../include/completion.h"
+#include "../include/buffer.h"
+#include "../include/data.h"
+#include "../include/split_screen.h"
+#include "../include/terminal.h"
+#include "../include/output.h"
+#include "../include/input.h"
+#include "../include/utf8.h"
+#include <sys/select.h>
+#include <signal.h>
+#include <errno.h>
+#include "../include/pty_session.h"
+#include "../include/ansi_parser.h"
+
+static volatile sig_atomic_t g_winch_received = 0;
+
+static void handleWinch(int sig) { (void) sig; g_winch_received = 1; }
 
 
-extern struct editorConfig E;
+extern EditorConfig E;
 
-void editorInsertChar(int c) {
-    if (E.cursor_y == E.numrows) {
-      editorInsertRow(E.numrows, "", 0);
+
+/**
+ * @brief Sets a temporary status message for display
+ * @details Formats and stores a message that will be displayed in the message
+ * bar for 5 seconds. Uses printf-style variable argument formatting.
+ * @param fmt Printf-style format string
+ * @param ... Variable arguments for format string
+ * @note Updates global editor state E (status_msg, status_msg_time)
+ * @see editorDrawMessageBar()
+ */
+void editorSetStatusMessage(const char* fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    utf8VaPrintf(E.status_msg, fmt, ap);
+    va_end(ap);
+    E.status_msg_time = time(NULL);
+}
+
+/**
+ * @brief Moves the cursor based on arrow key input
+ * @details Updates cursor position (E.cursor_x, E.cursor_y) based on the given
+ * key direction. Handles line wrapping and boundary conditions. Prevents cursor
+ * from exceeding line lengths.
+ * @param key The arrow key code (ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT)
+ * @return 1 if cursor movement was valid, 0 if cursor was constrained to line boundary
+ * @note Updates global editor state E
+ */
+int editorMoveCursor(int key) {
+    // TODO: Rebuid for utf8
+    EditorPane *active = splitScreenGetActivePane();
+    struct buffer_t *buf = bufferFindById(active->buffer_id);
+    Row *row = &buf->row[buf->y];
+    switch (key) {
+    case ARROW_RIGHT:
+        if (row && buf->x < row->size) {
+            buf->x++;
+        } else if (row && buf->y < buf->numrows - 1) {
+            buf->y++;
+            buf->x = 0;
+        }
+        break;
+    case ARROW_DOWN:
+        if (buf->y < buf->numrows - 1) {
+
+            buf->y++;
+            buf->x = buf->row[buf->y].size < buf->x ? buf->row[buf->y].size : buf->x;
+        }
+        break;
+    case ARROW_UP:
+        if (buf->y != 0) {
+            --buf->y;
+            buf->x = buf->row[buf->y].size < buf->x ? buf->row[buf->y].size : buf->x;
+        }
+        break;
+    case ARROW_LEFT:
+        if (buf->x != 0) {
+            --buf->x;
+        } else if (buf->y > 0) {
+            --buf->y;
+            buf->x = buf->row[buf->y].size;
+        }
+        break;
+    default:
+        break;
     }
-    editorRowInsertChar(&E.row[E.cursor_y], E.cursor_x, c);
-    E.cursor_x++;
+    return 1;
 }
 
-void editorInsertNewLine() {
-  erow *row;
-  if (!E.cursor_x) {
-    editorInsertRow(E.cursor_y, "", 0);
-  } else {
-    row = &E.row[E.cursor_y];
-    editorInsertRow(E.cursor_y + 1, &row->chars[E.cursor_x],
-                    row->size - E.cursor_x);
-    row = &E.row[E.cursor_y];
-    row->size = E.cursor_x;
-    row->chars[row->size] = '\0';
-    editorUpdateRow(row);
-  }
-  ++E.cursor_y;
-  E.cursor_x = 0;
+// TODO: Rebuild pasting functionality
+
+char *editorGetClipboard(void) {
+    FILE *pipe = popen(CLIPBOARD_PASTE_CMD, "r");
+    if (!pipe) return NULL;
+
+    size_t cap = 4096;
+    size_t len = 0;
+    char *buf = malloc(cap);
+    if (!buf) {
+        pclose(pipe);
+        return NULL;
+    }
+
+    int c;
+    while ((c = fgetc(pipe)) != EOF) {
+        if (len + 1 >= cap) {
+            cap *= 2;
+            char *new_buf = realloc(buf, cap);
+            if (!new_buf) {
+                free(buf);
+                pclose(pipe);
+                return NULL;
+            }
+            buf = new_buf;
+        }
+        buf[len++] = (char)c;
+    }
+    buf[len] = '\0';
+    pclose(pipe);
+    return buf;
 }
 
-void editorDelChar() {
-  erow *row;
-  if (E.cursor_y == E.numrows || !(E.cursor_x || E.cursor_y)) {
-    return;
-  }
-  row = &E.row[E.cursor_y];
-  if (E.cursor_x > 0) {
-    editorRowDelchar(row, E.cursor_x - 1);
-    --E.cursor_x;
-  } else {
-    E.cursor_x = E.row[E.cursor_y - 1].size;
-    editorRowAppendString(&E.row[E.cursor_y - 1], row->chars, row->size);
-    editorDelRow(E.cursor_y);
-    --E.cursor_y;
-  }
+void editorSetClipboard(const char *text, int len) {
+    FILE *pipe = popen(CLIPBOARD_COPY_CMD, "w");
+    if (!pipe) return;
+    fwrite(text, 1, len, pipe);
+    pclose(pipe);
+}
+
+
+
+void editorInstallSignalHandlers(void)
+{
+    signal(SIGPIPE, SIG_IGN); // writing to a dead PTY must not kill the editor
+    signal(SIGWINCH, handleWinch);
+}
+
+void editorRunLoop(void)
+{
+    while (!E.exit_requested)
+    {
+        if (g_winch_received)
+        {
+            g_winch_received = 0;
+            getWindowSize(&E.screenrows, &E.screencols);
+            E.screenrows -= 2;
+            // Propagate to the active pane's PTY, if it's a terminal buffer
+            EditorPane* active = splitScreenGetActivePane();
+            struct buffer_t* buf = bufferFindById(active->buffer_id);
+            if (buf && buf->type == TERMINAL_BUFF) {
+                ptySessionResize(buf, active->height, active->width);
+                buf->term_state.pane_height = active->height;
+            }
+        }
+
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+        int maxfd = STDIN_FILENO;
+
+        if (E.buffers != NULL)
+        {
+            int first_buffer_id = E.buffers->buffer_id;
+            struct buffer_t* b = E.buffers;
+            do
+            {
+                if (b->type == TERMINAL_BUFF && b->pty_master_fd >= 0)
+                {
+                    FD_SET(b->pty_master_fd, &readfds);
+                    if (b->pty_master_fd > maxfd) maxfd = b->pty_master_fd;
+                }
+                b = b->next;
+            } while (b->buffer_id != first_buffer_id);
+        }
+
+        if (E.constantes.LSP && E.lsp_client && E.lsp_client->read_from_server_fd >= 0)
+        {
+            FD_SET(E.lsp_client->read_from_server_fd, &readfds);
+            if (E.lsp_client->read_from_server_fd > maxfd) maxfd = E.lsp_client->read_from_server_fd;
+        }
+
+        struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 }; // 50ms tick
+        int ready = select(maxfd + 1, &readfds, NULL, NULL, &tv);
+
+
+        if (ready < 0)
+        {
+            if (errno == EINTR) continue; // interrupted by a signal — just retry
+            die("select");
+        }
+
+        if (ready > 0)
+        {
+            if (E.buffers != NULL)
+            {
+                int first_buffer_id = E.buffers->buffer_id;
+                struct buffer_t* b = E.buffers;
+                do
+                {
+                    if (b->type == TERMINAL_BUFF && b->pty_master_fd >= 0 && FD_ISSET(b->pty_master_fd, &readfds))
+                    {
+                        unsigned char chunk[4096];
+                        ssize_t n;
+                        while ((n = read(b->pty_master_fd, chunk, sizeof(chunk))) > 0)
+                        {
+                            ansiParserFeed(b, chunk, (size_t) n);
+                            b->x = b->term_state.cursor_x;
+                            b->y = b->term_state.cursor_y;
+                        }
+
+                        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
+                            ptySessionIsAlive(b); // reap if the shell exited
+                    }
+                    b = b->next;
+                } while (b->buffer_id != first_buffer_id);
+            }
+
+            if (E.constantes.LSP && E.lsp_client && FD_ISSET(E.lsp_client->read_from_server_fd, &readfds))
+                lspPoll(E.lsp_client);
+
+            if (FD_ISSET(STDIN_FILENO, &readfds))
+                editorProcessKeypress();
+        }
+
+        // Runs every ~50ms tick regardless of what select() woke up for, so
+        // a scheduled completion request fires shortly after its debounce
+        // deadline passes even if the user has stopped typing entirely.
+        if (E.constantes.LSP)
+            lspCompletionDebounceTick();
+
+        editorRefreshScreen();
+    }
+
+    // Clean shutdown: close any live shells before exiting
+    if (E.buffers != NULL)
+    {
+        int first_buffer_id = E.buffers->buffer_id;
+        struct buffer_t* b = E.buffers;
+        do
+        {
+            if (b->type == TERMINAL_BUFF)
+                ptySessionClose(b);
+            b = b->next;
+        } while (b->buffer_id != first_buffer_id);
+    }
 }

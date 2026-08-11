@@ -1,137 +1,401 @@
+/**
+ * @file output.c
+ * @brief Screen rendering and output module for the Beluga text editor
+ * @details Handles all screen updates, cursor positioning, status bar
+ * rendering, and display synchronization using ANSI escape sequences
+ */
+
 #include "../include/output.h"
-#include <stdarg.h>
+#include "../include/append_buffer.h"
+#include "../include/buffer.h"
+#include "../include/data.h"
+#include "../include/define.h"
+#include "../include/editor_op.h"
+#include "../include/lsp_ui.h"
+#include "../include/buffer_switcher.h"
+#include "../include/list_popup.h"
+#include "../include/row_op.h"
+#include "../include/split_screen.h"
+#include "../include/syntax_highlighter.h"
+#include "../include/term_render.h"
+#include "../include/terminal.h"
+#include "../include/utf8.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-extern struct editorConfig E;
+/***********************************************************************************************************************
+ *
+ *                                                 extern definitions
+ *
+ **********************************************************************************************************************/
 
-void editorDrawRows(struct abuf *ab) {
-  int y;
-  char welcome[80];
-  int welcome_len;
-  int padding;
-  int len;
+extern EditorConfig E;
+
+/***********************************************************************************************************************
+ *
+ *                                                 functions definitions
+ *
+ **********************************************************************************************************************/
+
+/**
+ * @brief Renders a single pane with its buffer content
+ */
+static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   int file_row;
-  for (y = 0; y < E.screenrows; ++y) {
-    file_row = y + E.row_offset;
-    if (file_row >= E.numrows) {
-      if (E.numrows == 0 && y == E.screenrows / 3) {
-        welcome_len =
-            snprintf(welcome, sizeof(welcome),
-                     "Beluga text editor -- version %s", BELUGA_VERSION);
-        if (welcome_len > E.screencols) {
-          welcome_len = E.screencols;
-        }
-        padding = (E.screencols - welcome_len) / 2;
-        if (padding) {
-          abAppend(ab, "~", 1);
-          --padding;
-        }
-        while (padding--) {
-          abAppend(ab, " ", 1);
-        }
-        abAppend(ab, welcome, welcome_len);
-      } else {
-        abAppend(ab, "~", 1);
+  char pos_buf[32];
+  int pos_len;
+  int byte_len_to_print;
+  int bytes_to_print;
+  char *highlighted;
+
+  if (pane == NULL || pane->buffer_id < 0)
+    return;
+
+  const struct buffer_t *buf = bufferFindById(pane->buffer_id);
+  if (buf == NULL)
+    return;
+
+  // The diagnostic gutter only makes sense for real source files — drawing
+  // it for a terminal pane would eat GUTTER_WIDTH columns the PTY was never
+  // told to give up, misaligning its own line-wrapping. content_width is
+  // what's actually left for text once the gutter (if any) is accounted for;
+  // gutter + content_width always adds up to the pane's full on-screen span.
+  int has_gutter = E.constantes.LSP && buf->type == FILE_BUFF;
+  int content_width = pane->width - (has_gutter ? GUTTER_WIDTH : 0);
+  if (content_width < 0)
+    content_width = 0;
+
+  // Draw all pane
+  for (int y = 0; y < pane->height; y++) {
+    file_row = y + pane->y_offset;
+
+    // Set cursor at start of pane row
+    pos_len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
+                       pane->origin_y + y + 1, pane->origin_x + 1);
+    abAppend(ab, pos_buf, pos_len);
+
+    // Apply background color (6 bytes for RGB format)
+    abAppend(ab, E.theme.BACKGROUND_COLOR,
+             (int)strlen(E.theme.BACKGROUND_COLOR));
+
+    // pane line is out of buffer height
+    if (file_row >= buf->numrows) {
+      // Empty line - show tilde, but still reserve the gutter's columns so
+      // the tilde lines up with where text starts on real lines above it
+      if (has_gutter) {
+        abAppend(ab, "  ", 2);
+      }
+      abAppend(ab, "~", 1);
+      for (int i = 0; i < content_width - 1; ++i) {
+        abAppend(ab, " ", 1);
       }
     } else {
-      len = E.row[file_row].rsize - E.col_offset;
-      if (len < 0)
-        len = 0;
-      if (len > E.screencols)
-        len = E.screencols;
-      abAppend(ab, &E.row[file_row].render[E.col_offset], len);
+      if (has_gutter) {
+        lspUiDrawGutter(ab, &E.lsp_diagnostics, pane->buffer_id, file_row);
+      }
+      if (buf->type == TERMINAL_BUFF) {
+        highlighted = termRenderRow(&buf->row[file_row], &byte_len_to_print);
+        abAppend(ab, highlighted, byte_len_to_print);
+        free(highlighted);
+      } else {
+
+        if (*buf->filename[utf8StringLen(buf->filename) - 2].character == 'c' ||
+            *buf->filename[utf8StringLen(buf->filename) - 2].character == 'h') {
+          byte_len_to_print = 0;
+          // Render line with syntax highlighting, constrain to pane width
+          highlighted = highlight_line(&buf->row[file_row], &byte_len_to_print,
+                                       pane->x_offset, content_width);
+
+          // Print only up to pane width
+          abAppend(ab, highlighted, byte_len_to_print);
+          free(highlighted);
+        } else {
+
+          // Render basic line
+          char *line = (char *)utf8ToNString(
+              &buf->row[file_row].characters[pane->x_offset], content_width);
+          abAppend(ab, line, strlen(line));
+          free(line);
+          line = NULL;
+        }
+      }
+
+      // Fill remaining space with background color to pane width
+      for (int i = buf->row[file_row].size - pane->x_offset; i < content_width;
+           i++) {
+        abAppend(ab, " ", 1);
+      }
     }
-    abAppend(ab, ERASE_END_LINE, 3);
-    abAppend(ab, "\r\n", 2);
   }
 }
 
+/**
+ * @brief Renders all panes based on current split configuration
+ */
+static void editorDrawAllPanes(struct abuf *ab) {
+  const ScreenLayout *layout = splitScreenGetLayout();
+
+  if (layout->num_panes == 1) {
+    // Single pane fullscreen
+    editorDrawPane(ab, &layout->panes[0]);
+  } else if (layout->num_panes == 2) {
+    // Draw both panes
+    for (int i = 0; i < 2; i++) {
+      editorDrawPane(ab, &layout->panes[i]);
+
+      // Draw pane border/divider if not the last pane
+      if (layout->mode == SPLIT_VERTICAL && i == 0) {
+        // Draw vertical divider
+        int divider_col = layout->panes[0].width;
+        for (int y = 0; y < layout->panes[0].height; y++) {
+          char pos_buf[32];
+          snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH", y + 1, divider_col);
+          abAppend(ab, pos_buf, (int)strlen(pos_buf));
+          abAppend(ab, "\x1b[1m|\x1b[0m", 9); // Bold pipe divider
+        }
+      } else if (layout->mode == SPLIT_HORIZONTAL && i == 0) {
+        // Draw horizontal divider
+        int divider_row = layout->panes[0].height;
+        char pos_buf[32];
+        snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH", divider_row + 1, 1);
+        abAppend(ab, pos_buf, (int)strlen(pos_buf));
+        for (int x = 0; x < E.screencols; x++) {
+          abAppend(ab, "\x1b[1m-\x1b[0m", 9); // Bold dash divider
+        }
+      }
+    }
+  }
+}
+
+/**
+ * @brief Updates scroll offsets to keep cursor visible on screen
+ * @details Adjusts E.row_offset and E.col_offset to ensure the cursor remains
+ * within the visible viewport. Also updates E.rx (rendered x-coordinate).
+ * @note Updates global editor state E
+ * @see editorRowCxToRx()
+ */
 void editorScroll() {
-  E.rx = E.cursor_x;
-  if (E.cursor_y < E.numrows) {
-    E.rx = editorRowCxToRx(&E.row[E.cursor_y], E.cursor_x);
-  }
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
 
-  if (E.cursor_y < E.row_offset) {
-    E.row_offset = E.cursor_y;
-  }
-  if (E.cursor_y >= E.row_offset + E.screenrows) {
-    E.row_offset = E.cursor_y - E.screenrows + 1;
-  }
-  if (E.rx < E.col_offset) {
-    E.col_offset = E.rx;
-  }
-  if (E.rx >= E.col_offset + E.screencols) {
-    E.col_offset = E.rx - E.screencols + 1;
+  // Same gutter accounting as editorDrawPane(): with the gutter reserving
+  // GUTTER_WIDTH columns, only what's left is actually available before the
+  // cursor needs to scroll right, or it would visually run past the pane.
+  int has_gutter = E.constantes.LSP && buf->type == FILE_BUFF;
+  int usable_width = active->width - (has_gutter ? GUTTER_WIDTH : 0);
+  if (usable_width < 1)
+    usable_width = 1;
+
+  // compute relative coordinates
+
+  while (buf->x != active->cursor_x + active->x_offset ||
+         buf->y != active->cursor_y + active->y_offset) {
+    if (buf->x < active->cursor_x + active->x_offset) {
+      // LEFT
+      if (active->cursor_x == 0 && active->x_offset) {
+        active->x_offset--;
+      } else {
+        active->cursor_x--;
+      }
+    } else {
+      // RIGHT
+      if (buf->x > active->cursor_x + active->x_offset) {
+        if (active->cursor_x == usable_width - 1) {
+          active->x_offset++;
+        } else {
+          active->cursor_x++;
+        }
+      }
+    }
+
+    if (buf->y < active->cursor_y + active->y_offset) {
+      if (active->cursor_y == 0 && active->y_offset) {
+        active->y_offset--;
+      } else {
+        active->cursor_y--;
+      }
+    }
+
+    if (buf->y > active->cursor_y + active->y_offset) {
+      if (active->cursor_y == active->height - 1) {
+        active->y_offset++;
+      } else {
+        active->cursor_y++;
+      }
+    }
   }
 }
 
+char *basename(char *path) {
+  int len = (int)strlen(path);
+
+  for (int i = len - 1; i > 0; i--) {
+    if (path[i] == '/') {
+      path = path + i + 1;
+      break;
+    }
+  }
+  return path;
+}
+
+/**
+ * @brief Renders the status bar at the bottom of the screen
+ * @details Displays filename, line count, dirty flag, and current cursor
+ * position in an inverted color bar. Right-aligns the cursor position
+ * indicator.
+ * @param ab Pointer to append buffer structure for accumulating output
+ * @note Uses ANSI escape codes for color inversion
+ */
 void editorDrawStatusBar(struct abuf *ab) {
+  // TO MODIFY
   int len, render_len;
-  char status[80], render_status[80];
+  int offset = 0;
+
+  char status[E.screencols];
+  char buf_status[1024] = "";
+  char marker, dirty_marker;
+  char *mode_str = "";
+  char *string_filename = NULL;
+
+  EditorPane *active = splitScreenGetActivePane();
+  Buffer *buf = bufferFindById(active->buffer_id);
+  Buffer *b = NULL;
+  ScreenLayout *layout = splitScreenGetLayout();
 
   abAppend(ab, "\x1b[7m", 4); // inverting colors
-  len = snprintf(status, sizeof(status), "%.20s - %d lines%s",
-                 E.filename ? E.filename : "[No Name]", E.numrows,
-                 E.dirty ? "*" : "");
-  render_len = snprintf(render_status, sizeof(render_status), "%d/%d",
-                        E.cursor_y + 1, E.numrows);
+
+  if (layout->mode == SPLIT_VERTICAL)
+    mode_str = " [V-SPLIT]";
+  else if (layout->mode == SPLIT_HORIZONTAL)
+    mode_str = " [H-SPLIT]";
+
+  // Build buffer status showing all buffers with dirty indicators
+  if (E.buffers != NULL) {
+    int first_buffer_id = E.buffers->buffer_id;
+    b = E.buffers;
+    do {
+      string_filename = (char *)utf8ToString(b->filename);
+      marker = (b->buffer_id == active->buffer_id) ? '>' : ' ';
+      dirty_marker = b->dirty ? '*' : ' ';
+      offset +=
+          snprintf(&buf_status[offset], sizeof(buf_status) - offset, "%c%d:%s%c ",
+                   marker, b->buffer_id,
+                   b->filename ? string_filename : "[No Name]", dirty_marker);
+      free(string_filename);
+      b = b->next;
+    } while (b->buffer_id != first_buffer_id);
+  }
+
+  len = snprintf(status, sizeof(status), "%s%s", buf_status, mode_str);
+
   if (len > E.screencols) {
     len = E.screencols;
   }
+
   abAppend(ab, status, len);
   while (len < E.screencols) {
-    if (E.screencols - len == render_len) {
-      abAppend(ab, render_status, render_len);
-      break;
-    } else {
-      abAppend(ab, " ", 1);
-      ++len;
-    }
+    abAppend(ab, " ", 1);
+    ++len;
   }
+
   abAppend(ab, "\x1b[m", 3); // normal text mode
   abAppend(ab, "\r\n", 2);
 }
 
+/**
+ * @brief Renders the message bar below the status bar
+ * @details Displays temporary status messages for a limited time (5 seconds).
+ * Only displays message if within time window and within screen width.
+ * @param ab Pointer to append buffer structure for accumulating output
+ * @note Messages are set by editorSetStatusMessage()
+ */
 void editorDrawMessageBar(struct abuf *ab) {
-  int msg_len = strlen(E.status_msg);
+  char *status = utf8ToString(E.status_msg);
+  int msg_len = (int)strlen(status);
   abAppend(ab, ERASE_END_LINE, 3);
-  if (msg_len > E.screencols) {
-    msg_len = E.screencols;
-  }
   if (msg_len && time(NULL) - E.status_msg_time < 5) {
-    abAppend(ab, E.status_msg, msg_len);
+    abAppend(ab, status, msg_len);
   }
+  free(status);
 }
 
+/**
+ * @brief Performs complete screen refresh and buffer synchronization
+ * @details Clears screen, redraws all visible content (rows, status bar,
+ * message bar), positions cursor, and writes accumulated buffer to stdout. This
+ * is the main rendering function called each frame.
+ * @note Updates global editor state E (via editorScroll())
+ * @see editorDrawRows()
+ * @see editorDrawStatusBar()
+ * @see editorDrawMessageBar()
+ */
+
 void editorRefreshScreen() {
-  editorScroll();
   struct abuf ab = ABUF_INIT;
   char buf[32];
 
   abAppend(&ab, HIDE_CURSOR, 6);
   abAppend(&ab, CURSOR_TOP_LEFT, 3);
+  abAppend(&ab, E.theme.BACKGROUND_COLOR,
+           (int)strlen(E.theme.BACKGROUND_COLOR));
 
-  editorDrawRows(&ab);
+  editorScroll();
+
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buffer = bufferFindById(active->buffer_id);
+
+  editorDrawAllPanes(&ab);
+  if (E.constantes.LSP) {
+
+    // ── LSP: draw completion popup every frame while visible
+    // ──────────────────
+
+    // reset flags
+    E.lsp_client->completion_just_arrived = 0;
+    E.lsp_client->completion_requested = 0;
+
+    // ── LSP: diagnostic for current line in status bar
+    // ────────────────────────
+    const char *diag = lspUiDiagnosticAtCursor(&E.lsp_diagnostics,
+                                               active->buffer_id, buffer->y);
+    if (diag) {
+      char single_line[512];
+      int i = 0;
+
+      // Copy until newline, \0, or screen width
+      while (diag[i] && diag[i] != '\n' && i < E.screencols - 4) {
+        single_line[i] = diag[i];
+        i++;
+      }
+
+      // If message was truncated, add ellipsis
+      if (diag[i] != '\0' && diag[i] != '\n') {
+        single_line[i++] = '.';
+        single_line[i++] = '.';
+        single_line[i++] = '.';
+      }
+      single_line[i] = '\0';
+      editorSetStatusMessage("● %s", single_line);
+    }
+  }
   editorDrawStatusBar(&ab);
   editorDrawMessageBar(&ab);
+  if (E.constantes.LSP && (E.lsp_client && E.lsp_client->state == LSP_READY)) {
+    lspUiDrawCompletion(&ab, &E.lsp_completion);
+  }
+  bufferSwitcherDraw(&ab);
+  listPopupDraw(&ab);
 
-  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cursor_y - E.row_offset) + 1,
-           (E.rx - E.col_offset) + 1);
-  abAppend(&ab, buf, strlen(buf));
-
+  // ── Position cursor (account for gutter width) ────────────────────────────
+  int cursor_has_gutter = E.constantes.LSP && buffer && buffer->type == FILE_BUFF;
+  snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
+           active->cursor_y + active->origin_y + 1,
+           active->cursor_x + active->origin_x + 1 +
+               (cursor_has_gutter ? GUTTER_WIDTH : 0));
+  abAppend(&ab, buf, (int)strlen(buf));
   abAppend(&ab, SHOW_CURSOR, 6);
-
   write(STDOUT_FILENO, ab.b, ab.len);
   abFree(&ab);
-}
-
-void editorSetStatusMessage(const char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  vsnprintf(E.status_msg, sizeof(E.status_msg), fmt, ap);
-  va_end(ap);
-  E.status_msg_time = time(NULL);
 }

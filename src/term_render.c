@@ -1,0 +1,53 @@
+// src/term_render.c
+#include "../include/term_render.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static void appendSgrFor(char* out, int* pos, int buf_size, TermCellAttr a)
+{
+    // Only emit a code if this cell has any non-default attribute;
+    // ground-state rendering can just skip the color set/reset pair.
+    char codes[64] = "\x1b[0"; // always start from reset to avoid state leaking between cells
+    int n = 3;
+    if (a.bold)      n += snprintf(codes + n, sizeof(codes) - n, ";1");
+    if (a.underline) n += snprintf(codes + n, sizeof(codes) - n, ";4");
+    if (a.reverse)   n += snprintf(codes + n, sizeof(codes) - n, ";7");
+    if (a.fg >= 1 && a.fg <= 8)  n += snprintf(codes + n, sizeof(codes) - n, ";%d", 30 + (a.fg - 1));
+    if (a.fg >= 9 && a.fg <= 16) n += snprintf(codes + n, sizeof(codes) - n, ";%d", 90 + (a.fg - 9));
+    if (a.bg >= 1 && a.bg <= 8)  n += snprintf(codes + n, sizeof(codes) - n, ";%d", 40 + (a.bg - 1));
+    if (a.bg >= 9 && a.bg <= 16) n += snprintf(codes + n, sizeof(codes) - n, ";%d", 100 + (a.bg - 9));
+    n += snprintf(codes + n, sizeof(codes) - n, "m");
+
+    *pos += snprintf(out + *pos, buf_size - *pos, "%s", codes);
+}
+
+char* termRenderRow(const Row* row, int* length)
+{
+    int buf_size = (row->size + 1) * 32 + 64;
+    char* result = malloc(buf_size);
+    if (!result) { *length = 0; return NULL; }
+
+    int pos = 0;
+    TermCellAttr last_attr;
+    memset(&last_attr, 0xFF, sizeof(last_attr)); // force a mismatch on first cell
+
+    for (int i = 0; i < row->size; i++)
+    {
+        TermCellAttr attr = row->attrs ? row->attrs[i] : (TermCellAttr){0};
+
+        if (memcmp(&attr, &last_attr, sizeof(TermCellAttr)) != 0)
+        {
+            appendSgrFor(result, &pos, buf_size, attr);
+            last_attr = attr;
+        }
+
+        memcpy(&result[pos], row->characters[i].character, row->characters[i].length);
+        pos += row->characters[i].length;
+    }
+
+    pos += snprintf(result + pos, buf_size - pos, "\x1b[0m"); // reset at end of line
+    result[pos] = '\0';
+    *length = pos;
+    return result;
+}

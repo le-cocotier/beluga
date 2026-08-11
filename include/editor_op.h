@@ -2,10 +2,13 @@
 #define EDITOR_OP_H_
 
 #include "data.h"
-void editorInsertChar(int c);
 
-void editorInsertNewLine();
+void editorSetStatusMessage(const char *fmt, ...);
+int editorRowCharCount(Row *row, int x);
+int editorRowCxToByte(const Row *row, int cursor_x);
+char *editorGetClipboard(void);
+void editorSetClipboard(const char *text, int len);
+void editorRunLoop(void);
 
-void editorDelChar();
 
 #endif // EDITOR_OP_H_

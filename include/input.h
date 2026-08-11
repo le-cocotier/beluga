@@ -20,11 +20,11 @@
 // END \x1b[4~ || <esc>[8~ || <esc>[F  || <esc>OF
 // DELETE \x1b[3~
 
-char *editorPrompt(char *prompt);
+Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode);
 
-char *key_to_string(int key);
+Utf8Char *fileCompletion(Utf8Char *path);
 
-void editorMoveCursor(int key);
+int editorMoveCursor(int key);
 
 int executeKeyBind(char *key_sequence);
 

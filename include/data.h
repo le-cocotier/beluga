@@ -1,87 +1,428 @@
 #ifndef DATA_H_
 #define DATA_H_
 
+#include <signal.h>
 #include <stdio.h>
 #include <termios.h>
 #include <time.h>
 
+#include "define.h"
 #include "lisp.h"
 
+typedef struct lsp_client_t LspClient;
+
+/***********************************************************************************************************************
+ *
+ *                                                   utf8 data
+ *
+ **********************************************************************************************************************/
+
 /**
- * \struct erow
+ * @struct Utf8Char
+ * @brief Contains a single utf8 character.
+ */
+typedef struct utf8_char_t
+{
+    unsigned char character[4];
+    char length; // must be between 1 and 4
+} Utf8Char;
+
+
+
+/**
+ * @brief Per-character terminal rendering attributes (color/style),
+ * only populated for rows belonging to a TERMINAL_BUFF buffer.
+ */
+typedef struct term_cell_attr_t
+{
+    unsigned char fg;        // 0 = default, 1-8 = ANSI 30-37, 9-16 = bright 90-97
+    unsigned char bg;        // same encoding as fg, for 40-47 / 100-107
+    unsigned char bold : 1;
+    unsigned char underline : 1;
+    unsigned char reverse : 1;
+} TermCellAttr;
+
+/**
+ * \struct Row
  * \brief Store one editor row
- * \param
  * */
+typedef struct row_t
+{
+    int size; /**< Size of the line */
+    Utf8Char* characters;
+    TermCellAttr* attrs;
+} Row;
 
-typedef struct erow {
-  int size;     /**< Size of the line */
-  int rsize;    /**< Size of the render line */
-  char *chars;  /**< Characters of the line */
-  char *render; /**< The actual line we will print */
-} erow;
+typedef struct context_buffer_t
+{
+    int editor_x, editor_y;
+    int width, height;
+    Row* rows;
+} ContextBuffer;
 
-enum editorStatus_e {
-  IDLE,
-  READ_ONLY,
-  READ_AND_WRITE, 
+/**
+ * @brief Split modes for screen layout
+ */
+typedef enum
+{
+    SPLIT_NONE = 0, // Single buffer fullscreen
+    SPLIT_VERTICAL, // Left-right split
+    SPLIT_HORIZONTAL // Top-bottom split
+} SplitMode;
+
+/**
+ * @brief Represents an editor viewport/pane
+ */
+typedef struct editor_pane_t
+{
+    int buffer_id; // Which buffer this pane displays
+    int height; // Height of this pane
+    int width; // Width of this pane
+    int origin_x, origin_y;
+    int cursor_x; // Local cursor x in this pane
+    int cursor_y; // Local cursor y in this pane
+    int x_offset, y_offset;
+    int is_active; // Is this pane currently active
+} EditorPane;
+
+/**
+ * @brief Screen layout manager
+ */
+typedef struct
+{
+    SplitMode mode;
+    EditorPane* panes;
+    int num_panes;
+    int active_pane; // Index of active pane
+} ScreenLayout;
+
+
+typedef struct theme
+{
+    char* BACKGROUND_COLOR;
+    char* COLOR_KEYWORD;
+    char* COLOR_TYPE;
+    char* COLOR_STRING;
+    char* COLOR_COMMENT;
+    char* COLOR_NUMBER;
+    char* COLOR_DEFAULT;
+} Theme;
+
+enum bufferStatus_e
+{
+    IDLE,
+    READ_ONLY,
+    READ_AND_WRITE,
 };
 
-struct const_t {
-  int TAB_LENGTH;
-  int QUIT_TIMES;
+struct const_t
+{
+    int TAB_LENGTH;
+    int QUIT_TIMES;
+    int LSP;
 };
 
-struct keyBind_t {
-  char *key_sequence;
-  Lisp command;
-  
+struct prefix_t
+{
+    char prefix_name[64];
+    int prefix_id;
+    // (add-prefix "name" #t) — a sticky prefix stays active across
+    // keystrokes that don't themselves change it, instead of
+    // executeKeyBind() auto-resetting to "no-prefix" after every command.
+    // "user" (the CTRL-x <key> style, one-shot by design) and "term"
+    // (nothing but ESCAPE is ever mapped under it, so the reset never
+    // actually fires) don't need this; a prefix meant for continuous
+    // navigation while it's active (e.g. arrow keys in a sidebar) does.
+    int sticky;
 };
+
+struct keyBind_t
+{
+    char* key_sequence;
+    int prefix_id;
+    Lisp command;
+};
+
+/**
+ * @brief One (event-name, callback) registration made via the Lisp
+ * `add-hook` builtin. Several bindings may share the same event_name —
+ * runHooks() calls all of them, in registration order.
+ */
+struct hookBind_t
+{
+    char event_name[64];
+    Lisp callback;
+};
+
+typedef enum
+{
+    LSP_NOT_STARTED = 0,
+    LSP_INITIALIZING,
+    LSP_READY,
+    LSP_SHUTTING_DOWN,
+    LSP_SHUTDOWN,
+} LspState;
+
+typedef struct
+{
+    int id;
+    void (*callback)(struct lsp_client_t* lsp, const char* json);
+} LspPending;
+
+// One (extension -> server) mapping registered via the Lisp `lsp-server`
+// builtin, e.g. (lsp-server "py" "python" "pyright-langserver" "--stdio").
+#define LSP_SERVER_MAX_ARGS 8
+struct lspServerConfig_t
+{
+    char extension[16];
+    char language_id[32];
+    char* argv[LSP_SERVER_MAX_ARGS + 1]; // NULL-terminated, for execvp
+};
+
+struct lsp_client_t
+{
+    // ── Process ───────────────────────────────────────────────────────────────
+    pid_t pid;
+    int write_to_server_fd;
+    int read_from_server_fd;
+    char* recv_buf;
+    size_t recv_len;
+    size_t recv_cap;
+    int completion_just_arrived;
+    int completion_requested;
+    char language_id[32]; // set from the matching lspServerConfig_t at start
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    LspState state;
+    int next_id;
+
+    // ── Pending requests ──────────────────────────────────────────────────────
+    LspPending pending[LSP_MAX_PENDING];
+    int pending_count;
+
+    // ── Completion context ────────────────────────────────────────────────────
+    int completion_cursor_x; // screen position when
+    int completion_cursor_y; // completion was requested
+
+    // ── Completion debounce / staleness ───────────────────────────────────────
+    int completion_debounce_pending;       // 1 = a request is scheduled but not sent yet
+    long completion_debounce_deadline_ms;  // monotonic ms timestamp to fire at
+    int completion_latest_request_id;      // id of the most recently *sent* completion
+                                            // request; responses for older ids are stale
+
+    // ── Completion trigger characters ─────────────────────────────────────────
+    // Populated from the server's own initialize response. Falls back to
+    // "." alone if the server didn't advertise any — without this,
+    // punctuation-triggered completion (the dominant trigger in most
+    // languages: "obj." in Python, "->"/"::" in C++) never fires; only
+    // typing a following word-char keystroke did.
+    char trigger_chars[LSP_MAX_TRIGGER_CHARS][LSP_TRIGGER_CHAR_MAXLEN];
+    int num_trigger_chars;
+};
+
+typedef struct
+{
+    char label[128]; // display text  e.g. "printf"
+    char insertText[128];
+    char detail[64]; // type/sig hint e.g. "int (const char *, ...)"
+    int kind; // LSP CompletionItemKind (1=Text,2=Method,3=Function…)
+} CompletionItem;
+
+typedef struct
+{
+    CompletionItem items[COMPLETION_MAX_ITEMS];
+    int count;
+    int selected; // currently highlighted row
+    int visible; // is the popup shown?
+    int origin_x; // screen col where popup appears
+    int origin_y; // screen row where popup appears
+} CompletionPopup;
+
+/**
+ * @brief State for the CTRL-x b buffer switcher popup.
+ * @note Deliberately holds no snapshot array of buffers — E.buffers is a
+ * circular doubly-linked list with no fixed capacity, so navigation just
+ * walks it live via ->next/->prev from current_buffer_id, and the popup
+ * is rendered by walking it fresh every frame. No static buffer count.
+ */
+typedef struct
+{
+    int visible;
+    int current_buffer_id; // the buffer currently highlighted
+} BufferSwitcherPopup;
+
+/**
+ * @brief State for the generic (editor-list-popup ...) builtin — a
+ * single-instance modal picker any Lisp package can drive: pass a title,
+ * a list of (label . value) pairs, and an on-select/on-cancel callback.
+ * @note items/on_select/on_cancel are raw Lisp values kept alive by being
+ * reachable from this global, matching how E.hooks[]/E.key_binds[] already
+ * retain Lisp callbacks long-term — safe here because lisp_collect() (the
+ * GC's moving compactor) is only ever invoked twice, during startup's
+ * lisp_lib_load(), and never again once the editor is running.
+ */
+typedef struct
+{
+    int visible;
+    char title[128];
+    Lisp items;      // proper list of (label . value) pairs
+    int count;        // cached length of items
+    int selected;      // 0-based index into items
+    Lisp on_select;    // (lambda (value) ...), called with the chosen pair's cdr
+    Lisp on_cancel;    // (lambda () ...) or lisp_null() — called on ESC
+} ListPopup;
+
+// Numbered to match LSP's own DiagnosticSeverity (1=Error..4=Hint) exactly,
+// so a server's raw severity int can be stored directly with no translation
+// step — a mismatch here previously made severity-4 (Hint) diagnostics
+// render as invisible blanks in the gutter (fell through to the "no
+// diagnostic" case since nothing in the enum matched the value 4).
+typedef enum { DIAG_ERROR = 1, DIAG_WARNING, DIAG_INFO, DIAG_HINT } DiagSeverity;
+
+typedef struct
+{
+    int buffer_id;
+    int line; // 0-based
+    int col_start; // 0-based
+    int col_end;
+    DiagSeverity severity;
+    char message[256];
+} Diagnostic;
+
+typedef struct
+{
+    Diagnostic entries[DIAG_MAX];
+    int count;
+} DiagnosticList;
+
+typedef enum
+{
+    TPARSE_GROUND,
+    TPARSE_ESC,
+    TPARSE_CSI,
+    TPARSE_OSC,       // consuming/discarding an OSC string
+    TPARSE_OSC_ESC,   // saw ESC while inside OSC — might be the ST terminator (ESC \)
+} TermParseState;
+
+/**
+ * @brief Live parser state for one PTY's output stream — cursor position,
+ * current SGR attribute, and CSI-sequence-in-progress buffer.
+ */
+typedef struct term_parser_state_t
+{
+    TermParseState state;
+    int params[CSI_MAX_PARAMS];
+    int nparams;
+    int cursor_x, cursor_y;           // relative to buf->numrows origin
+    int saved_cursor_x, saved_cursor_y;
+    int screen_top_row;
+    int pane_height;
+
+    TermCellAttr current_attr;
+
+    // Multi-byte UTF-8 reassembly across possibly-fragmented read() calls
+    unsigned char utf8_pending[4];
+    int utf8_pending_len;
+    int utf8_expected_len;
+} TermParserState;
+
+// EXPLORER_BUFF: a read-only buffer whose rows are set programmatically
+// from Lisp (editor-scratch-set-lines), not loaded from or saved to a
+// real file — used for the file-explorer sidebar and for one-shot
+// generated content like a project tree dump.
+enum buffer_type { FILE_BUFF, TERMINAL_BUFF, EXPLORER_BUFF };
+
+typedef struct buffer_t
+{
+    enum buffer_type type;
+    int buffer_id;
+    int b_lsp_open;
+    int x, y; /**< Position in the file */
+    Row* row;
+    int numrows;
+    int b_has_changed;
+    Utf8Char* filename;
+    Utf8Char* path;
+    Utf8Char* fullname;
+
+    pid_t child_pid;              // -1 if not a terminal buffer / process exited
+    int pty_master_fd;            // -1 if not a terminal buffer
+    TermParserState term_state;
+
+    enum bufferStatus_e state;
+    int dirty; /**< Has this buffer been modified since last save */
+
+    struct buffer_t* next;
+    struct buffer_t* prev;
+
+} Buffer;
 
 /**
  * \struct editorConfig
  * \brief Containing our editor state.
  */
-struct editorConfig {
-  int cursor_x, cursor_y; /**< Cursor position */
-  int rx;                 /**< Position in the render*/
-  int row_offset;         /**< Position scroll of lines */
-  int col_offset;         /**< Position scroll of colomns*/
-  int screenrows;         /**< Terminal height*/
-  int screencols;         /**< Terminal width*/
-  int numrows;            /**< Number of rows contained */
-  erow *row;              /**< Store all the rows printed */
-  int dirty;
-  char *filename;
-  enum editorStatus_e state;
-  char status_msg[80];
-  time_t status_msg_time;
-  struct termios orig_termios; /**< Terminal communication interface */
+typedef struct editor_config_t
+{
+    int cursor_x, cursor_y; /**< Cursor position */
+    int screenrows; /**< Terminal height*/
+    int screencols; /**< Terminal width*/
 
-  struct const_t constantes;
-  int quit_times_buffer;
+    ScreenLayout layout;
 
-  FILE *fd_init_file;
-  Lisp env;
-  LispContext ctx;     /** Lisp context */
-  Lisp ctx_data;       /** Lisp data context */
-  LispError ctx_error; /** Lisp ctx error */
+    LspClient* lsp_client;
+    CompletionPopup lsp_completion;
+    DiagnosticList lsp_diagnostics;
 
-  struct keyBind_t* key_binds;
-  int number_of_keybinds;
+    BufferSwitcherPopup buffer_switcher;
+    ListPopup list_popup;
 
-};
+    struct lspServerConfig_t* lsp_servers;
+    int number_of_lsp_servers;
+
+    int dirty;
+
+    Utf8Char* status_msg;
+    time_t status_msg_time;
+    struct termios orig_termios; /**< Terminal communication interface */
+
+    struct const_t constantes;
+    int quit_times_buffer;
+
+    char* init_file_path;
+    FILE* fd_init_file;
+    LispContext ctx; /** Lisp context */
+    Lisp ctx_data; /** Lisp data context */
+    LispError ctx_error; /** Lisp ctx error */
+
+    struct keyBind_t* key_binds;
+    int number_of_keybinds;
+
+    struct hookBind_t* hooks;
+    int number_of_hooks;
+
+    struct prefix_t* prefix;
+    int number_of_prefix;
+    int prefix_state;
+
+    int exit_requested;
+
+    Buffer *buffers;
+    int number_of_buffer;
+
+    Theme theme;
+
+    volatile sig_atomic_t winch_pending; // set by SIGWINCH handler, processed in main loop
+} EditorConfig;
 
 /**
  * \struct abuf
  * \brief Contains text to add before writing to screen.
  * */
-
-struct abuf {
-  char *b; /**< Text that will be printed */
-  int len; /**< Length of the text */
+struct abuf
+{
+    char* b; /**< Text that will be printed */
+    int len; /**< Length of the text */
 };
-
-extern struct editorConfig E;
 
 
 #endif

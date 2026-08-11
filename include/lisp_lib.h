@@ -36,7 +36,7 @@ static const char* lib_0_sequences_src_ =
            (if (pair? args) \n\
                (if (pair? (cdr args)) \n\
                    (if (pair? (cdr (cdr args))) \n\
-                       `(/\\_ ,(car args) ,(cons 'BEGIN (cdr args))) \n\
+                       `(/\\_ ,(car args) ,(cons 'begin (cdr args))) \n\
                        `(/\\_ ,(car args) ,(car (cdr args)))) \n\
                    (syntax-error \"lambda missing body expressions: (lambda (args) body)\")) \n\
                (syntax-error \"lambda missing argument: (lambda (args) body)\")))) \n\
@@ -44,18 +44,18 @@ static const char* lib_0_sequences_src_ =
 (define-macro set! (lambda (var x) \n\
                      (begin \n\
                        (if (not (symbol? var)) (syntax-error \"set! not a variable\")) \n\
-                       `(_SET! ,var ,x)))) \n\
+                       `(_set! ,var ,x)))) \n\
  \n\
 (define-macro define \n\
               (lambda (var . exprs) \n\
                 (if (symbol? var) \n\
                     (if (pair? (cdr exprs)) \n\
                         (syntax-error \"define: (define var x)\") \n\
-                        `(_DEF ,var ,(car exprs))) \n\
+                        `(_def ,var ,(car exprs))) \n\
                     (if (pair? var) \n\
-                        `(_DEF ,(car var) \n\
-                               (LAMBDA ,(cdr var) \n\
-                                       ,(if (null? (cdr exprs)) (car exprs) (cons 'BEGIN exprs)))) \n\
+                        `(_def ,(car var) \n\
+                               (lambda ,(cdr var) \n\
+                                       ,(if (null? (cdr exprs)) (car exprs) (cons 'begin exprs)))) \n\
                         (syntax-error \"define: not a symbol\") )))) \n\
   \n\
 (define (first x) (car x))  \n\
@@ -98,13 +98,13 @@ static const char* lib_0_sequences_src_ =
 (define (_expand-shorthand-body path)  \n\
   (if (null? path) (cons 'pair '())  \n\
       (list (if (char=? (car path) #\\A)  \n\
-            (cons 'CAR (_expand-shorthand-body (cdr path)))))))  \n\
+            (cons 'car (_expand-shorthand-body (cdr path)))))))  \n\
  \n\
 (define (_expand-shorthand text)  \n\
-  (cons 'DEFINE  (cons (list (string->symbol (string-append \"C\" text \"R\")) 'pair)  \n\
+  (cons 'define  (cons (list (string->symbol (string-append \"C\" text \"R\")) 'pair)  \n\
         (_expand-shorthand-body (string->list text)))))  \n\
  \n\
-(define-macro _shorthand-accessors (lambda args (cons 'BEGIN (map1 _expand-shorthand args))))  \n\
+(define-macro _shorthand-accessors (lambda args (cons 'begin (map1 _expand-shorthand args))))  \n\
  \n\
 (define (vector . args) (list->vector args)) \n\
  \n\
@@ -124,14 +124,14 @@ static const char* lib_0_sequences_src_ =
 
 static const char* lib_1_forms_src_ = 
 "(define (_make-lambda args body)  \n\
-  (list 'LAMBDA args (if (null? (cdr body)) (car body) (cons 'BEGIN body))))  \n\
+  (list 'lambda args (if (null? (cdr body)) (car body) (cons 'begin body))))  \n\
   \n\
  \n\
-; (LET <name> ((<var0> <expr0>) ... (<varN> <expr1>)) <body0> ... <bodyN>) \n\
-;  => ((LAMBDA (<var0> ... <varN>) (BEGIN <body0> ... <bodyN>)) <expr0> ... <expr1>)             \n\
+; (let <name> ((<var0> <expr0>) ... (<varN> <expr1>)) <body0> ... <bodyN>) \n\
+;  => ((lambda (<var0> ... <varN>) (begin <body0> ... <bodyN>)) <expr0> ... <expr1>)             \n\
 ;  => named  \n\
 ;    ((lambda () \n\
-;        (define <name> (LAMBDA (<var0> ... <varN>) (BEGIN <body0> ... <bodyN>))) \n\
+;        (define <name> (lambda (<var0> ... <varN>) (begin <body0> ... <bodyN>))) \n\
 ;        (<name> <expr0> ... <exprN>))) \n\
  \n\
 (define (_check-binding-list bindings)  \n\
@@ -145,7 +145,7 @@ static const char* lib_1_forms_src_ =
   (define initial-args (map1 (lambda (entry) (second entry)) bindings))  \n\
   (if (null? var)  \n\
       (cons body-func initial-args)  \n\
-      (list (_make-lambda '() (list (list 'DEFINE var body-func) (cons var initial-args))))))  \n\
+      (list (_make-lambda '() (list (list 'define var body-func) (cons var initial-args))))))  \n\
  \n\
 (define-macro let (lambda args   \n\
                     (if (pair? (first args))  \n\
@@ -153,8 +153,8 @@ static const char* lib_1_forms_src_ =
                         (_let->combination (first args) (second args) (cdr (cdr args))))))  \n\
  \n\
 (define (_let*-helper bindings body)  \n\
-  (if (null? bindings) (if (null? (cdr body)) (car body) (cons 'BEGIN body))  \n\
-      (list 'LET (list (car bindings)) (_let*-helper (cdr bindings) body))))  \n\
+  (if (null? bindings) (if (null? (cdr body)) (car body) (cons 'begin body))  \n\
+      (list 'let (list (car bindings)) (_let*-helper (cdr bindings) body))))  \n\
  \n\
 (define-macro let* (lambda (bindings . body)  \n\
                      (_check-binding-list bindings)  \n\
@@ -163,17 +163,17 @@ static const char* lib_1_forms_src_ =
 (define-macro letrec (lambda (bindings . body)  \n\
                        (_check-binding-list bindings)  \n\
                        (cons (_make-lambda (map1 (lambda (entry) (first entry)) bindings)  \n\
-                                           (append (map1 (lambda (entry) (list 'SET! (first entry) (second entry)))  \n\
+                                           (append (map1 (lambda (entry) (list 'set! (first entry) (second entry)))  \n\
                                                          bindings) body))  \n\
                              (map1 (lambda (entry) '()) bindings))))  \n\
  \n\
  \n\
-; (COND (<pred0> <expr0>) \n\
+; (cond (<pred0> <expr0>) \n\
 ;       (<pred1> <expr1>) \n\
 ;        ... \n\
 ;        (else <expr-1>))  \n\
 ; => \n\
-; (IF <pred0> <expr0> \n\
+; (if <pred0> <expr0> \n\
 ;      (if <pred1> <expr1> \n\
 ;          .... \n\
 ;      (if <predN> <exprN> <expr-1>)) ... ) \n\
@@ -187,11 +187,11 @@ static const char* lib_1_forms_src_ =
  \n\
 (define (_cond-helper clauses)  \n\
   (if (null? clauses) '()  \n\
-      (if (eq? (car (car clauses)) 'ELSE)  \n\
-          (cons 'BEGIN (cdr (car clauses)))  \n\
-          (list 'IF  \n\
+      (if (eq? (car (car clauses)) 'else)  \n\
+          (cons 'begin (cdr (car clauses)))  \n\
+          (list 'if  \n\
                 (car (car clauses))  \n\
-                (cons 'BEGIN (cdr (car clauses)))  \n\
+                (cons 'begin (cdr (car clauses)))  \n\
                 (_cond-helper (cdr clauses))))))  \n\
  \n\
 (define-macro cond (lambda clauses  \n\
@@ -206,26 +206,26 @@ static const char* lib_2_forms_src_ =
   (cond ((null? preds) #t)  \n\
         ((null? (cdr preds)) (car preds))  \n\
         (else  \n\
-          `(IF ,(car preds) ,(_and-helper (cdr preds)) #f))))  \n\
+          `(if ,(car preds) ,(_and-helper (cdr preds)) #f))))  \n\
 (define-macro and (lambda preds (_and-helper preds)))  \n\
  \n\
 (define (_or-helper preds var)  \n\
   (cond ((null? preds) #f)  \n\
         ((null? (cdr preds)) (car preds))  \n\
         (else  \n\
-          `(BEGIN (SET! ,var ,(car preds))  \n\
-                  (IF ,var ,var ,(_or-helper (cdr preds) var))))))  \n\
+          `(begin (set! ,var ,(car preds))  \n\
+                  (if ,var ,var ,(_or-helper (cdr preds) var))))))  \n\
  \n\
 (define-macro or (lambda preds  \n\
                    (let ((var (gensym)))  \n\
-                     `(LET ((,var '())) ,(_or-helper preds var)))))  \n\
+                     `(let ((,var '())) ,(_or-helper preds var)))))  \n\
  \n\
 (define-macro case (lambda (key . clauses)  \n\
                      (let ((expr (gensym)))  \n\
-                       `(LET ((,expr ,key))  \n\
-                          ,(cons 'COND (map1 (lambda (entry)  \n\
+                       `(let ((,expr ,key))  \n\
+                          ,(cons 'cond (map1 (lambda (entry)  \n\
                                                (cons (if (pair? (car entry))  \n\
-                                                         `(MEMV ,expr (quote ,(car entry)))  \n\
+                                                         `(memv ,expr (quote ,(car entry)))  \n\
                                                          (car entry))  \n\
                                                      (cdr entry))) clauses))))))  \n\
  \n\
@@ -234,23 +234,24 @@ static const char* lib_2_forms_src_ =
                 `(begin (set! ,l (cons ,v ,l)) ,l)))  \n\
  \n\
 ; (DO ((<var0> <init0> <step0>) ...)  (<test> <result>) <body>) \n\
-(define-macro do  \n\
-              (lambda (vars loop-check . loops)  \n\
-                (let ( (names '()) (inits '()) (steps '()) (f (gensym)) )  \n\
-                  (for-each1 (lambda (var)  \n\
-                               (push (car var) names)  \n\
-                               (set! var (cdr var))  \n\
-                               (push (car var) inits)  \n\
-                               (set! var (cdr var))  \n\
-                               (push (car var) steps)) vars)  \n\
-                  `((LAMBDA ()  \n\
-                      (DEFINE ,f (LAMBDA ,names  \n\
-                                   (IF ,(car loop-check)  \n\
-                                       ,(if (pair? (cdr loop-check)) (car (cdr loop-check)) '())  \n\
-                                       ,(cons 'BEGIN (append loops (list (cons f steps)))) )))  \n\
-                      ,(cons f inits)  \n\
-                      )) )))  \n\
  \n\
+(define-macro do   \n\
+  (lambda (vars loop-check . loops)   \n\
+    (let ( (names '()) (inits '()) (steps '()) (f (gensym)) )   \n\
+      (for-each1 (lambda (var-spec)   \n\
+                   (push (car var-spec) names) \n\
+                   (push (car (cdr var-spec)) inits) \n\
+                   (if (pair? (cdr (cdr var-spec))) \n\
+                       (push (car (cdr (cdr var-spec))) steps) \n\
+                       (push (car var-spec) steps))) vars)   \n\
+      `((lambda ()   \n\
+          (define ,f (lambda ,names   \n\
+                       (if ,(car loop-check)   \n\
+                           ,(if (pair? (cdr loop-check)) (car (cdr loop-check)) '())   \n\
+                           ,(cons 'begin (append loops (list (cons f steps)))) )))   \n\
+          ,(cons f inits)   \n\
+          )) ))) \n\
+\n\
 (define-macro dotimes  \n\
               (lambda (form body)  \n\
                 (apply (lambda (i n . result)  \n\
@@ -262,18 +263,18 @@ static const char* lib_2_forms_src_ =
 (define-macro swap! \n\
               (lambda (x y) \n\
                 (let ((temp (gensym))) \n\
-                  `(LET ((,temp ,x)) \n\
-                        (SET! ,temp ,x) \n\
-                        (SET! ,x ,y) \n\
-                        (SET! ,y ,temp))))) \n\
+                  `(let ((,temp ,x)) \n\
+                        (set! ,temp ,x) \n\
+                        (set! ,x ,y) \n\
+                        (set! ,y ,temp))))) \n\
  \n\
 (define-macro inc! ; CL incf \n\
               (lambda (x) \n\
-                `(SET! ,x (+ ,x 1)))) \n\
+                `(set! ,x (+ ,x 1)))) \n\
  \n\
 (define-macro dec! ; CL decf \n\
               (lambda (x) \n\
-                `(SET! ,x (- ,x 1))))";
+                `(set! ,x (- ,x 1))))";
 
 static const char* lib_3_math_src_ = 
 "(define (number? x) (real? x))  \n\
@@ -445,7 +446,7 @@ static const char* lib_4_sequences_src_ =
 
 static const char* lib_5_streams_src_ = 
 "(define-macro delay (lambda (expr) \n\
-                      `(make-promise ,(cons 'LAMBDA \n\
+                      `(make-promise ,(cons 'lambda \n\
                                             (cons '() \n\
                                                   (cons expr '())))))) \n\
  \n\
@@ -1162,7 +1163,7 @@ static Lisp sch_string_ref(Lisp args, LispError* e, LispContext ctx)
         return lisp_null();
     }
 
-    return lisp_make_char((int)lisp_string_ref(str, lisp_int(index)));
+    return lisp_make_char(lisp_string_ref(str, lisp_int(index)));
 }
 
 static Lisp sch_string_set(Lisp args, LispError* e, LispContext ctx)
@@ -1736,7 +1737,7 @@ static Lisp sch_pseudo_rand(Lisp args, LispError* e, LispContext ctx)
 
 static Lisp sch_univeral_time(Lisp args, LispError* e, LispContext ctx)
 {
-    return lisp_make_int((LispInt)time(NULL));
+    return lisp_make_int(time(NULL));
 }
 
 static Lisp sch_is_table(Lisp args, LispError* e, LispContext ctx)
@@ -1926,182 +1927,178 @@ static Lisp sch_is_cont(Lisp args, LispError* e, LispContext ctx)
 
 static const LispFuncDef lib_cfunc_defs[] = {
     
-    { "ERROR", sch_error },
-    { "SYNTAX-ERROR", sch_syntax_error },
+    { "error", sch_error },
+    { "syntax-error", sch_syntax_error },
 
-    // Output Procedures https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Output-Procedures.html
-    { "_WRITE", sch_write },
-    { "_DISPLAY", sch_display },
-    { "_WRITE-CHAR", sch_write_char },
-    { "_FLUSH-OUTPUT-PORT", sch_flush },
-    { "_READ", sch_read },
-    { "INPUT-PORT?", sch_is_port_in },
-    { "OUTPUT-PORT?", sch_is_port_out },
-    { "OPEN-INPUT-FILE", sch_open_input },
-    { "OPEN-OUTPUT-FILE", sch_open_output },
-    { "CLOSE-INPUT-PORT", sch_port_close },
-    { "CLOSE-OUTPUT-PORT", sch_port_close },
-    { "EOF-OBJECT?", sch_is_eof },
+    // Output Procedures
+    { "_write", sch_write },
+    { "_display", sch_display },
+    { "_write-char", sch_write_char },
+    { "_flush-output-port", sch_flush },
+    { "_read", sch_read },
+    { "input-port?", sch_is_port_in },
+    { "output-port?", sch_is_port_out },
+    { "open-input-file", sch_open_input },
+    { "open-output-file", sch_open_output },
+    { "close-input-port", sch_port_close },
+    { "close-output-port", sch_port_close },
+    { "eof-object?", sch_is_eof },
     
-    // Universal Time https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Universal-Time.html
-    { "GET-UNIVERSAL-TIME", sch_univeral_time },
-    { "PRINT-GC-STATISTICS", sch_print_gc_stats },
+    // Universal Time
+    { "get-universal-time", sch_univeral_time },
+    { "print-gc-statistics", sch_print_gc_stats },
     
-    { "MACROEXPAND", sch_macroexpand },
+    { "macroexpand", sch_macroexpand },
     
-    // Equivalence Predicates https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Equivalence-Predicates.html
-    { "EQ?", sch_exact_eq },
-    { "EQV?", sch_equal },
-    { "EQUAL?", sch_equal_r },
+    // Equivalence Predicates
+    { "eq?", sch_exact_eq },
+    { "eqv?", sch_equal },
+    { "equal?", sch_equal_r },
     
-    // Booleans https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Booleans.html
-    { "BOOLEAN?", sch_is_boolean },
-    { "NOT", sch_not },
+    // Booleans
+    { "boolean?", sch_is_boolean },
+    { "not", sch_not },
 
     // PAIRS
-    { "CONS", sch_cons },
-    { "CAR", sch_car },
-    { "CDR", sch_cdr },
-    { "SET-CAR!", sch_set_car },
-    { "SET-CDR!", sch_set_cdr },
-    { "NULL?", sch_is_null },
-    { "PAIR?", sch_is_pair },
+    { "cons", sch_cons },
+    { "car", sch_car },
+    { "cdr", sch_cdr },
+    { "set-car!", sch_set_car },
+    { "set-cdr!", sch_set_cdr },
+    { "null?", sch_is_null },
+    { "pair?", sch_is_pair },
 
-    // Lists https://groups.csail.mit.edu/mac/ftpdir/scheme-7.4/doc-html/scheme_8.html
-    { "LIST", sch_list },
-    { "LIST?", sch_is_list },
-    { "MAKE-LIST", sch_make_list },
-    { "LIST-COPY", sch_list_copy },
-    { "LENGTH", sch_length },
-    { "APPEND", sch_append },
-    { "APPEND-REVERSE!", sch_append_reverse },
-    { "LIST-REF", sch_list_ref },
-    { "NTHCDR", sch_list_advance },
+    // Lists
+    { "list", sch_list },
+    { "list?", sch_is_list },
+    { "make-list", sch_make_list },
+    { "list-copy", sch_list_copy },
+    { "length", sch_length },
+    { "append", sch_append },
+    { "append-reverse!", sch_append_reverse },
+    { "list-ref", sch_list_ref },
+    { "nthcdr", sch_list_advance },
 
-    // Vectors https://groups.csail.mit.edu/mac/ftpdir/scheme-7.4/doc-html/scheme_9.html#SEC82
-    { "VECTOR?", sch_is_vector },
-    { "MAKE-VECTOR", sch_make_vector },
-    { "VECTOR-GROW", sch_vector_grow },
-    { "VECTOR-LENGTH", sch_vector_length },
-    { "VECTOR-SET!", sch_vector_set },
-    { "VECTOR-SWAP!", sch_vector_swap },
-    { "VECTOR-REF", sch_vector_ref },
-    { "VECTOR-FILL!", sch_vector_fill },
-    { "VECTOR-ASSQ", sch_vector_assq },
-    { "SUBVECTOR", sch_subvector },
-    { "LIST->VECTOR", sch_list_to_vector },
-    { "VECTOR->LIST", sch_vector_to_list },
+    // Vectors
+    { "vector?", sch_is_vector },
+    { "make-vector", sch_make_vector },
+    { "vector-grow", sch_vector_grow },
+    { "vector-length", sch_vector_length },
+    { "vector-set!", sch_vector_set },
+    { "vector-swap!", sch_vector_swap },
+    { "vector-ref", sch_vector_ref },
+    { "vector-fill!", sch_vector_fill },
+    { "vector-assq", sch_vector_assq },
+    { "subvector", sch_subvector },
+    { "list->vector", sch_list_to_vector },
+    { "vector->list", sch_vector_to_list },
 
-    // Strings https://groups.csail.mit.edu/mac/ftpdir/scheme-7.4/doc-html/scheme_7.html#SEC61
-    { "STRING?", sch_is_string },
-    { "MAKE-STRING", sch_make_string },
-    { "STRING=?", sch_equal_r },
-    { "STRING<?", sch_string_less },
-    { "SUBSTRING", sch_substring },
-    { "STRING-NULL?", sch_string_is_null },
-    { "STRING-LENGTH", sch_string_length },
-    { "STRING-REF", sch_string_ref },
-    { "STRING-SET!", sch_string_set },
-    { "STRING-UPCASE", sch_string_upcase },
-    { "STRING-DOWNCASE", sch_string_downcase },
-    { "STRING-APPEND", sch_string_append },
-    { "STRING->LIST", sch_string_to_list },
-    { "LIST->STRING", sch_list_to_string },
-    { "STRING->NUMBER", sch_string_to_number },
-    { "NUMBER->STRING", sch_number_to_string },
+    // Strings
+    { "string?", sch_is_string },
+    { "make-string", sch_make_string },
+    { "string=?", sch_equal_r },
+    { "string<?", sch_string_less },
+    { "substring", sch_substring },
+    { "string-null?", sch_string_is_null },
+    { "string-length", sch_string_length },
+    { "string-ref", sch_string_ref },
+    { "string-set!", sch_string_set },
+    { "string-upcase", sch_string_upcase },
+    { "string-downcase", sch_string_downcase },
+    { "string-append", sch_string_append },
+    { "string->list", sch_string_to_list },
+    { "list->string", sch_list_to_string },
+    { "string->number", sch_string_to_number },
+    { "number->string", sch_number_to_string },
 
-    // Characters https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Characters.html#Characters
-    { "CHAR?", sch_is_char },
-    { "CHAR=?", sch_equals },
-    { "CHAR<?", sch_char_less },
+    // Characters
+    { "char?", sch_is_char },
+    { "char=?", sch_equals },
+    { "char<?", sch_char_less },
 
-    { "CHAR-UPCASE", sch_char_upcase },
-    { "CHAR-DOWNCASE", sch_char_downcase },
-    { "CHAR-WHITESPACE?", sch_char_is_white },
-    { "CHAR-ALPHANUMERIC?", sch_char_is_alphanum },
-    { "CHAR-ALPHABETIC?", sch_char_is_alpha },
-    { "CHAR-NUMERIC?", sch_char_is_number },
-    { "CHAR->INTEGER", sch_char_to_int },
+    { "char-upcase", sch_char_upcase },
+    { "char-downcase", sch_char_downcase },
+    { "char-whitespace?", sch_char_is_white },
+    { "char-alphanumeric?", sch_char_is_alphanum },
+    { "char-alphabetic?", sch_char_is_alpha },
+    { "char-numeric?", sch_char_is_number },
+    { "char->integer", sch_char_to_int },
 
-    // Association Lists https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Association-Lists.html
-    // Numerical operations https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Numerical-operations.html
+    // Numerical operations
     { "=", sch_equals },
     { "+", sch_add },
     { "-", sch_sub },
     { "*", sch_mult },
     { "/", sch_divide },
     { "<", sch_less },
-    { "INTEGER?", sch_is_int },
-    { "EVEN?", sch_is_even },
-    { "REAL?", sch_is_real },
-    { "EXP", sch_exp },
-    { "EXPT", sch_power },
-    { "LOG", sch_log },
-    { "SIN", sch_sin },
-    { "COS", sch_cos },
-    { "TAN", sch_tan },
-    { "ATAN", sch_atan },
-    { "SQRT", sch_sqrt },
-    { "ROUND", sch_round },
-    { "FLOOR", sch_floor },
-    { "CEILING", sch_ceiling },
-    { "QUOTIENT", sch_quotient },
-    { "REMAINDER", sch_remainder },
-    { "MODULO", sch_modulo },
-    { "ABS", sch_abs },
-    { "MAGNITUDE", sch_abs },
-    { "EXACT?", sch_is_int },
-    { "EXACT->INEXACT", sch_to_inexact },
-    { "INEXACT->EXACT", sch_to_exact },
+    { "integer?", sch_is_int },
+    { "even?", sch_is_even },
+    { "real?", sch_is_real },
+    { "exp", sch_exp },
+    { "expt", sch_power },
+    { "log", sch_log },
+    { "sin", sch_sin },
+    { "cos", sch_cos },
+    { "tan", sch_tan },
+    { "atan", sch_atan },
+    { "sqrt", sch_sqrt },
+    { "round", sch_round },
+    { "floor", sch_floor },
+    { "ceiling", sch_ceiling },
+    { "quotient", sch_quotient },
+    { "remainder", sch_remainder },
+    { "modulo", sch_modulo },
+    { "abs", sch_abs },
+    { "magnitude", sch_abs },
+    { "exact?", sch_is_int },
+    { "exact->inexact", sch_to_inexact },
+    { "inexact->exact", sch_to_exact },
     
-    // Symbols https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Symbols.html
-    { "SYMBOL?", sch_is_symbol },
-    { "SYMBOL<?", sch_symbol_less },
-    { "STRING->SYMBOL", sch_string_to_symbol },
-    { "SYMBOL->STRING", sch_symbol_to_string },
-    { "GENERATE-UNINTERNED-SYMBOL", sch_gensym },
-    { "GENSYM", sch_gensym },
+    // Symbols
+    { "symbol?", sch_is_symbol },
+    { "symbol<?", sch_symbol_less },
+    { "string->symbol", sch_string_to_symbol },
+    { "symbol->string", sch_symbol_to_string },
+    { "generate-uninterned-symbol", sch_gensym },
+    { "gensym", sch_gensym },
 
-    // Environments https://groups.csail.mit.edu/mac/ftpdir/scheme-7.4/doc-html/scheme_14.html
-    { "EVAL", sch_eval },
-    { "SCHEME-REPORT-ENVIRONMENT", sch_system_env },
-    { "INTERACTION-ENVIRONMENT", sch_user_env },
-    // { "THE-ENVIRONMENT", sch_current_env },
+    // Environments
+    { "eval", sch_eval },
+    { "scheme-report-environment", sch_system_env },
+    { "interaction-environment", sch_user_env },
     
-    // Hash Tables https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Basic-Hash-Table-Operations.html#Basic-Hash-Table-Operations
-    { "HASH-TABLE?", sch_is_table },
-    { "MAKE-HASH-TABLE", sch_table_make },
-    { "HASH-TABLE-SET!", sch_table_set },
-    { "HASH-TABLE-REF", sch_table_get },
-    { "HASH-TABLE-SIZE", sch_table_size },
-    { "HASH-TABLE->ALIST", sch_table_to_alist },
+    // Hash Tables
+    { "hash-table?", sch_is_table },
+    { "make-hash-table", sch_table_make },
+    { "hash-table-set!", sch_table_set },
+    { "hash-table-ref", sch_table_get },
+    { "hash-table-size", sch_table_size },
+    { "hash-table->alist", sch_table_to_alist },
 
-    { "PROMISE?", sch_is_promise },
-    { "MAKE-PROMISE", sch_make_promise },
-    { "_PROMISE-PROCEDURE", sch_promise_proc },
-    { "_PROMISE-STORE!", sch_promise_store },
-    { "PROMISE-VALUE", sch_promise_val },
-    { "PROMISE-FORCED?", sch_promise_forced },
+    { "promise?", sch_is_promise },
+    { "make-promise", sch_make_promise },
+    { "_promise-procedure", sch_promise_proc },
+    { "_promise-store!", sch_promise_store },
+    { "promise-value", sch_promise_val },
+    { "promise-forced?", sch_promise_forced },
     
-    // Procedures https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Procedure-Operations.html#Procedure-Operations
-    { "APPLY", sch_apply },
-    { "COMPILED-PROCEDURE?", sch_is_func },
-    { "COMPOUND-PROCEDURE?", sch_is_lambda },
-    { "PROCEDURE-ENVIRONMENT", sch_lambda_env },
-    // TOOD: Almost standard
-    { "PROCEDURE-BODY", sch_lambda_body },
-    { "CALL/CC", sch_call_cc },
-    { "CONTINUATION?", sch_is_cont },
+    // Procedures
+    { "apply", sch_apply },
+    { "compiled-procedure?", sch_is_func },
+    { "compound-procedure?", sch_is_lambda },
+    { "procedure-environment", sch_lambda_env },
+    { "procedure-body", sch_lambda_body },
+    { "call/cc", sch_call_cc },
+    { "continuation?", sch_is_cont },
 
-    // Random Numbers https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-ref/Random-Numbers.html
-    { "RANDOM", sch_pseudo_rand },
-    { "RANDOM-SEED!", sch_pseudo_seed },
+    // Random Numbers
+    { "random", sch_pseudo_rand },
+    { "random-seed!", sch_pseudo_seed },
    
-    // Garbage Collection https://www.gnu.org/software/mit-scheme/documentation/mit-scheme-user/Garbage-Collection.html
-    { "GC-FLIP", sch_gc_flip },
+    // Garbage Collection
+    { "gc-flip", sch_gc_flip },
     
     { NULL, NULL }
-    
 };
 
 void lisp_lib_load(LispContext ctx)
@@ -2111,14 +2108,14 @@ void lisp_lib_load(LispContext ctx)
 
     lisp_table_set(
             table,
-            lisp_make_symbol("_CURRENT-OUTPUT-PORT", ctx),
+            lisp_make_symbol("_current-output-port", ctx),
             lisp_make_port(stdout, 0),
             ctx
             );
 
     lisp_table_set(
             table,
-            lisp_make_symbol("_CURRENT-INPUT-PORT", ctx),
+            lisp_make_symbol("_current-input-port", ctx),
             lisp_make_port(stdin, 1),
             ctx
             );

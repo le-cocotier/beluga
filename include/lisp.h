@@ -327,7 +327,15 @@ void lisp_promise_store(Lisp p, Lisp x);
 #endif
 
 #ifndef LISP_STACK_DEPTH
-#define LISP_STACK_DEPTH 1024
+// This interpreter doesn't do tail-call elimination — eval_r() recurses
+// as a genuine nested C call for every nested form, tail position or
+// not, pushing several stack slots per level (see eval_r's application
+// case around line 2620). 1024 slots is only ~150-250 levels of actual
+// Lisp recursion before lisp_stack_push() runs off the end of the
+// array — easy to hit from ordinary (non-pathological) list recursion,
+// e.g. walking a few hundred directory entries or file lines. Sized
+// generously here since the cost is just memory (sizeof(Lisp) * this).
+#define LISP_STACK_DEPTH (64 * 1024)
 #endif
 
 #ifndef LISP_IDENTIFIER_MAX
@@ -1861,8 +1869,8 @@ static Lisp parse_symbol_(Lexer* lex, LispContext ctx)
     char scratch[LISP_IDENTIFIER_MAX];
     size_t length = lexer_copy_token(lex, 0, LISP_IDENTIFIER_MAX, scratch);
     // always convert symbols to uppercase
-    for (int i = 0; i < length; ++i)
-        scratch[i] = toupper(scratch[i]);
+    //   for (int i = 0; i < length; ++i)
+    //    scratch[i] = toupper(scratch[i]);
     return symbol_intern_(ctx.p->symbols, scratch, length, ctx);
 }
 
@@ -2075,8 +2083,10 @@ static Lisp parse(Lexer* lex, LispError* out_error, LispContext ctx)
         result = lisp_cons(get_sym(SYM_BEGIN, ctx), lisp_list_reverse(result), ctx);
     }
 
-    if (out_error) *out_error = error;
+    if (out_error)
+      *out_error = error;
     return result;
+
 }
 
 Lisp lisp_read(const char *program, LispError* out_error, LispContext ctx)
@@ -2122,6 +2132,7 @@ void* fread_all_(FILE* file, size_t* out_size) {
                 return NULL;
             }
             data = new_data;
+            memset(data + *out_size, 0, cap - *out_size);
         }
 
         size_t read = fread(data + *out_size, 1, BLOCK_SIZE, file);
@@ -2350,12 +2361,21 @@ FILE *lisp_stderr(LispContext ctx) { return ctx.p->err_port; }
 
 static void lisp_stack_push(Lisp x, LispContext ctx)
 {
-#ifdef LISP_DEBUG
+    // Was previously #ifdef LISP_DEBUG only, and even then just printed
+    // a message without stopping the write below — in a normal (non-
+    // debug) build the bounds check didn't exist at all, so exceeding
+    // stack_depth silently wrote past the end of ctx.p->stack (a fixed-
+    // size heap allocation), corrupting whatever memory follows it.
+    // Unconditional now: a stack this deep means something is either
+    // pathologically recursive or genuinely too large for this
+    // interpreter's non-tail-call-optimized evaluator to walk via plain
+    // recursion — fail loudly instead of corrupting the heap.
     if (ctx.p->stack_ptr + 1 >= ctx.p->stack_depth)
     {
-        fprintf(ctx.p->err_port, "stack overflow\n");
+        fprintf(ctx.p->err_port, "fatal: lisp evaluation stack overflow (depth %zu)\n",
+                ctx.p->stack_depth);
+        exit(1);
     }
-#endif 
 
     ctx.p->stack[ctx.p->stack_ptr] = x;
     ++ctx.p->stack_ptr;
@@ -3183,17 +3203,17 @@ LispContext lisp_init(void)
     ctx.p->macros = lisp_make_table(ctx);
 
     Lisp* c = ctx.p->symbol_cache;
-    c[SYM_IF] = lisp_make_symbol("IF", ctx);
-    c[SYM_BEGIN] = lisp_make_symbol("BEGIN", ctx);
-    c[SYM_QUOTE] = lisp_make_symbol("QUOTE", ctx);
-    c[SYM_QUASI_QUOTE] = lisp_make_symbol("QUASIQUOTE", ctx);
-    c[SYM_UNQUOTE] = lisp_make_symbol("UNQUOTE", ctx);
-    c[SYM_UNQUOTE_SPLICE] = lisp_make_symbol("UNQUOTESPLICE", ctx);
-    c[SYM_DEFINE] = lisp_make_symbol("_DEF", ctx);
-    c[SYM_DEFINE_MACRO] = lisp_make_symbol("DEFINE-MACRO", ctx);
-    c[SYM_SET] = lisp_make_symbol("_SET!", ctx);
+    c[SYM_IF] = lisp_make_symbol("if", ctx);
+    c[SYM_BEGIN] = lisp_make_symbol("begin", ctx);
+    c[SYM_QUOTE] = lisp_make_symbol("quote", ctx);
+    c[SYM_QUASI_QUOTE] = lisp_make_symbol("quasiquote", ctx);
+    c[SYM_UNQUOTE] = lisp_make_symbol("unquote", ctx);
+    c[SYM_UNQUOTE_SPLICE] = lisp_make_symbol("unquotesplice", ctx);
+    c[SYM_DEFINE] = lisp_make_symbol("_def", ctx);
+    c[SYM_DEFINE_MACRO] = lisp_make_symbol("define-macro", ctx);
+    c[SYM_SET] = lisp_make_symbol("_set!", ctx);
     c[SYM_LAMBDA] = lisp_make_symbol("/\\_", ctx);
-    c[SYM_CONS] = lisp_make_symbol("CONS", ctx);
+    c[SYM_CONS] = lisp_make_symbol("cons", ctx);
     return ctx;
 }
 

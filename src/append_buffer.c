@@ -1,9 +1,8 @@
 #include "../include/append_buffer.h"
 
-extern struct editorConfig E;
-
 void abAppend(struct abuf *ab, const char *s, int len) {
-  char *new = realloc(ab->b, ab->len + len);
+  char *new = NULL;
+  new = (char *)realloc(ab->b, (ab->len + len + 1) * sizeof(char));
 
   if (new == NULL) {
     return;
@@ -13,4 +12,8 @@ void abAppend(struct abuf *ab, const char *s, int len) {
   ab->len += len;
 }
 
-void abFree(struct abuf *ab) { free(ab->b); }
+void abFree(struct abuf *ab) {
+  free(ab->b);
+  ab->b = NULL;
+  ab->len = 0;
+}
