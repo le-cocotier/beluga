@@ -17,10 +17,6 @@
 #define PATH_MAX 1024
 #endif
 
-/* Uncomment to see debug logs on stderr */
-// #define APP_DEBUG
-
-
 #define LSP_MAX_PENDING 64
 
 // Completion trigger strings advertised by the server itself (initialize
@@ -64,7 +60,7 @@
 
 #define ABUF_INIT {NULL, 0}
 
-#define BELUGA_VERSION "2.4"
+#define BELUGA_VERSION "3.0"
 
 #ifdef __APPLE__
 #define CLIPBOARD_COPY_CMD  "pbcopy"

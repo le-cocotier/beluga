@@ -17,6 +17,7 @@ The executable file will be `build/beluga`. Feel free to add it to your path.
 ### From installation script ( prefered )
 
 Just clone the repo and execute the script `install.sh`. It will automatically add beluga to your path.
+Run `./install.sh --help` to see its options (custom install location, non-interactive mode, skipping packages, debug builds, ...).
 
 ## Getting start
 

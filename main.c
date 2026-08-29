@@ -32,6 +32,11 @@ EditorConfig E;
 int buffer_id = 0;
 
 int main(int argc, char *argv[]) {
+    if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
+        printf("Beluga %s\n", BELUGA_VERSION);
+        return 0;
+    }
+
     // Get HOME with NULL check
     const char *home = getenv("HOME");
     Utf8Char* splash_screen = calloc(PATH_MAX, sizeof(Utf8Char));
