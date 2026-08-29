@@ -79,13 +79,13 @@ Utf8Char *fileCompletion(Utf8Char *path)
   if (*(last_slash + 1)->character == '\0')
   {
     // path is a directory
-    utf8Printf(directory, "%u", path);
+    utf8Printf(directory, PATH_MAX, "%u", path);
     END_OF_STRING(directory[utf8StringLen(directory) - 2])
   }
   else
   {
     utf8NCpy(directory, path, (last_slash - path));
-    predict_len = utf8Printf(predict, "%u", last_slash + 1);
+    predict_len = utf8Printf(predict, PATH_MAX, "%u", last_slash + 1);
   }
 
   dir_path = utf8ToString(directory);
@@ -104,7 +104,7 @@ Utf8Char *fileCompletion(Utf8Char *path)
     entry_name_utf8 = stringToUtf8(entry_name);
     if ((predict_len == 0) || (utf8StringNCmp(entry_name_utf8, predict, predict_len) == 0))
     {
-      utf8Printf(full_path, "%u/%u", directory, entry_name_utf8);
+      utf8Printf(full_path, PATH_MAX, "%u/%u", directory, entry_name_utf8);
       free(entry_name_utf8);
 
 
@@ -153,7 +153,7 @@ Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode)
   Utf8Char *full_path = NULL;
   if (placeHolder != NULL)
   {
-    buf_len = utf8Printf(buf, "%u", placeHolder); // zero not counted by snprintf
+    buf_len = utf8Printf(buf, PATH_MAX, "%u", placeHolder); // zero not counted by snprintf
   }
   while (1)
   {
@@ -193,18 +193,18 @@ Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode)
         pwd = getenv("PWD");
         appDebug("%s\n", pwd);
         // Replace path by pwd + last word
-        utf8Printf(path, "%s/%u", pwd, buf);
+        utf8Printf(path, PATH_MAX, "%s/%u", pwd, buf);
       }
       else
       {
         // already absolute path
-        utf8Printf(path, "%u", buf);
+        utf8Printf(path, PATH_MAX, "%u", buf);
       }
       // TODO: upgrade this
       full_path = fileCompletion(path);
       if (full_path)
       {
-        buf_len = utf8Printf(buf, "%u", full_path);
+        buf_len = utf8Printf(buf, PATH_MAX, "%u", full_path);
       }
     }
     else if (*c->character)

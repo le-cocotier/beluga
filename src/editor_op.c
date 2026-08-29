@@ -39,7 +39,7 @@ void editorSetStatusMessage(const char* fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    utf8VaPrintf(E.status_msg, fmt, ap);
+    utf8VaPrintf(E.status_msg, PATH_MAX, fmt, ap);
     va_end(ap);
     E.status_msg_time = time(NULL);
 }

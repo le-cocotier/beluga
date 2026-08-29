@@ -469,49 +469,67 @@ void utf8NCpy(Utf8Char * dest, Utf8Char * src, int n) {
 /**
  * @brief Print a formatted string into the destination Utf8Char buffer. the format can be %s, %d, %u (for utf8 strings)
  * @param dest The destination Utf8Char buffer
+ * @param capacity The number of Utf8Char elements available at dest (including room for the terminator)
  * @param format The format string
  * @param ... The arguments to format
  * @return The number of characters printed
  */
-int utf8Printf(Utf8Char * dest, const char * format, ...) {
+int utf8Printf(Utf8Char * dest, size_t capacity, const char * format, ...) {
     int format_len = 0;
     int written_len = 0;
+    size_t used = 0;
     Utf8Char* string = NULL;
     char temp[40] = {0};
     //analyse the string for %s, %d, %u
     va_list ap;
     va_start(ap, format);
-    while (*format) {
+
+    if (capacity == 0) {
+        va_end(ap);
+        return 0;
+    }
+
+    while (*format && used + 1 < capacity) {
+        size_t remaining = capacity - 1 - used;
         if (*format == '%') {
             format++;
             switch (*format) {
                 case 's':
                     string = stringToUtf8((unsigned char *) va_arg(ap, char *));
-                    utf8Cpy(dest, string);
-                    written_len = utf8StringLen(string) -1;
+                    written_len = utf8StringLen(string) - 1;
+                    if ((size_t) written_len > remaining)
+                        written_len = (int) remaining;
+                    utf8NCpy(dest, string, written_len);
                     free(string);
                     string = NULL;
                     break;
                 case 'd':
                     written_len = sprintf(temp,"%d", va_arg(ap, int));
                     string = stringToUtf8((unsigned char *) temp);
-                    utf8Cpy(dest, string);
+                    if ((size_t) written_len > remaining)
+                        written_len = (int) remaining;
+                    utf8NCpy(dest, string, written_len);
                     free(string);
                     string = NULL;
                     break;
                 case 'u':
-                    Utf8Char* u_arg = va_arg(ap, Utf8Char*);
-                    utf8Cpy(dest, u_arg);
-                    written_len = utf8StringLen(u_arg) - 1; // see Bug 2 for the -1
-
+                    {
+                        Utf8Char* u_arg = va_arg(ap, Utf8Char*);
+                        written_len = utf8StringLen(u_arg) - 1; // see Bug 2 for the -1
+                        if ((size_t) written_len > remaining)
+                            written_len = (int) remaining;
+                        utf8NCpy(dest, u_arg, written_len);
+                    }
                     break;
             }
             dest += written_len;
+            used += written_len;
             format_len += written_len;
             format++;
         } else {
-            format += utf8CreateChar(format, dest);
+            format += utf8CreateChar((const unsigned char *) format, dest);
             dest++;
+            ++used;
             format_len++;
         }
     }
@@ -524,46 +542,63 @@ int utf8Printf(Utf8Char * dest, const char * format, ...) {
 /**
  * @brief Print a formatted string into the destination Utf8Char buffer. the format can be %s, %d, %u (for utf8 strings)
  * @param dest The destination Utf8Char buffer
+ * @param capacity The number of Utf8Char elements available at dest (including room for the terminator)
  * @param format The format string
  * @param ... The arguments to format
  * @return The number of characters printed
  */
-int utf8VaPrintf(Utf8Char * dest, const char * format, va_list ap) {
+int utf8VaPrintf(Utf8Char * dest, size_t capacity, const char * format, va_list ap) {
     int format_len = 0;
     int written_len = 0;
+    size_t used = 0;
     Utf8Char* string = NULL;
     char temp[40] = {0};
     //analyse the string for %s, %d, %u
-    while (*format) {
+
+    if (capacity == 0)
+        return 0;
+
+    while (*format && used + 1 < capacity) {
+        size_t remaining = capacity - 1 - used;
         if (*format == '%') {
             format++;
             switch (*format) {
                 case 's':
                     string = stringToUtf8((unsigned char *) va_arg(ap, char *));
-                    utf8Cpy(dest, string);
                     written_len = utf8StringLen(string) - 1;
+                    if ((size_t) written_len > remaining)
+                        written_len = (int) remaining;
+                    utf8NCpy(dest, string, written_len);
                     free(string);
                     string = NULL;
                     break;
                 case 'd':
                     written_len = sprintf(temp,"%d", va_arg(ap, int));
                     string = stringToUtf8((unsigned char *) temp);
-                    utf8Cpy(dest, string);
+                    if ((size_t) written_len > remaining)
+                        written_len = (int) remaining;
+                    utf8NCpy(dest, string, written_len);
                     free(string);
                     string = NULL;
                     break;
                 case 'u':
-                    utf8Cpy(dest, va_arg(ap, Utf8Char*));
-                    written_len = utf8StringLen(dest) - 1;
-
+                    {
+                        Utf8Char* u_arg = va_arg(ap, Utf8Char*);
+                        written_len = utf8StringLen(u_arg) - 1;
+                        if ((size_t) written_len > remaining)
+                            written_len = (int) remaining;
+                        utf8NCpy(dest, u_arg, written_len);
+                    }
                     break;
             }
             dest += written_len;
+            used += written_len;
             format_len += written_len;
             format++;
         } else {
             format += utf8CreateChar((const unsigned char*) format, dest);
             dest++;
+            ++used;
             format_len++;
         }
     }

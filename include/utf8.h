@@ -5,6 +5,7 @@
 #ifndef BELUGA_UTF8_H
 #define BELUGA_UTF8_H
 #include <stdint.h>
+#include <stddef.h>
 
 #include "data.h"
 
@@ -28,8 +29,8 @@ Utf8Char *lastSlashUtf8(Utf8Char * string);
 void utf8Cpy(Utf8Char * dest, Utf8Char * src);
 void utf8NCpy(Utf8Char * dest, Utf8Char * src, int n);
 
-int utf8Printf(Utf8Char * dest, const char * format, ...);
-int utf8VaPrintf(Utf8Char * dest, const char * format, va_list ap);
+int utf8Printf(Utf8Char * dest, size_t capacity, const char * format, ...);
+int utf8VaPrintf(Utf8Char * dest, size_t capacity, const char * format, va_list ap);
 
 int utf8IsPrintable(const Utf8Char* c);
 int utf8CreateChar(const unsigned char* string, Utf8Char* new_char);

@@ -34,7 +34,7 @@ int buffer_id = 0;
 int main(int argc, char *argv[]) {
     // Get HOME with NULL check
     const char *home = getenv("HOME");
-    Utf8Char* splash_screen = (Utf8Char *)calloc(1, PATH_MAX);
+    Utf8Char* splash_screen = calloc(PATH_MAX, sizeof(Utf8Char));
     Buffer *buf = NULL;
     EditorPane *active = NULL;
    
@@ -43,7 +43,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     // Allocate and build splash screen path safely
-    utf8Printf(splash_screen, "%s/.beluga/assets/beluga.txt", home);
+    utf8Printf(splash_screen, PATH_MAX, "%s/.beluga/assets/beluga.txt", home);
 
     // signal(SIGPIPE, SIG_IGN);
     enableRawMode();
