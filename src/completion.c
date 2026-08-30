@@ -18,6 +18,7 @@
 #include "../include/append_buffer.h"
 #include "../include/cJSON.h"
 #include "../include/data.h"
+#include "../include/output.h"
 #include "../include/lsp_ui.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
@@ -1104,7 +1105,7 @@ static void lsp_fire_completion_now(void)
 
     lspDidChange(E.lsp_client, buf);
     lspRequestCompletion(E.lsp_client, buf, buf->y, buf->x,
-                          active->cursor_x + active->origin_x + GUTTER_WIDTH,
+                          active->cursor_x + active->origin_x + editorGutterWidth(buf),
                           active->cursor_y + active->origin_y);
 }
 

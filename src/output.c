@@ -14,6 +14,7 @@
 #include "../include/lsp_ui.h"
 #include "../include/buffer_switcher.h"
 #include "../include/list_popup.h"
+#include "../include/which_key.h"
 #include "../include/row_op.h"
 #include "../include/split_screen.h"
 #include "../include/syntax_highlighter.h"
@@ -38,6 +39,44 @@ extern EditorConfig E;
  *                                                 functions definitions
  *
  **********************************************************************************************************************/
+
+/**
+ * @brief Width in columns of the line-number gutter for `buf`, including
+ * its trailing space, or 0 when line numbers are off / not applicable.
+ * @details Sized to the buffer's actual line count so a 12000-line file
+ * gets 5 digits and a short one doesn't waste columns, with a floor of
+ * LINE_NUMBER_MIN_WIDTH so the text doesn't visibly shift left/right as a
+ * file grows past a power of ten. Only FILE_BUFFs get numbers: a terminal
+ * pane's rows are a PTY's screen, not a document, and an explorer sidebar
+ * is a menu.
+ */
+int editorLineNumberWidth(const struct buffer_t *buf) {
+  if (!buf || !E.constantes.LINE_NUMBERS || buf->type != FILE_BUFF)
+    return 0;
+
+  int digits = 1;
+  for (int n = buf->numrows > 0 ? buf->numrows : 1; n >= 10; n /= 10)
+    digits++;
+  if (digits < LINE_NUMBER_MIN_WIDTH)
+    digits = LINE_NUMBER_MIN_WIDTH;
+  return digits + 1; // + a space separating numbers from the marker/text
+}
+
+/**
+ * @brief Total width reserved to the left of a pane's text: line numbers
+ * plus the diagnostic/git marker column.
+ * @details Single source of truth for the whole gutter. Drawing, scrolling
+ * and cursor placement each used to recompute "has_gutter ? GUTTER_WIDTH : 0"
+ * independently, so any new gutter element had to be added in lockstep in
+ * several files or the cursor would sit a few columns off the text.
+ */
+int editorGutterWidth(const struct buffer_t *buf) {
+  if (!buf)
+    return 0;
+  int marker = (buf->type == FILE_BUFF && (E.constantes.LSP || buf->git_available))
+                   ? GUTTER_WIDTH : 0;
+  return editorLineNumberWidth(buf) + marker;
+}
 
 /**
  * @brief If buf's mark is active and this row overlaps the mark..point
@@ -159,7 +198,9 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   // what's actually left for text once the gutter (if any) is accounted for;
   // gutter + content_width always adds up to the pane's full on-screen span.
   int has_gutter = buf->type == FILE_BUFF && (E.constantes.LSP || buf->git_available);
-  int content_width = pane->width - (has_gutter ? GUTTER_WIDTH : 0);
+  int lineno_width = editorLineNumberWidth(buf);
+  int gutter_width = editorGutterWidth(buf);
+  int content_width = pane->width - gutter_width;
   if (content_width < 0)
     content_width = 0;
 
@@ -180,14 +221,25 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
     if (file_row >= buf->numrows) {
       // Empty line - show tilde, but still reserve the gutter's columns so
       // the tilde lines up with where text starts on real lines above it
-      if (has_gutter) {
-        abAppend(ab, "  ", 2);
-      }
+      for (int i = 0; i < gutter_width; ++i)
+        abAppend(ab, " ", 1);
       abAppend(ab, "~", 1);
       for (int i = 0; i < content_width - 1; ++i) {
         abAppend(ab, " ", 1);
       }
     } else {
+      if (lineno_width) {
+        // The cursor's own line is highlighted (bold, undimmed) so the eye
+        // can find it without hunting for the terminal cursor itself.
+        int is_cursor_line = (pane->is_active && file_row == buf->y);
+        char num_buf[24];
+        int num_len = snprintf(num_buf, sizeof(num_buf), "%*d ",
+                               lineno_width - 1, file_row + 1);
+        abAppend(ab, is_cursor_line ? "\x1b[1;37m" : "\x1b[2;37m", 7);
+        abAppend(ab, num_buf, num_len);
+        abAppend(ab, "\x1b[0m", 4);
+        abAppend(ab, E.theme.BACKGROUND_COLOR, (int) strlen(E.theme.BACKGROUND_COLOR));
+      }
       if (has_gutter) {
         GitLineStatus git_status = (buf->git_lines && file_row < buf->git_lines_count)
                                         ? buf->git_lines[file_row] : GIT_LINE_NONE;
@@ -323,8 +375,7 @@ void editorScroll() {
   // Same gutter accounting as editorDrawPane(): with the gutter reserving
   // GUTTER_WIDTH columns, only what's left is actually available before the
   // cursor needs to scroll right, or it would visually run past the pane.
-  int has_gutter = buf->type == FILE_BUFF && (E.constantes.LSP || buf->git_available);
-  int usable_width = active->width - (has_gutter ? GUTTER_WIDTH : 0);
+  int usable_width = active->width - editorGutterWidth(buf);
   if (usable_width < 1)
     usable_width = 1;
 
@@ -533,14 +584,12 @@ void editorRefreshScreen() {
   }
   bufferSwitcherDraw(&ab);
   listPopupDraw(&ab);
+  whichKeyDraw(&ab);
 
   // ── Position cursor (account for gutter width) ────────────────────────────
-  int cursor_has_gutter = buffer && buffer->type == FILE_BUFF &&
-                          (E.constantes.LSP || buffer->git_available);
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
            active->cursor_y + active->origin_y + 1,
-           active->cursor_x + active->origin_x + 1 +
-               (cursor_has_gutter ? GUTTER_WIDTH : 0));
+           active->cursor_x + active->origin_x + 1 + editorGutterWidth(buffer));
   abAppend(&ab, buf, (int)strlen(buf));
   abAppend(&ab, SHOW_CURSOR, 6);
   write(STDOUT_FILENO, ab.b, ab.len);

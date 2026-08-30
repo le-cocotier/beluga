@@ -9,6 +9,7 @@
 #include "../include/builtins.h"
 #include "../include/buffer.h"
 #include "../include/data.h"
+#include "../include/output.h"
 #include "../include/define.h"
 #include "../include/editor_op.h"
 #include "../include/file_io.h"
@@ -28,6 +29,7 @@
 #include "../include/utf8.h"
 #include "../include/buffer_switcher.h"
 #include "../include/list_popup.h"
+#include "../include/which_key.h"
 
 /***********************************************************************************************************************
  *
@@ -104,6 +106,10 @@ Lisp mapKey(Lisp args, LispError *e, LispContext ctx) {
 
   E.key_binds[E.number_of_keybinds - 1].prefix_id = prefix.prefix_id;
 
+  // The which-key panel caches a resolved command name per binding; adding
+  // one invalidates that mapping.
+  whichKeyInvalidate();
+
   return lisp_null();
 }
 
@@ -160,6 +166,10 @@ void bFree_structs(void) {
   free(E.hooks);
   E.hooks = NULL;
   E.number_of_hooks = 0;
+
+  // which-key's caches are keyed off the tables freed just above.
+  whichKeyInvalidate();
+  whichKeyFreeCommandList();
 
   // Buffers are a circular doubly-linked list now, each node individually
   // allocated — capture `next` before freeing `b` (a do-while keyed off
@@ -700,7 +710,14 @@ Lisp editorOpenTerminal(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp editorExecuteCommand(Lisp args, LispError *e, LispContext ctx) {
+  // Snapshot the callable names once, here, rather than per-frame inside the
+  // help panel: building it walks the global env into an alist, which
+  // allocates Lisp memory, and the panel redraws on every keystroke.
+  whichKeyBuildCommandList();
+  E.prompt_is_command = 1;
   Utf8Char *name = editorPrompt("M-x: %u", NULL, 0);
+  E.prompt_is_command = 0;
+  whichKeyFreeCommandList();
   if (!name)
     return lisp_null();
 
@@ -1159,7 +1176,7 @@ Lisp editorAutoComplete(Lisp args, LispError *e, LispContext ctx) {
           E.lsp_client, buffer,
           buffer->y,
           buffer->x,
-          active->cursor_x + active->origin_x + GUTTER_WIDTH,
+          active->cursor_x + active->origin_x + editorGutterWidth(buffer),
           active->cursor_y + active->origin_y
       );
       return lisp_null();

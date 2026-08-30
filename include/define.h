@@ -44,6 +44,10 @@
 
 #define GUTTER_WIDTH 2
 
+// Minimum digits in the line-number gutter. Keeps the text column steady
+// for short files instead of shifting as the count crosses 10 / 100.
+#define LINE_NUMBER_MIN_WIDTH 3
+
 
 #define ARROW_LEFT   0x80
 #define ARROW_RIGHT  0x81

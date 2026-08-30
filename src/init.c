@@ -123,6 +123,23 @@ void initConfig() {
 }
 
 /**
+ * @brief Read a boolean setting from init.lisp, falling back to `fallback`
+ * when the symbol isn't defined at all.
+ * @details Uses an env lookup rather than lisp_read+lisp_eval (as the
+ * older constants do) precisely so a config predating the setting still
+ * loads: evaluating an unbound symbol raises a Lisp error and yields a
+ * junk value, which would silently turn the feature on or off at random
+ * for every existing ~/.beluga/config/init.lisp out there.
+ */
+static int readBoolConst(const char *name, int fallback) {
+  int present = 0;
+  Lisp val = lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(name, E.ctx), &present);
+  if (!present)
+    return fallback;
+  return lisp_is_true(val);
+}
+
+/**
  * @brief Reads non-color startup constants from init.lisp
  * @details Theme *colors* are no longer read here — they're set directly
  * onto E.theme by the editor-set-theme-color builtin, called from
@@ -133,6 +150,8 @@ void initConfig() {
  */
 void initTheme() {
   E.constantes.LSP = lisp_bool(lisp_eval(lisp_read("LSP", &E.ctx_error, E.ctx), &E.ctx_error, E.ctx));
+  E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
+  E.constantes.WHICH_KEY = readBoolConst("WHICH-KEY", 1);
   appDebug("LSP ON : %d", E.constantes.LSP);
   E.constantes.TAB_LENGTH =
       (int)lisp_eval(lisp_read("TAB-LENGTH", &E.ctx_error, E.ctx), &E.ctx_error,
@@ -207,6 +226,8 @@ void initEditor() {
   E.prefix[0].sticky = 0;
   sprintf(E.prefix[0].prefix_name, "no-prefix");
   E.prefix_state = 0;
+  E.prompt_input = NULL;
+  E.prompt_is_command = 0;
   E.exit_requested = 0;
 
   // Fallback theme (the old hardcoded "dark" palette), live before

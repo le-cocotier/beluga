@@ -120,6 +120,8 @@ struct const_t
     int TAB_LENGTH;
     int QUIT_TIMES;
     int LSP;
+    int LINE_NUMBERS;  // (define LINE-NUMBERS #t) — draw the line-number gutter
+    int WHICH_KEY;     // (define WHICH-KEY #t)    — pending-prefix / M-x help panel
 };
 
 struct prefix_t
@@ -469,6 +471,15 @@ typedef struct editor_config_t
     struct prefix_t* prefix;
     int number_of_prefix;
     int prefix_state;
+
+    // ── which-key style help ────────────────────────────────────────────
+    // prompt_input borrows editorPrompt()'s in-progress buffer while a
+    // prompt is up (NULL otherwise) so the help panel can filter live on
+    // what's been typed; prompt_is_command marks the M-x prompt
+    // specifically, since that's the only one whose candidates are
+    // commands rather than file paths or free text.
+    Utf8Char* prompt_input;
+    int prompt_is_command;
 
     int exit_requested;
 
