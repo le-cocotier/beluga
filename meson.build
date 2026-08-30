@@ -33,7 +33,8 @@ src_files = files(
   'src/utils.c',
   'src/pty_session.c',
   'src/term_render.c',
-  'src/ansi_parser.c'
+  'src/ansi_parser.c',
+  'src/which_key.c'
 )
 
 # Executable

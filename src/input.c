@@ -155,6 +155,10 @@ Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode)
   {
     buf_len = utf8Printf(buf, PATH_MAX, "%u", placeHolder); // zero not counted by snprintf
   }
+  // Publish the in-progress input so the which-key panel can filter its
+  // candidates on it live. Borrowed, not owned — cleared on every exit path
+  // below, before `buf` is returned to the caller or freed.
+  E.prompt_input = buf;
   while (1)
   {
     editorSetStatusMessage(prompt, buf);
@@ -172,6 +176,7 @@ Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode)
     {
       editorSetStatusMessage("Aborted");
       free(c);
+      E.prompt_input = NULL;
       return NULL;
     }
     else if (*c->character == '\r')
@@ -180,6 +185,7 @@ Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode)
       {
         editorSetStatusMessage("");
         free(c);
+        E.prompt_input = NULL;
         return buf;
       }
     }

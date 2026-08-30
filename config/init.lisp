@@ -4,6 +4,18 @@
 (define QUIT-TIMES 1)
 (define LSP #t)
 
+;; Show a line-number gutter. Width follows the file's line count (min 3
+;; digits), and the cursor's own line is drawn brighter than the rest.
+(define LINE-NUMBERS #t)
+
+;; which-key style help. With a key prefix pending (e.g. after CTRL-x), the
+;; keys available under it appear at the bottom of the screen after a short
+;; pause — long enough that fluent chords like CTRL-x CTRL-s don't flash it.
+;; At the M-x prompt it lists the commands matching what you've typed.
+;; Both settings are read defensively, so a config predating them still
+;; loads; omitting either leaves the feature on.
+(define WHICH-KEY #t)
+
 ;; Prefixes need to exist before anything below tries to (map-key ... "user")
 ;; or "term" — including packages, which load next. A package that tried to
 ;; bind under a not-yet-registered prefix would silently fall back to
