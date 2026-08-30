@@ -643,6 +643,25 @@ int lspStart(LspClient *client, const char *root_dir, char *const server_argv[])
         dup2(stdin_pipe[0], STDIN_FILENO);
         dup2(stdout_pipe[1], STDOUT_FILENO);
 
+        // Only stdin/stdout carry the JSON-RPC transport; stderr would
+        // otherwise stay pointed at the terminal we're drawing on, and
+        // language servers log to it freely (clangd emits a line per
+        // request at its default level). While the editor is running the
+        // ~50ms full-screen redraw paints over that, but on quit — once
+        // the screen is restored and we've stopped redrawing — the
+        // server's shutdown logging lands on the user's clean prompt.
+        // Under APP_DEBUG it's left attached instead, so `beluga 2>log`
+        // captures server logs alongside appDebug() output.
+#ifndef APP_DEBUG
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0)
+        {
+            dup2(devnull, STDERR_FILENO);
+            if (devnull > STDERR_FILENO)
+                close(devnull);
+        }
+#endif
+
         close(stdin_pipe[0]);
         close(stdout_pipe[1]);
 
