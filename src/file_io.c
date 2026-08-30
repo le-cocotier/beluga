@@ -163,6 +163,7 @@ void editorSave() {
     buffer->dirty = 0;
     fclose(fd);
     runHooks("after-save", lisp_cons(lisp_make_string2(string_path, E.ctx), lisp_null(), E.ctx));
+    bufferRefreshGitInfo(buffer);
     free(string_path);
   }
   editorSetStatusMessage("File saved");

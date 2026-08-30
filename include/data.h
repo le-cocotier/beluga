@@ -332,6 +332,50 @@ typedef struct term_parser_state_t
 // generated content like a project tree dump.
 enum buffer_type { FILE_BUFF, TERMINAL_BUFF, EXPLORER_BUFF };
 
+// ── Undo/redo ────────────────────────────────────────────────────────────
+//
+// Each entry records one atomic, self-inverting row-level edit. Direction
+// (undo vs redo) is decided by which function is replaying the entry, not
+// by the entry itself — see bufferUndo()/bufferRedo() in buffer.c:
+//   INSERT_CHAR (row,col,ch): undo deletes ch at (row,col); redo re-inserts it.
+//   DELETE_CHAR (row,col,ch): undo re-inserts ch at (row,col); redo deletes it.
+//   SPLIT_LINE  (row,col):    undo joins row+1 back into row at col;
+//                             redo splits row at col again.
+//   JOIN_LINE   (row,col):    undo splits row at col (recreating row+1);
+//                             redo joins row+1 back into row.
+//   INSERT_ROW  (row):        undo removes the (blank) row at `row`;
+//                             redo re-inserts a blank row there.
+// Consecutive entries sharing a group_id are undone/redone together in one
+// user-facing call — see undoRecord()'s contiguity check for how a group
+// is extended vs. broken.
+typedef enum
+{
+    UNDO_INSERT_CHAR,
+    UNDO_DELETE_CHAR,
+    UNDO_SPLIT_LINE,
+    UNDO_JOIN_LINE,
+    UNDO_INSERT_ROW,
+} UndoKind;
+
+typedef struct
+{
+    UndoKind kind;
+    int row, col;
+    Utf8Char ch; // meaningful for INSERT_CHAR / DELETE_CHAR only
+    int group_id;
+} UndoEntry;
+
+typedef struct
+{
+    UndoEntry* entries;
+    int count;
+    int capacity;
+} UndoList;
+
+// One line's git working-tree status, cached on the buffer — see
+// bufferRefreshGitInfo() in buffer.c.
+typedef enum { GIT_LINE_NONE = 0, GIT_LINE_ADDED, GIT_LINE_MODIFIED } GitLineStatus;
+
 typedef struct buffer_t
 {
     enum buffer_type type;
@@ -351,6 +395,28 @@ typedef struct buffer_t
 
     enum bufferStatus_e state;
     int dirty; /**< Has this buffer been modified since last save */
+
+    // ── Undo/redo (per-buffer; zero-initialized by bufferCreate's calloc) ──
+    UndoList undo_stack;
+    UndoList redo_stack;
+    int undo_next_group_id;
+    int undo_group_open;    // can the tail of undo_stack still be extended?
+    UndoKind undo_last_kind;
+    int undo_last_row, undo_last_col;
+
+    // ── Selection (mark & region) ───────────────────────────────────────
+    int mark_active;
+    int mark_x, mark_y;
+
+    // ── Git integration (modeline branch + per-line diff gutter) ────────
+    // Refreshed on buffer-open and after-save (see bufferRefreshGitInfo()),
+    // not every frame — shelling out to git on every ~50ms redraw tick
+    // would be far too slow.
+    int git_available;         // 1 once a branch name has been resolved
+    char git_branch[64];
+    int git_dirty;             // `git status --porcelain` non-empty for this file
+    GitLineStatus* git_lines;  // one entry per row, NULL until refreshed
+    int git_lines_count;       // rows git_lines[] currently covers
 
     struct buffer_t* next;
     struct buffer_t* prev;

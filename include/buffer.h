@@ -76,6 +76,29 @@ void bufferMaybeStartLsp(struct buffer_t* buf);
 void bufferMaybeSyncLsp(struct buffer_t* buf);
 struct lspServerConfig_t* lspServerConfigFor(Utf8Char* filename);
 
+// ── Undo/redo ────────────────────────────────────────────────────────────
+void bufferUndo(struct buffer_t* buf);
+void bufferRedo(struct buffer_t* buf);
 
+// ── Selection (mark & region) ───────────────────────────────────────────
+// (start_row,start_col)/(end_row,end_col) must already be in document
+// order (see bufferRegionBounds()).
+void bufferRegionBounds(struct buffer_t* buf, int* start_row, int* start_col,
+                        int* end_row, int* end_col);
+char* bufferGetRegionText(struct buffer_t* buf, int start_row, int start_col,
+                          int end_row, int end_col);
+void bufferDeleteRegion(struct buffer_t* buf, int start_row, int start_col,
+                        int end_row, int end_col);
+
+// ── Generic text-edit application (LSP formatting/rename use this) ──────
+// Replaces the text in [start_row:start_col, end_row:end_col) with
+// new_text (may contain '\n' and be any length, including empty — a pure
+// deletion). Goes through the same undo-recorded primitives as normal
+// typing, so LSP edits are undoable like anything else.
+void bufferApplyTextEdit(struct buffer_t* buf, int start_row, int start_col,
+                         int end_row, int end_col, const char* new_text);
+
+// ── Git integration ──────────────────────────────────────────────────────
+void bufferRefreshGitInfo(struct buffer_t* buf);
 
 #endif

@@ -35,6 +35,555 @@ extern int buffer_id;
 
 /***********************************************************************************************************************
  *
+ *                                                 undo / redo
+ *
+ **********************************************************************************************************************/
+
+#define UNDO_MAX_ENTRIES 4000 // per buffer, per stack — oldest entries evicted past this
+
+/**
+ * @brief Appends one entry to an UndoList, growing it geometrically and
+ * evicting the oldest entry once UNDO_MAX_ENTRIES is reached so a very long
+ * editing session can't grow this without bound.
+ */
+static void undoListPush(UndoList* list, UndoEntry entry)
+{
+    if (list->count >= UNDO_MAX_ENTRIES)
+    {
+        memmove(list->entries, list->entries + 1, sizeof(UndoEntry) * (list->count - 1));
+        list->count--;
+    }
+    if (list->count >= list->capacity)
+    {
+        int new_cap = list->capacity ? list->capacity * 2 : 64;
+        UndoEntry* grown = realloc(list->entries, sizeof(UndoEntry) * new_cap);
+        if (!grown) return; // best-effort: drop the entry rather than crash
+        list->entries = grown;
+        list->capacity = new_cap;
+    }
+    list->entries[list->count++] = entry;
+}
+
+/**
+ * @brief Records one atomic edit for undo, called from the row-mutation
+ * call sites (bufferInsertChar, bufferDelChar, bufferInsertNewLine, ...) —
+ * never from bufferRowInsertChar/bufferRowDelChar/rowSplitAt/rowJoinNext
+ * themselves, since bufferUndo()/bufferRedo() replay edits by calling those
+ * same low-level primitives directly and must not re-record what they're
+ * already moving between the undo and redo stacks.
+ * @details Any new edit invalidates the redo stack (standard undo/redo
+ * behavior — redoing after a fresh edit would replay a now-nonsensical
+ * future). Consecutive entries of the same kind at contiguous positions
+ * (typing or backspacing a run of characters, or forward-deleting a run at
+ * a fixed column) are folded into one group so a single undo/redo call
+ * reverses/replays the whole run at once; anything else — a different kind,
+ * a cursor jump, or a fresh call right after an undo/redo — starts a new
+ * group.
+ */
+static void undoRecord(struct buffer_t* buf, UndoKind kind, int row, int col, Utf8Char ch)
+{
+    buf->redo_stack.count = 0;
+
+    int contiguous = 0;
+    if (buf->undo_group_open && buf->undo_last_kind == kind && buf->undo_last_row == row)
+    {
+        if (kind == UNDO_INSERT_CHAR && col == buf->undo_last_col + 1)
+            contiguous = 1; // typing forward
+        else if (kind == UNDO_DELETE_CHAR && (col == buf->undo_last_col - 1 || col == buf->undo_last_col))
+            contiguous = 1; // backspacing (col-1) or forward-deleting at a fixed col
+    }
+    if (!contiguous)
+        buf->undo_next_group_id++;
+
+    UndoEntry entry = { .kind = kind, .row = row, .col = col, .ch = ch,
+                        .group_id = buf->undo_next_group_id };
+    undoListPush(&buf->undo_stack, entry);
+
+    buf->undo_group_open = 1;
+    buf->undo_last_kind = kind;
+    buf->undo_last_row = row;
+    buf->undo_last_col = col;
+}
+
+/**
+ * @brief Splits `row` into two rows at character index `col` — the tail
+ * ([col, size)) becomes a new row right after it. Pure row mutation: no
+ * cursor movement, no undo recording (callers do both themselves).
+ */
+static void rowSplitAt(struct buffer_t* buf, int row, int col)
+{
+    Row* r = &buf->row[row];
+    bufferInsertRow(buf, row + 1, &r->characters[col], r->size - col);
+    r = &buf->row[row]; // bufferInsertRow's recalloc may have moved the array
+    r->size = col;
+    END_OF_STRING(r->characters[r->size]);
+}
+
+/**
+ * @brief Merges row `row + 1` into `row` (appending its text) and removes
+ * row `row + 1`. Inverse of rowSplitAt() at the same (row, col) where col
+ * is `row`'s size just before the join. Pure row mutation, same caveats
+ * as rowSplitAt().
+ */
+static void rowJoinNext(struct buffer_t* buf, int row)
+{
+    Row* next = &buf->row[row + 1];
+    Row* dest = &buf->row[row];
+    for (int i = 0; i < next->size; ++i)
+        bufferRowInsertChar(buf, dest, dest->size, &next->characters[i]);
+    free(next->characters);
+    next->characters = NULL;
+    memmove(&buf->row[row + 1], &buf->row[row + 2], sizeof(Row) * (buf->numrows - row - 2));
+    buf->numrows--;
+}
+
+/**
+ * @brief Inserts one blank row at `at`. Pure row mutation.
+ */
+static void rowInsertBlank(struct buffer_t* buf, int at)
+{
+    Utf8Char end_string;
+    END_OF_STRING(end_string);
+    bufferInsertRow(buf, at, &end_string, 0);
+}
+
+/**
+ * @brief Removes the row at `at` entirely. Inverse of rowInsertBlank().
+ * Pure row mutation.
+ */
+static void rowRemoveAt(struct buffer_t* buf, int at)
+{
+    bufferFreeRow(&buf->row[at]);
+    memmove(&buf->row[at], &buf->row[at + 1], sizeof(Row) * (buf->numrows - at - 1));
+    buf->numrows--;
+}
+
+/**
+ * @brief Undoes the most recent group of edits on `buf` (one atomic edit,
+ * or a coalesced run of contiguous ones — see undoRecord()), moving each
+ * entry onto the redo stack unchanged so bufferRedo() can replay it
+ * forward again. Leaves the cursor at the last-undone edit's position.
+ */
+void bufferUndo(struct buffer_t* buf)
+{
+    if (buf->undo_stack.count == 0)
+    {
+        editorSetStatusMessage("No further undo information");
+        return;
+    }
+
+    int gid = buf->undo_stack.entries[buf->undo_stack.count - 1].group_id;
+    while (buf->undo_stack.count > 0 &&
+           buf->undo_stack.entries[buf->undo_stack.count - 1].group_id == gid)
+    {
+        UndoEntry e = buf->undo_stack.entries[--buf->undo_stack.count];
+        switch (e.kind)
+        {
+            case UNDO_INSERT_CHAR: bufferRowDelChar(buf, &buf->row[e.row], e.col); break;
+            case UNDO_DELETE_CHAR: bufferRowInsertChar(buf, &buf->row[e.row], e.col, &e.ch); break;
+            case UNDO_SPLIT_LINE:  rowJoinNext(buf, e.row); break;
+            case UNDO_JOIN_LINE:   rowSplitAt(buf, e.row, e.col); break;
+            case UNDO_INSERT_ROW:  rowRemoveAt(buf, e.row); break;
+        }
+        undoListPush(&buf->redo_stack, e);
+        buf->x = e.col;
+        buf->y = e.row;
+    }
+    buf->undo_group_open = 0; // the next fresh edit must not merge into what's left
+    if (buf->type != TERMINAL_BUFF) buf->dirty++;
+    editorSetStatusMessage("Undo");
+}
+
+/**
+ * @brief Redoes the most recently undone group of edits on `buf`, moving
+ * each entry back onto the undo stack unchanged. Leaves the cursor at the
+ * last-redone edit's position.
+ */
+void bufferRedo(struct buffer_t* buf)
+{
+    if (buf->redo_stack.count == 0)
+    {
+        editorSetStatusMessage("No further redo information");
+        return;
+    }
+
+    int gid = buf->redo_stack.entries[buf->redo_stack.count - 1].group_id;
+    while (buf->redo_stack.count > 0 &&
+           buf->redo_stack.entries[buf->redo_stack.count - 1].group_id == gid)
+    {
+        UndoEntry e = buf->redo_stack.entries[--buf->redo_stack.count];
+        switch (e.kind)
+        {
+            case UNDO_INSERT_CHAR: bufferRowInsertChar(buf, &buf->row[e.row], e.col, &e.ch); break;
+            case UNDO_DELETE_CHAR: bufferRowDelChar(buf, &buf->row[e.row], e.col); break;
+            case UNDO_SPLIT_LINE:  rowSplitAt(buf, e.row, e.col); break;
+            case UNDO_JOIN_LINE:   rowJoinNext(buf, e.row); break;
+            case UNDO_INSERT_ROW:  rowInsertBlank(buf, e.row); break;
+        }
+        undoListPush(&buf->undo_stack, e);
+        buf->x = e.col;
+        buf->y = e.row;
+    }
+    buf->undo_group_open = 0;
+    if (buf->type != TERMINAL_BUFF) buf->dirty++;
+    editorSetStatusMessage("Redo");
+}
+
+/***********************************************************************************************************************
+ *
+ *                                                 selection / region
+ *
+ **********************************************************************************************************************/
+
+/**
+ * @brief Normalizes (buf->mark_x, buf->mark_y) and (buf->x, buf->y) into
+ * document order, regardless of which one the user set first.
+ */
+void bufferRegionBounds(struct buffer_t* buf, int* start_row, int* start_col,
+                        int* end_row, int* end_col)
+{
+    int before = (buf->mark_y < buf->y) || (buf->mark_y == buf->y && buf->mark_x <= buf->x);
+    if (before)
+    {
+        *start_row = buf->mark_y; *start_col = buf->mark_x;
+        *end_row = buf->y; *end_col = buf->x;
+    }
+    else
+    {
+        *start_row = buf->y; *start_col = buf->x;
+        *end_row = buf->mark_y; *end_col = buf->mark_x;
+    }
+}
+
+/**
+ * @brief Extracts the text in [start_row:start_col, end_row:end_col) as a
+ * plain '\n'-joined, NUL-terminated C string. Caller must free() it.
+ */
+char* bufferGetRegionText(struct buffer_t* buf, int start_row, int start_col,
+                          int end_row, int end_col)
+{
+    size_t cap = 256, len = 0;
+    char* text = malloc(cap);
+    if (!text) return NULL;
+
+    for (int row = start_row; row <= end_row && row < buf->numrows; row++)
+    {
+        Row* r = &buf->row[row];
+        int from = (row == start_row) ? start_col : 0;
+        int to = (row == end_row) ? end_col : r->size;
+        if (to > r->size) to = r->size;
+
+        for (int c = from; c < to; c++)
+        {
+            Utf8Char* ch = &r->characters[c];
+            if (len + (size_t) ch->length + 2 > cap)
+            {
+                cap *= 2;
+                char* grown = realloc(text, cap);
+                if (!grown) { free(text); return NULL; }
+                text = grown;
+            }
+            memcpy(text + len, ch->character, ch->length);
+            len += ch->length;
+        }
+        if (row != end_row)
+        {
+            if (len + 2 > cap)
+            {
+                cap *= 2;
+                char* grown = realloc(text, cap);
+                if (!grown) { free(text); return NULL; }
+                text = grown;
+            }
+            text[len++] = '\n';
+        }
+    }
+    text[len] = '\0';
+    return text;
+}
+
+/**
+ * @brief Deletes [start_row:start_col, end_row:end_col) from `buf`, one
+ * character (or line join) at a time through the same undo-recorded
+ * primitives as normal editing — so a region delete is undoable, just
+ * possibly as more than one group if it spans a line boundary (each
+ * UNDO_JOIN_LINE always starts a fresh group; see undoRecord()). Leaves
+ * the cursor at the deletion's start.
+ */
+void bufferDeleteRegion(struct buffer_t* buf, int start_row, int start_col,
+                        int end_row, int end_col)
+{
+    if (buf->state == READ_ONLY) return;
+    if (start_row > end_row || (start_row == end_row && start_col >= end_col))
+        return;
+
+    int row = start_row, col = start_col;
+    while ((row < end_row || (row == end_row && col < end_col)) && row < buf->numrows)
+    {
+        Row* r = &buf->row[row];
+        if (col < r->size)
+        {
+            Utf8Char deleted = r->characters[col];
+            bufferRowDelChar(buf, r, col);
+            undoRecord(buf, UNDO_DELETE_CHAR, row, col, deleted);
+            if (row == end_row) end_col--;
+        }
+        else if (row < buf->numrows - 1)
+        {
+            rowJoinNext(buf, row);
+            undoRecord(buf, UNDO_JOIN_LINE, row, col, (Utf8Char){0});
+            if (end_row > row) end_row--;
+        }
+        else
+        {
+            break; // last row, nothing left to consume
+        }
+    }
+    buf->x = start_col;
+    buf->y = start_row;
+    if (buf->type != TERMINAL_BUFF) buf->dirty++;
+}
+
+/***********************************************************************************************************************
+ *
+ *                                                 generic text-edit application
+ *
+ **********************************************************************************************************************/
+
+/**
+ * @brief Replaces [start_row:start_col, end_row:end_col) in `buf` with
+ * new_text (may contain '\n', may be empty for a pure deletion). Unlike
+ * bufferInsertChar()/bufferInsertNewLine(), this takes `buf` explicitly and
+ * never touches splitScreenGetActivePane() — the target may not even be
+ * the currently-displayed buffer (an LSP rename can touch files the user
+ * hasn't switched to). Goes through the same undo-recorded primitives as
+ * everything else, so LSP edits are undoable too.
+ */
+void bufferApplyTextEdit(struct buffer_t* buf, int start_row, int start_col,
+                         int end_row, int end_col, const char* new_text)
+{
+    if (buf->state == READ_ONLY) return;
+
+    // Defensive clamp: a server's reported range should always be in
+    // bounds, but a stale/misaligned response should never be allowed to
+    // read past the row array.
+    if (start_row >= buf->numrows) start_row = buf->numrows > 0 ? buf->numrows - 1 : 0;
+    if (end_row >= buf->numrows) end_row = buf->numrows > 0 ? buf->numrows - 1 : 0;
+    if (buf->numrows > 0)
+    {
+        if (start_col > buf->row[start_row].size) start_col = buf->row[start_row].size;
+        if (end_col > buf->row[end_row].size) end_col = buf->row[end_row].size;
+    }
+
+    if (start_row < end_row || (start_row == end_row && start_col < end_col))
+        bufferDeleteRegion(buf, start_row, start_col, end_row, end_col);
+
+    int row = start_row, col = start_col;
+    const unsigned char* p = (const unsigned char*) new_text;
+    while (p && *p)
+    {
+        if (*p == '\n')
+        {
+            rowSplitAt(buf, row, col);
+            undoRecord(buf, UNDO_SPLIT_LINE, row, col, (Utf8Char){0});
+            row++;
+            col = 0;
+            p++;
+        }
+        else
+        {
+            Utf8Char ch;
+            p += utf8CreateChar(p, &ch);
+            bufferRowInsertChar(buf, &buf->row[row], col, &ch);
+            undoRecord(buf, UNDO_INSERT_CHAR, row, col, ch);
+            col++;
+        }
+    }
+    buf->x = col;
+    buf->y = row;
+    if (buf->type != TERMINAL_BUFF) buf->dirty++;
+}
+
+/***********************************************************************************************************************
+ *
+ *                                                 git integration
+ *
+ **********************************************************************************************************************/
+
+/**
+ * @brief Runs a shell command and returns its stdout, malloc'd and
+ * NUL-terminated (trailing newline stripped), or NULL if it produced no
+ * output (including "not a git repo" / "no such file" failures — git's own
+ * stderr is silenced by the caller-supplied command with "2>/dev/null").
+ */
+static char* gitRunCommand(const char* cmd)
+{
+    FILE* pipe = popen(cmd, "r");
+    if (!pipe) return NULL;
+
+    size_t cap = 256, len = 0;
+    char* out = malloc(cap);
+    if (!out) { pclose(pipe); return NULL; }
+
+    int c;
+    while ((c = fgetc(pipe)) != EOF)
+    {
+        if (len + 1 >= cap)
+        {
+            cap *= 2;
+            char* grown = realloc(out, cap);
+            if (!grown) { free(out); pclose(pipe); return NULL; }
+            out = grown;
+        }
+        out[len++] = (char) c;
+    }
+    pclose(pipe);
+
+    while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
+        len--;
+    out[len] = '\0';
+
+    if (len == 0) { free(out); return NULL; }
+    return out;
+}
+
+/**
+ * @brief Wraps `path` in single quotes for safe use inside a shell command
+ * string, escaping any embedded single quotes ('\'' — close the quote,
+ * emit an escaped quote, reopen).
+ */
+static void gitShellQuote(const char* path, char* out, size_t out_size)
+{
+    size_t pos = 0;
+    if (pos + 1 < out_size) out[pos++] = '\'';
+    for (const char* p = path; *p && pos + 5 < out_size; p++)
+    {
+        if (*p == '\'')
+        {
+            memcpy(out + pos, "'\\''", 4);
+            pos += 4;
+        }
+        else
+        {
+            out[pos++] = *p;
+        }
+    }
+    if (pos + 1 < out_size) out[pos++] = '\'';
+    out[pos] = '\0';
+}
+
+/**
+ * @brief Parses a unified-diff hunk header ("@@ -old_start[,old_lines]
+ * +new_start[,new_lines] @@"). old_lines/new_lines default to 1 when git
+ * omits them (a single-line hunk).
+ * @return 1 on success, 0 if `line` isn't a hunk header.
+ */
+static int gitParseHunkHeader(const char* line, int* old_start, int* old_lines,
+                              int* new_start, int* new_lines)
+{
+    const char* minus = strchr(line, '-');
+    const char* plus = strchr(line, '+');
+    if (!minus || !plus) return 0;
+    *old_lines = 1;
+    *new_lines = 1;
+    if (sscanf(minus, "-%d,%d", old_start, old_lines) < 1) return 0;
+    if (sscanf(plus, "+%d,%d", new_start, new_lines) < 1) return 0;
+    return 1;
+}
+
+/**
+ * @brief Refreshes buf->git_branch/git_dirty/git_lines[] by shelling out to
+ * git. Deliberately NOT called on every frame — editorRefreshScreen() runs
+ * every ~50ms tick, and re-running three git subprocesses that often would
+ * be far too slow. Called instead on buffer-open and after-save, which is
+ * when the answer can actually have changed.
+ */
+void bufferRefreshGitInfo(struct buffer_t* buf)
+{
+    free(buf->git_lines);
+    buf->git_lines = NULL;
+    buf->git_lines_count = 0;
+    buf->git_available = 0;
+    buf->git_dirty = 0;
+    buf->git_branch[0] = '\0';
+
+    if (buf->type != FILE_BUFF || !buf->path || !buf->fullname)
+        return;
+
+    char* dir_str = (char*) utf8ToString(buf->path);
+    char* file_str = (char*) utf8ToString(buf->fullname);
+
+    char qdir[PATH_MAX + 4], qfile[PATH_MAX + 4];
+    gitShellQuote(dir_str, qdir, sizeof(qdir));
+    gitShellQuote(file_str, qfile, sizeof(qfile));
+
+    char cmd[3 * PATH_MAX];
+    snprintf(cmd, sizeof(cmd), "git -C %s rev-parse --abbrev-ref HEAD 2>/dev/null", qdir);
+    char* branch = gitRunCommand(cmd);
+    if (!branch)
+    {
+        free(dir_str);
+        free(file_str);
+        return; // not a git repo (or git isn't installed) — leave everything cleared
+    }
+    strncpy(buf->git_branch, branch, sizeof(buf->git_branch) - 1);
+    buf->git_branch[sizeof(buf->git_branch) - 1] = '\0';
+    buf->git_available = 1;
+    free(branch);
+
+    snprintf(cmd, sizeof(cmd), "git -C %s status --porcelain -- %s 2>/dev/null", qdir, qfile);
+    char* status = gitRunCommand(cmd);
+    buf->git_dirty = status != NULL;
+    free(status);
+
+    if (buf->numrows > 0)
+    {
+        buf->git_lines = calloc(buf->numrows, sizeof(GitLineStatus));
+        buf->git_lines_count = buf->git_lines ? buf->numrows : 0;
+    }
+
+    snprintf(cmd, sizeof(cmd), "git -C %s diff --no-color -U0 -- %s 2>/dev/null", qdir, qfile);
+    char* diff = gitRunCommand(cmd);
+    if (diff && buf->git_lines)
+    {
+        char* line = strtok(diff, "\n");
+        while (line)
+        {
+            if (line[0] == '@' && line[1] == '@')
+            {
+                int old_start, old_lines, new_start, new_lines;
+                if (gitParseHunkHeader(line, &old_start, &old_lines, &new_start, &new_lines))
+                {
+                    if (new_lines > 0)
+                    {
+                        GitLineStatus status2 = (old_lines == 0) ? GIT_LINE_ADDED : GIT_LINE_MODIFIED;
+                        for (int i = 0; i < new_lines; i++)
+                        {
+                            int idx = new_start - 1 + i; // 0-based
+                            if (idx >= 0 && idx < buf->git_lines_count)
+                                buf->git_lines[idx] = status2;
+                        }
+                    }
+                    else if (new_start > 0)
+                    {
+                        // Pure deletion: no added/changed line of its own to mark —
+                        // flag the line right before it as the nearest visible anchor.
+                        int idx = new_start - 1;
+                        if (idx >= 0 && idx < buf->git_lines_count)
+                            buf->git_lines[idx] = GIT_LINE_MODIFIED;
+                    }
+                }
+            }
+            line = strtok(NULL, "\n");
+        }
+    }
+    free(diff);
+    free(dir_str);
+    free(file_str);
+}
+
+/***********************************************************************************************************************
+ *
  *                                                 functions definitions
  *
  **********************************************************************************************************************/
@@ -240,6 +789,7 @@ int bufferCreate(const Utf8Char* path, enum bufferStatus_e state, enum buffer_ty
         // editor-move-cursor-*, ...) needs this buffer to already be
         // active, or it silently acts on whatever was open before.
         splitScreenGetActivePane()->buffer_id = new_buf->buffer_id;
+        bufferRefreshGitInfo(new_buf);
 
         char *fullname_str = (char*) utf8ToString(new_buf->fullname);
         Lisp hook_args = lisp_cons(lisp_make_string2(fullname_str, E.ctx),
@@ -370,6 +920,9 @@ int bufferClose(int buffer_id)
     // Free buffer resources
     free(buf->filename);
     buf->filename = NULL;
+    free(buf->undo_stack.entries);
+    free(buf->redo_stack.entries);
+    free(buf->git_lines);
     buf->buffer_id = -1;
 
     buf->next->prev = buf->prev;
@@ -792,7 +1345,13 @@ void bufferRowInsertChar(struct buffer_t* buffer, Row* row, int at,
  * \fn bufferRowDelChar(struct bufferConfig *E, frow *frow, int at)
  * \brief Delete the a char at the chosen position on the given row
  * \param at Index of the char to delete
- * \param row Row on operation is made */
+ * \param row Row on operation is made
+ * \note Pure row mutation — does not touch buffer->x. It used to
+ * unconditionally decrement it (assuming every caller was a backspace at
+ * the cursor), which made this unusable as a general "delete at column N"
+ * primitive for anything else (undo replay, forward-delete, region kill).
+ * Callers that want the cursor to follow (like bufferDelChar's backspace
+ * path) move it themselves. */
 void bufferRowDelChar(struct buffer_t* buffer, Row* row, int at)
 {
     if (buffer->state == READ_ONLY)
@@ -802,7 +1361,6 @@ void bufferRowDelChar(struct buffer_t* buffer, Row* row, int at)
     memmove(row->characters + at, row->characters + (at + 1), (row->size - at - 1) * sizeof(Utf8Char));
     row->size -= 1;
     END_OF_STRING(row->characters[row->size]);
-    buffer->x -= 1;
 }
 
 
@@ -816,8 +1374,10 @@ void bufferInsertChar(Utf8Char * character)
         END_OF_STRING(end_string);
         bufferInsertRow(buf, buf->numrows, &end_string, 0);
     }
-    bufferRowInsertChar(buf, &buf->row[buf->y], buf->x, character);
-    buf->x += 1;
+    int col = buf->x;
+    bufferRowInsertChar(buf, &buf->row[buf->y], col, character);
+    undoRecord(buf, UNDO_INSERT_CHAR, buf->y, col, *character);
+    buf->x = col + 1;
     buf->b_has_changed = 1;
 }
 
@@ -825,7 +1385,6 @@ void bufferDelChar(void)
 {
     EditorPane* active = splitScreenGetActivePane();
     struct buffer_t* buf = bufferFindById(active->buffer_id);
-    int prev_char_count;
 
     /* Nothing to delete */
     if (buf->numrows == 0) return;
@@ -836,25 +1395,20 @@ void bufferDelChar(void)
 
     if (buf->x > 0)
     {
-
-        bufferRowDelChar(buf, r, buf->x - 1);
+        int col = buf->x - 1;
+        Utf8Char deleted = r->characters[col];
+        bufferRowDelChar(buf, r, col);
+        undoRecord(buf, UNDO_DELETE_CHAR, buf->y, col, deleted);
+        buf->x = col;
     }
     else
     {
         /* Merge current row into the previous one */
-        Row* prev = &buf->row[buf->y - 1]; // FIX: was buf->y (same as r)
-        prev_char_count = prev->size;
-        for (int i = 0; i<r->size; ++i) {
-            bufferRowInsertChar(buf, prev, prev->size, &r->characters[i]);
-        }
+        int target_row = buf->y - 1;
+        int prev_char_count = buf->row[target_row].size;
+        rowJoinNext(buf, target_row);
+        undoRecord(buf, UNDO_JOIN_LINE, target_row, prev_char_count, (Utf8Char){0});
 
-        free(r->characters);
-        r->characters = NULL;
-
-        memmove(&buf->row[buf->y],
-                &buf->row[buf->y + 1],
-                sizeof(Row) * (buf->numrows - buf->y - 1));
-        buf->numrows--;
         active->cursor_x = prev_char_count;
         buf->x = prev_char_count;
         active->cursor_y--;
@@ -882,23 +1436,14 @@ void bufferInsertNewLine(void)
     if (buf->y >= buf->numrows)
     {
         /* Cursor is past the last row: just append a blank line */
-        Utf8Char end_string;
-        END_OF_STRING(end_string);
-        bufferInsertRow(buf, buf->numrows, &end_string, 0);
+        rowInsertBlank(buf, buf->numrows);
+        undoRecord(buf, UNDO_INSERT_ROW, buf->numrows - 1, 0, (Utf8Char){0});
     }
     else
     {
-        Row* row = &buf->row[buf->y];
-        /* Insert the tail (from cursor to end) as a new row below */
-        bufferInsertRow(buf, buf->y + 1, &row->characters[buf->x], row->size - buf->x);
-
-        /* Re-fetch: bRealloc inside bufferInsertRow may have moved the array */
-        row = &buf->row[buf->y];
-
-        /* Truncate the current row at the cursor */
-        row->size = buf->x;
-        END_OF_STRING(row->characters[row->size])
-        /* Do NOT touch row->cap — the allocation is still valid */
+        int split_row = buf->y, split_col = buf->x;
+        rowSplitAt(buf, split_row, split_col);
+        undoRecord(buf, UNDO_SPLIT_LINE, split_row, split_col, (Utf8Char){0});
     }
     buf->y++;
     buf->x = 0;
