@@ -318,8 +318,11 @@ void bufferDeleteRegion(struct buffer_t* buf, int start_row, int start_col,
         return;
 
     int row = start_row, col = start_col;
-    while ((row < end_row || (row == end_row && col < end_col)) && row < buf->numrows)
+    while (row < buf->numrows)
     {
+        if (row == end_row && col >= end_col)
+            break; // reached the end of the region
+
         Row* r = &buf->row[row];
         if (col < r->size)
         {
@@ -328,11 +331,20 @@ void bufferDeleteRegion(struct buffer_t* buf, int start_row, int start_col,
             undoRecord(buf, UNDO_DELETE_CHAR, row, col, deleted);
             if (row == end_row) end_col--;
         }
-        else if (row < buf->numrows - 1)
+        else if (row < end_row && row < buf->numrows - 1)
         {
+            // At end-of-line with more region to go: consume the line break
+            // by merging the next row up into this one.
             rowJoinNext(buf, row);
             undoRecord(buf, UNDO_JOIN_LINE, row, col, (Utf8Char){0});
-            if (end_row > row) end_row--;
+            // The merged-in row's text now lives inside `row`, shifted right
+            // by `col`. end_col is still expressed in the *old* row's
+            // coordinates, so it has to be rebased into the merged line or
+            // the loop terminates immediately and silently leaves the rest
+            // of the region undeleted (end_col is typically far smaller than
+            // the join column — e.g. deleting "\n    " to reindent a line).
+            end_row--;
+            if (row == end_row) end_col += col;
         }
         else
         {

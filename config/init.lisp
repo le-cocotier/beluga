@@ -49,11 +49,12 @@
 ;; Example: log every save to the status bar.
 ;; (add-hook "after-save" (lambda (filename) (editor-set-prefix "no-prefix")))
 
-;; Format the buffer through the LSP server right before it's written, so
-;; the formatted result is what actually lands on disk. Silently does
-;; nothing if LSP isn't ready or the server doesn't support formatting.
-;; Comment this out if you'd rather format explicitly (CTRL-x CTRL-f).
-(add-hook "before-save" (lambda (filename) (lsp-format-buffer)))
+;; Format-on-save. OFF by default and deliberately so: the server formats
+;; to ITS style, not yours (clangd defaults to 2-space LLVM style), so
+;; enabling this rewrites the indentation of every file you save. Turn it
+;; on only if your project has a .clang-format the server will pick up.
+;; CTRL-x CTRL-f formats on demand either way.
+;; (add-hook "before-save" (lambda (filename) (lsp-format-buffer)))
 
 
 ;; INTROSPECTION

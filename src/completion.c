@@ -987,6 +987,13 @@ void lspRequestFormatting(LspClient *lsp, struct buffer_t *buf)
     char uri[PATH_MAX + 8];
     snprintf(uri, sizeof(uri), "file://%s", (char*) utf8ToString(buf->fullname));
 
+    // The server computes edit ranges against ITS copy of the document, and
+    // ours is only pushed on the completion debounce — so without an
+    // explicit resync here, any edit made since the last completion request
+    // leaves the server formatting stale text, and the returned ranges then
+    // land at the wrong offsets in our buffer.
+    lspDidChange(lsp, buf);
+
     int req_id = lsp->next_id++;
 
     cJSON* req = cJSON_CreateObject();
@@ -1010,7 +1017,15 @@ void lspRequestFormatting(LspClient *lsp, struct buffer_t *buf)
     lsp_send(lsp, msg);
     g_format_target_buf = buf;
     lsp_track_pending(lsp, req_id, lsp_on_formatting_response);
-    lspAwaitResponse(lsp, req_id, 3000);
+    if (!lspAwaitResponse(lsp, req_id, 3000))
+    {
+        // Timed out. Clear the target so a late reply — arriving from the
+        // normal run-loop poll, by which point the buffer may have been
+        // edited further or closed outright — can't apply edits computed
+        // for a document state that no longer exists.
+        g_format_target_buf = NULL;
+        editorSetStatusMessage("Formatting timed out");
+    }
 
     free(msg);
     cJSON_Delete(req);
