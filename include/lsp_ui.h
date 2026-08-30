@@ -24,8 +24,11 @@ void lspParseCompletion(const char *json, CompletionPopup *popup,
                         int screen_x, int screen_y);
 void lspParseDiagnostics(const char *json, DiagnosticList *diags, int buffer_id);
 
+// git_status is drawn when there's no diagnostic on this line — pass
+// GIT_LINE_NONE (or the buffer's git_lines[line] when available) if git
+// info doesn't apply.
 void lspUiDrawGutter(struct abuf *ab, DiagnosticList *diags,
-                     int buf_id, int line);
+                     int buf_id, int line, GitLineStatus git_status);
 const char *lspUiDiagnosticAtCursor(DiagnosticList *diags,
                                     int buffer_id, int cursor_line);
 

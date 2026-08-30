@@ -201,7 +201,7 @@ static DiagSeverity diag_worst_on_line(DiagnosticList *diags,
 // buf_id : active buffer id
 // line   : file line number (0-based) for this screen row
 void lspUiDrawGutter(struct abuf *ab, DiagnosticList *diags,
-                     int buf_id, int line) {
+                     int buf_id, int line, GitLineStatus git_status) {
     DiagSeverity s = diag_worst_on_line(diags, buf_id, line);
     switch (s) {
         case DIAG_ERROR:
@@ -221,7 +221,22 @@ void lspUiDrawGutter(struct abuf *ab, DiagnosticList *diags,
             abAppend(ab, "·", 2);       // U+00B7 is 2 bytes, not 1 — was truncating the glyph
             break;
         default:
-            abAppend(ab, " ", 1);       // no diagnostic
+            // No diagnostic on this line — fall back to the git diff
+            // status, if any, so the two gutters can share one column
+            // without needing a wider layout.
+            switch (git_status) {
+                case GIT_LINE_ADDED:
+                    ab_sgr(ab, "32");       // green
+                    abAppend(ab, "+", 1);
+                    break;
+                case GIT_LINE_MODIFIED:
+                    ab_sgr(ab, "33");       // yellow
+                    abAppend(ab, "~", 1);
+                    break;
+                default:
+                    abAppend(ab, " ", 1);
+                    break;
+            }
             break;
     }
     AB_RESET(ab);
