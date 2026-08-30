@@ -21,6 +21,16 @@ Lisp deletePreviousChar(Lisp args, LispError *e, LispContext ctx);
 Lisp editorPrintC(Lisp args, LispError *e, LispContext ctx);
 Lisp editorReadChar_L(Lisp args, LispError *e, LispContext ctx);
 
+// Undo/redo — see bufferUndo()/bufferRedo() in buffer.c
+Lisp editorUndo(Lisp args, LispError *e, LispContext ctx);
+Lisp editorRedo(Lisp args, LispError *e, LispContext ctx);
+
+// Selection (mark & region) — Emacs-style: set-mark, then move the cursor,
+// then kill/copy the region. See bufferRegionBounds() in buffer.c.
+Lisp editorSetMark(Lisp args, LispError *e, LispContext ctx);
+Lisp editorKillRegion(Lisp args, LispError *e, LispContext ctx);
+Lisp editorCopyRegion(Lisp args, LispError *e, LispContext ctx);
+
 // Editor
 
 Lisp editorQuit(Lisp args, LispError *e, LispContext ctx);
@@ -76,6 +86,9 @@ Lisp editorMoveEndBuffer(Lisp args, LispError *e, LispContext ctx);
 Lisp editorAutoComplete(Lisp args, LispError *e, LispContext ctx);
 // Lisp lspComplete(Lisp args, LispError *e, LispContext ctx);
 Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx);
+Lisp lspHover(Lisp args, LispError *e, LispContext ctx);
+Lisp lspRename(Lisp args, LispError *e, LispContext ctx);
+Lisp lspFormatBuffer(Lisp args, LispError *e, LispContext ctx);
 
 // (lsp-server "ext" "language-id" "command" "arg1" ...) — register which
 // language server to spawn for files with this extension.

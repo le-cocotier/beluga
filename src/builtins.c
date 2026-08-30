@@ -333,6 +333,36 @@ Lisp deletePreviousChar(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function to undo the most recent edit (or coalesced run of
+ * edits — see undoRecord() in buffer.c) on the current buffer.
+ * @return lisp_null()
+ * @see bufferUndo()
+ */
+Lisp editorUndo(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
+  if (buf)
+    bufferUndo(buf);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to redo the most recently undone edit on the
+ * current buffer.
+ * @return lisp_null()
+ * @see bufferRedo()
+ */
+Lisp editorRedo(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
+  if (buf)
+    bufferRedo(buf);
+  return lisp_null();
+}
+
+/**
  * @brief Lisp function to move cursor up by one screen
  * @details Scrolls up one full screen height, moving cursor to top of visible
  * area.
@@ -979,9 +1009,10 @@ Lisp editorCutEndLine(Lisp args, LispError *e, LispContext ctx) {
   editorSetClipboard(text, (int) strlen(text));
   free(text);
 
-  row->size = buffer->x;
-  END_OF_STRING(row->characters[row->size]);
-  buffer->dirty++;
+  // Goes through bufferDeleteRegion() (the same path region-kill and LSP
+  // edits use) rather than truncating row->size directly, so this is
+  // undoable — it used to bypass undo recording entirely.
+  bufferDeleteRegion(buffer, buffer->y, buffer->x, buffer->y, row->size);
   buffer->b_has_changed = 1;
 
   return lisp_null();
@@ -1012,6 +1043,91 @@ Lisp editorCopyEndLine(Lisp args, LispError *e, LispContext ctx) {
   editorSetClipboard(text, (int) strlen(text));
   free(text);
 
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to set (or clear) the mark at the cursor.
+ * @details Emacs-style: the region is whatever's between the mark and the
+ * cursor ("point"), recomputed live as the cursor moves — see
+ * rowSelectionRange() in output.c for the rendering side and
+ * bufferRegionBounds() for how the two get normalized into document order.
+ * Calling this again while already active clears the mark instead of
+ * moving it, so it also serves as "cancel selection".
+ * @return lisp_null()
+ */
+Lisp editorSetMark(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
+  if (!buf)
+    return lisp_null();
+
+  if (buf->mark_active) {
+    buf->mark_active = 0;
+    editorSetStatusMessage("Mark cleared");
+  } else {
+    buf->mark_active = 1;
+    buf->mark_x = buf->x;
+    buf->mark_y = buf->y;
+    editorSetStatusMessage("Mark set");
+  }
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to cut the active region to the clipboard.
+ * @details No-op with a status message if no mark is active. Clears the
+ * mark afterward, same as real Emacs' C-w.
+ * @return lisp_null()
+ * @see editorSetMark(), editorCopyRegion()
+ */
+Lisp editorKillRegion(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
+  if (!buf || !buf->mark_active) {
+    editorSetStatusMessage("No region (CTRL-x m to set the mark first)");
+    return lisp_null();
+  }
+
+  int sr, sc, er, ec;
+  bufferRegionBounds(buf, &sr, &sc, &er, &ec);
+  char *text = bufferGetRegionText(buf, sr, sc, er, ec);
+  if (text) {
+    editorSetClipboard(text, (int) strlen(text));
+    free(text);
+  }
+  bufferDeleteRegion(buf, sr, sc, er, ec);
+  buf->mark_active = 0;
+  buf->b_has_changed = 1;
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to copy the active region to the clipboard without
+ * deleting it. No-op with a status message if no mark is active. Clears
+ * the mark afterward, same as real Emacs' M-w.
+ * @return lisp_null()
+ * @see editorSetMark(), editorKillRegion()
+ */
+Lisp editorCopyRegion(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
+  if (!buf || !buf->mark_active) {
+    editorSetStatusMessage("No region (CTRL-x m to set the mark first)");
+    return lisp_null();
+  }
+
+  int sr, sc, er, ec;
+  bufferRegionBounds(buf, &sr, &sc, &er, &ec);
+  char *text = bufferGetRegionText(buf, sr, sc, er, ec);
+  if (text) {
+    editorSetClipboard(text, (int) strlen(text));
+    free(text);
+  }
+  buf->mark_active = 0;
   return lisp_null();
 }
 
@@ -1265,15 +1381,15 @@ Lisp lspRegisterServer(Lisp args, LispError *e, LispContext ctx) {
   return lisp_null();
 }
 
+/**
+ * @brief Lisp function to jump to the definition of the symbol at the
+ * cursor. Async: the actual jump happens once the server responds — see
+ * lsp_on_definition_response() in completion.c.
+ * @return lisp_null()
+ */
 Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx) {
-  if (!E.constantes.LSP) {
-    return lisp_null();
-  }
-  (void)args;
-  (void)e;
-  (void)ctx;
-#ifdef AVEC_COMPLETION
-  if (!E.lsp_client || E.lsp_client->state != LSP_READY)
+  (void) args; (void) e; (void) ctx;
+  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
     return lisp_null();
 
   EditorPane *active = splitScreenGetActivePane();
@@ -1281,8 +1397,84 @@ Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx) {
   if (!buf)
     return lisp_null();
 
-  lspRequestDefinition(E.lsp_client, buf, active->cursor_y + active->y_offset,
-                       active->cursor_x + active->x_offset);
-#endif
+  lspRequestDefinition(E.lsp_client, buf, buf->y, buf->x);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to show hover info (type/doc) for the symbol at the
+ * cursor in the status bar. Async: see lsp_on_hover_response().
+ * @return lisp_null()
+ */
+Lisp lspHover(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+    return lisp_null();
+
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
+  if (!buf)
+    return lisp_null();
+
+  lspRequestHover(E.lsp_client, buf, buf->y, buf->x);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to rename the symbol at the cursor across every
+ * file the server reports. Prompts for the new name, then blocks briefly
+ * (up to 3s — see lspAwaitResponse()) waiting for the server's
+ * WorkspaceEdit, which is applied to every affected buffer (opening files
+ * that aren't already open). Nothing is auto-saved — each touched buffer
+ * is just marked dirty, same as any other edit.
+ * @return lisp_null()
+ */
+Lisp lspRename(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY) {
+    editorSetStatusMessage("LSP not ready");
+    return lisp_null();
+  }
+
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
+  if (!buf)
+    return lisp_null();
+
+  Utf8Char *name_input = editorPrompt("New name: %s (ESC to cancel)", NULL, 0);
+  if (!name_input)
+    return lisp_null();
+
+  char *new_name = (char *) utf8ToString(name_input);
+  free(name_input);
+  if (new_name[0] == '\0') {
+    free(new_name);
+    return lisp_null();
+  }
+
+  lspRequestRename(E.lsp_client, buf, buf->y, buf->x, new_name);
+  free(new_name);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to format the current buffer via the LSP server.
+ * Blocks briefly (up to 3s) for the response — meant to be wired to the
+ * "before-save" hook so the formatted result is what actually gets
+ * written to disk, not the pre-format content. A no-op (silently) if LSP
+ * isn't ready or the server doesn't support formatting.
+ * @return lisp_null()
+ */
+Lisp lspFormatBuffer(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+    return lisp_null();
+
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
+  if (!buf || buf->type != FILE_BUFF)
+    return lisp_null();
+
+  lspRequestFormatting(E.lsp_client, buf);
   return lisp_null();
 }

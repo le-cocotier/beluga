@@ -69,7 +69,15 @@ void initBuiltins() {
   registerBuiltin("editor-auto-complete", editorAutoComplete);
   // registerBuiltin("lsp-complete",    lspComplete);
   registerBuiltin("lsp-definition",  lspDefinition);
+  registerBuiltin("lsp-hover",  lspHover);
+  registerBuiltin("lsp-rename",  lspRename);
+  registerBuiltin("lsp-format-buffer",  lspFormatBuffer);
   registerBuiltin("editor-open-terminal", editorOpenTerminal);
+  registerBuiltin("editor-undo", editorUndo);
+  registerBuiltin("editor-redo", editorRedo);
+  registerBuiltin("editor-set-mark", editorSetMark);
+  registerBuiltin("editor-kill-region", editorKillRegion);
+  registerBuiltin("editor-copy-region", editorCopyRegion);
 
   registerBuiltin("add-hook", addHook);
   registerBuiltin("line-text", lineTextAt);
