@@ -26,8 +26,30 @@ void lspDidClose(LspClient* lsp, struct buffer_t* buf);
 void lspRequestCompletion(LspClient* lsp, struct buffer_t* buf,
                           int line, int col,
                           int screen_x, int screen_y);
-void lspRequestHover(LspClient* lsp, struct buffer_t* buf, int line, int col); // not yet implemented
+// Response is shown via editorSetStatusMessage() (first line only).
+void lspRequestHover(LspClient* lsp, struct buffer_t* buf, int line, int col);
+// Response jumps the cursor to the definition, opening the target file
+// first if it isn't already open — see lspJumpToUri() in completion.c.
 void lspRequestDefinition(LspClient* lsp, struct buffer_t* buf, int line, int col);
+// Prompts aren't this function's job — pass the already-chosen new name.
+// Response applies the server's WorkspaceEdit (both the "changes" and
+// "documentChanges" shapes) across every affected buffer, opening files
+// that aren't currently open, and marks each one dirty without saving —
+// the user reviews/saves them like any other edit.
+void lspRequestRename(LspClient* lsp, struct buffer_t* buf, int line, int col,
+                      const char* new_name);
+// Response applies the returned TextEdit[] to `buf` specifically (the
+// request itself carries no file info of its own to recover it from).
+void lspRequestFormatting(LspClient* lsp, struct buffer_t* buf);
+
+// Blocks (pumping lsp's own fd only — nothing else in the editor runs
+// meanwhile) until the response for `request_id` has been dispatched, or
+// timeout_ms elapses. Used by format-on-save and rename to get a
+// synchronous result out of what's otherwise an async client — safe only
+// because nothing else can be in flight for the *same* buffer while this
+// blocks (see the callers in builtins.c).
+// @return 1 if the response arrived, 0 on timeout.
+int lspAwaitResponse(LspClient* lsp, int request_id, int timeout_ms);
 
 // ── Completion debounce ──────────────────────────────────────────────────────
 // Call lspScheduleCompletion() from the input path instead of requesting a
