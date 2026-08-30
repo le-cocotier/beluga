@@ -46,6 +46,23 @@ void disableRawMode()
     }
 }
 
+/**
+ * @brief Hand the terminal back to the shell in a usable state.
+ * @details Order matters: reset SGR *before* clearing, or the theme's
+ * background color is what the clear paints the screen with and it stays
+ * as the shell's background afterward. Also re-shows the cursor, which
+ * editorRefreshScreen() hides on every frame — quitting mid-frame used to
+ * leave an invisible cursor behind. Safe to call more than once.
+ */
+void terminalRestore(void)
+{
+    write(STDOUT_FILENO, "\x1b[0m", 4);   // reset colors/attributes
+    write(STDOUT_FILENO, "\x1b[2J", 4);   // clear screen
+    write(STDOUT_FILENO, CURSOR_TOP_LEFT, 3);
+    write(STDOUT_FILENO, SHOW_CURSOR, 6);
+    disableRawMode();
+}
+
 void enableRawMode()
 {
     if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1)

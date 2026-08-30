@@ -21,6 +21,9 @@
 void die(const char *s);
 
 void disableRawMode();
+// Restore the terminal for the shell: reset attributes, clear, show cursor,
+// leave raw mode. Called once on the way out of editorRunLoop().
+void terminalRestore(void);
 
 void enableRawMode();
 

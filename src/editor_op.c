@@ -235,8 +235,15 @@ void editorRunLoop(void)
         if (E.constantes.LSP)
             lspCompletionDebounceTick();
 
+        // A keypress handled above may have requested the exit; drawing one
+        // more frame here would just repaint the UI we're about to leave.
+        if (E.exit_requested)
+            break;
+
         editorRefreshScreen();
     }
+
+    terminalRestore();
 
     // Clean shutdown: close any live shells before exiting
     if (E.buffers != NULL)

@@ -210,9 +210,6 @@ Lisp editorQuit(Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
   }
 
-  // Free the key input
-  disableRawMode();
-
   // deInitEditor() tears down the Lisp context itself (lisp_shutdown).
   // Calling it here, synchronously, would free the interpreter's heap
   // while this very function is still executing *inside* a live
@@ -220,8 +217,12 @@ Lisp editorQuit(Lisp args, LispError *e, LispContext ctx) {
   // machinery tries to unwind. Just request the exit; editorRunLoop()
   // checks exit_requested and returns cleanly, and main() does teardown
   // only once no Lisp evaluation is on the stack anymore.
-  write(STDOUT_FILENO, "\x1b[2J", 4);
-  write(STDOUT_FILENO, CURSOR_TOP_LEFT, 3);
+  //
+  // Terminal teardown deliberately isn't done here either: this runs
+  // mid-iteration, and the rest of that iteration still calls
+  // editorRefreshScreen(), which repainted the whole UI right back over
+  // the cleared screen. editorRunLoop() restores the terminal once, after
+  // the loop has actually stopped drawing.
   E.exit_requested = 1;
   return lisp_null();
 }
