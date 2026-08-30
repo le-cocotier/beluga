@@ -49,6 +49,12 @@
 ;; Example: log every save to the status bar.
 ;; (add-hook "after-save" (lambda (filename) (editor-set-prefix "no-prefix")))
 
+;; Format the buffer through the LSP server right before it's written, so
+;; the formatted result is what actually lands on disk. Silently does
+;; nothing if LSP isn't ready or the server doesn't support formatting.
+;; Comment this out if you'd rather format explicitly (CTRL-x CTRL-f).
+(add-hook "before-save" (lambda (filename) (lsp-format-buffer)))
+
 
 ;; INTROSPECTION
 ;;
@@ -157,3 +163,22 @@
 (map-key "z" editor-move-cursor-end-buffer "user")
 (map-key "t" editor-open-terminal "user")
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "term")
+
+;; Undo/redo
+(map-key "u" editor-undo "user")
+(map-key "U" editor-redo "user")
+
+;; Selection (mark & region) — Emacs-style: set the mark, move the cursor
+;; to extend the region, then kill or copy it. Bare CTRL-w/CTRL-k above
+;; keep their existing cut/copy-to-end-of-line meaning unchanged; these are
+;; additive, not a replacement.
+(map-key "m" editor-set-mark "user")
+(map-key "w" editor-copy-region "user")
+(map-key "CTRL-w" editor-kill-region "user")
+
+;; LSP: go to definition, hover info, rename symbol, format buffer
+;; (also runs automatically before every save — see the "before-save" hook).
+(map-key "d" lsp-definition "user")
+(map-key "h" lsp-hover "user")
+(map-key "r" lsp-rename "user")
+(map-key "CTRL-f" lsp-format-buffer "user")
