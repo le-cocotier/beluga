@@ -64,7 +64,7 @@
 
 #define ABUF_INIT {NULL, 0}
 
-#define BELUGA_VERSION "3.0"
+#define BELUGA_VERSION "3.1"
 
 #ifdef __APPLE__
 #define CLIPBOARD_COPY_CMD  "pbcopy"
