@@ -419,18 +419,6 @@ void editorScroll() {
   }
 }
 
-char *basename(char *path) {
-  int len = (int)strlen(path);
-
-  for (int i = len - 1; i > 0; i--) {
-    if (path[i] == '/') {
-      path = path + i + 1;
-      break;
-    }
-  }
-  return path;
-}
-
 /**
  * @brief Renders the status bar at the bottom of the screen
  * @details Displays filename, line count, dirty flag, and current cursor

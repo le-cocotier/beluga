@@ -4,6 +4,7 @@
 
 #ifndef BELUGA_UTF8_H
 #define BELUGA_UTF8_H
+#include <stdarg.h>   // va_list, used by utf8VaPrintf below
 #include <stdint.h>
 #include <stddef.h>
 

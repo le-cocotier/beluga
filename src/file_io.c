@@ -134,7 +134,10 @@ void editorSave() {
   }
 
   if (buffer->filename == NULL) {
-    buffer->filename = editorPrompt("Save as: %s (ESC to cancel)", "", 1);
+    // NULL, not "": the parameter is a Utf8Char* (a 5-byte struct array),
+    // so a 1-byte "" literal makes editorPrompt's "%u" read past the end of
+    // the object. NULL is how it already spells "no placeholder".
+    buffer->filename = editorPrompt("Save as: %u (ESC to cancel)", NULL, 1);
     if (buffer->filename == NULL) {
       editorSetStatusMessage("Save aborted");
       return;

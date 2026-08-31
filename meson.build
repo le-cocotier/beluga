@@ -9,6 +9,19 @@ cc = meson.get_compiler('c')
 m = cc.find_library('m', required: false)
 thread_dep = dependency('threads')
 
+# glibc hides POSIX/GNU declarations when __STRICT_ANSI__ is set, which
+# -std=c99 does. The editor leans on memmem, asprintf, strdup, getline,
+# popen, realpath, kill, usleep, setenv and forkpty — all of which would
+# fall back to implicit declarations on Linux, and implicit declarations
+# are hard errors in modern gcc/clang, so the build simply fails there.
+# Darwin exposes these regardless, so defining this unconditionally costs
+# nothing on macOS.
+add_project_arguments('-D_GNU_SOURCE', language : 'c')
+
+# forkpty() lives in libutil on Linux; on macOS/BSD it is in libc and this
+# lookup simply finds nothing, which is why it is not `required`.
+util_dep = cc.find_library('util', required : false)
+
 # Source files
 src_files = files(
   'main.c',
@@ -40,5 +53,5 @@ src_files = files(
 # Executable
 executable('beluga',
   src_files,
-  dependencies: [m, thread_dep]
+  dependencies: [m, thread_dep, util_dep]
 )

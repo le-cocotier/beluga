@@ -8,9 +8,6 @@
 #include "include/define.h"
 #include "include/utf8.h"
 #include <stdlib.h>
-#define _DEFAULT_SOURCE
-#define _BSD_SOURCE
-#define _GNU_SOURCE
 
 #include <libgen.h>
 

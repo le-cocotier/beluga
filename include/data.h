@@ -3,6 +3,7 @@
 
 #include <signal.h>
 #include <stdio.h>
+#include <sys/types.h>  // pid_t, used by lsp_client_t / buffer_t below
 #include <termios.h>
 #include <time.h>
 

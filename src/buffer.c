@@ -842,10 +842,14 @@ int bufferCreate(const Utf8Char* path, enum bufferStatus_e state, enum buffer_ty
         new_buf->numrows = 0;
     }
 
-    filename = utf8ToString(new_buf->filename);
+    // Reuses the already-declared char* rather than overwriting the
+    // Utf8Char* `filename` with a byte string: assigning one to the other
+    // is a type error that gcc 14 (Debian trixie's default) rejects
+    // outright, having promoted -Wincompatible-pointer-types to an error.
+    string_filename = (char*) utf8ToString(new_buf->filename);
     editorSetStatusMessage("Opened: %s (buffer %d)",
-                           (char*) filename, new_buf->buffer_id);
-    free(filename);
+                           string_filename, new_buf->buffer_id);
+    free(string_filename);
     if (E.buffers != NULL)
     {
         // Splice new_buf in right after E.buffers. The node that used to
