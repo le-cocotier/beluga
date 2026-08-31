@@ -13,27 +13,12 @@
 #include "../include/list_popup.h"
 #include "../include/terminal.h"
 #include "../include/define.h"
+#include "../include/popup_ui.h"
 
 #include <stdio.h>
 #include <string.h>
 
 extern EditorConfig E;
-
-// ─── ANSI helpers (same small private set buffer_switcher.c/lsp_ui.c keep for themselves) ──
-
-static void ab_move(struct abuf *ab, int row, int col) {
-    char esc[32];
-    int n = snprintf(esc, sizeof(esc), "\x1b[%d;%dH", row, col);
-    abAppend(ab, esc, n);
-}
-
-static void ab_sgr(struct abuf *ab, const char *codes) {
-    char esc[32];
-    int n = snprintf(esc, sizeof(esc), "\x1b[%sm", codes);
-    abAppend(ab, esc, n);
-}
-
-#define AB_RESET(ab) ab_sgr(ab, "0")
 
 void listPopupOpen(const char *title, Lisp items, Lisp on_select, Lisp on_cancel) {
     strncpy(E.list_popup.title, title, sizeof(E.list_popup.title) - 1);
@@ -112,52 +97,30 @@ void listPopupDraw(struct abuf *ab) {
         int label_len = (int) strlen(lisp_string(lisp_car(pair)));
         if (label_len > content_w) content_w = label_len;
     }
-    if (content_w > E.screencols - 4) content_w = E.screencols - 4;
+    if (content_w > E.screencols - 6) content_w = E.screencols - 6;
     if (content_w > LIST_POPUP_MAX_WIDTH) content_w = LIST_POPUP_MAX_WIDTH;
     if (content_w < 10) content_w = 10;
 
-    int box_w = content_w + 4; // "| " + text + " |"
+    int box_w = content_w + 4; // border(2) + marker/margin(1) + margin(1)
     int box_h = visible_count + 4; // top border, title, separator, rows, bottom border
 
-    int origin_x = (E.screencols - box_w) / 2;
-    int origin_y = (E.screenrows - box_h) / 2;
-    if (origin_x < 1) origin_x = 1;
-    if (origin_y < 1) origin_y = 1;
+    int origin_x, origin_y;
+    popupCenter(box_w, box_h, &origin_x, &origin_y);
 
-    // ── top border ──────────────────────────────────────────────────────────
-    ab_move(ab, origin_y, origin_x);
-    ab_sgr(ab, "0;37;40");
-    abAppend(ab, "┌", 3);
-    for (int i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
-    abAppend(ab, "┐", 3);
+    PopupStyle style;
+    popupStyleInit(&style);
 
-    // ── title ────────────────────────────────────────────────────────────────
-    ab_move(ab, origin_y + 1, origin_x);
-    ab_sgr(ab, "1;37;40");
-    abAppend(ab, "| ", 2);
-    char title_col[LIST_POPUP_MAX_WIDTH + 1];
-    snprintf(title_col, sizeof(title_col), "%-*s", content_w, E.list_popup.title);
-    title_col[content_w] = '\0';
-    abAppend(ab, title_col, content_w);
-    abAppend(ab, " |", 2);
-    AB_RESET(ab);
+    popupDrawTop(ab, &style, origin_x, origin_y, box_w);
+    popupDrawTitleRow(ab, &style, origin_x, origin_y + 1, box_w, E.list_popup.title, content_w);
+    popupDrawSeparator(ab, &style, origin_x, origin_y + 2, box_w);
 
-    // ── separator ────────────────────────────────────────────────────────────
-    ab_move(ab, origin_y + 2, origin_x);
-    ab_sgr(ab, "0;37;40");
-    abAppend(ab, "├", 3);
-    for (int i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
-    abAppend(ab, "┤", 3);
-
-    // ── rows ─────────────────────────────────────────────────────────────────
     it = lisp_list_advance(E.list_popup.items, scroll);
     for (int i = 0; i < visible_count; i++) {
         int idx = i + scroll;
         int is_sel = (idx == E.list_popup.selected);
+        int row = origin_y + 3 + i;
 
-        ab_move(ab, origin_y + 3 + i, origin_x);
-        ab_sgr(ab, is_sel ? "7" : "0;37;40");
-        abAppend(ab, "| ", 2);
+        popupRowBegin(ab, &style, origin_x, row, is_sel);
 
         const char *label = "";
         if (lisp_is_pair(it)) {
@@ -169,17 +132,11 @@ void listPopupDraw(struct abuf *ab) {
         label_col[content_w] = '\0'; // truncate if the label overruns content_w
         abAppend(ab, label_col, content_w);
 
-        abAppend(ab, " |", 2);
-        AB_RESET(ab);
+        popupRowEnd(ab, &style);
 
         if (lisp_is_pair(it)) it = lisp_cdr(it);
     }
 
-    // ── bottom border ───────────────────────────────────────────────────────
-    ab_move(ab, origin_y + 3 + visible_count, origin_x);
-    ab_sgr(ab, "0;37;40");
-    abAppend(ab, "└", 3);
-    for (int i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
-    abAppend(ab, "┘", 3);
-    AB_RESET(ab);
+    popupDrawBottom(ab, &style, origin_x, origin_y + 3 + visible_count, box_w);
+    popupDrawShadow(ab, &style, origin_x, origin_y, box_w, box_h);
 }

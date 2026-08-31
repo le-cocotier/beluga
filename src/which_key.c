@@ -10,6 +10,7 @@
 #include "../include/append_buffer.h"
 #include "../include/buffer.h"
 #include "../include/data.h"
+#include "../include/popup_ui.h"
 #include "../include/split_screen.h"
 #include "../include/utf8.h"
 
@@ -29,8 +30,16 @@ static void ab_move(struct abuf *ab, int row, int col) {
 }
 
 static void ab_sgr(struct abuf *ab, const char *codes) {
-    char buf[32];
+    // 48, not the 32 every other popup module's copy of this helper uses:
+    // this file's ab_sgr is fed PopupStyle's combined bold+bg+fg codes
+    // (up to ~35 chars), not the short bare color codes ("33", "1;31")
+    // everything else here passes. 32 silently truncated them — the
+    // clamp below stopped that from being a buffer over-read, but the
+    // codes still came out cut off mid-escape-sequence and broke the
+    // panel's colors until the actual buffer was sized to fit.
+    char buf[48];
     int n = snprintf(buf, sizeof(buf), "\x1b[%sm", codes);
+    if (n >= (int) sizeof(buf)) n = (int) sizeof(buf) - 1; // defensive: never over-read on truncation
     abAppend(ab, buf, n);
 }
 
@@ -281,8 +290,12 @@ static void drawPanel(struct abuf *ab, const char *title,
         truncated = 1;
     }
 
+    PopupStyle style;
+    popupStyleInit(&style);
+
     // Sit directly above the status bar, which is drawn at E.screenrows + 1.
-    int top = E.screenrows - rows; // title row
+    // -1 for the accent rule separating the panel from the buffer above it.
+    int top = E.screenrows - rows - 1;
     if (top < 1)
         top = 1;
 
@@ -290,19 +303,27 @@ static void drawPanel(struct abuf *ab, const char *title,
     if (shown > count)
         shown = count;
 
+    // A thin accent-colored rule, so the panel reads as a distinct surface
+    // dropped over the editor rather than text that happens to appear at
+    // the bottom of it.
     ab_move(ab, top, 1);
-    ab_sgr(ab, "1;36;40");
+    ab_sgr(ab, style.chrome);
+    for (int c = 0; c < E.screencols; c++) abAppend(ab, "─", 3);
+    AB_RESET(ab);
+
+    ab_move(ab, top + 1, 1);
+    ab_sgr(ab, style.title);
     char header[192];
     if (truncated && shown < count)
-        snprintf(header, sizeof(header), "%s  (+%d more)", title, count - shown);
+        snprintf(header, sizeof(header), " %s  (+%d more)", title, count - shown);
     else
-        snprintf(header, sizeof(header), "%s", title);
+        snprintf(header, sizeof(header), " %s", title);
     abAppendPadded(ab, header, E.screencols, E.screencols);
     AB_RESET(ab);
 
     for (int r = 0; r < rows; r++) {
-        ab_move(ab, top + 1 + r, 1);
-        ab_sgr(ab, "0;37;40");
+        ab_move(ab, top + 2 + r, 1);
+        ab_sgr(ab, style.row);
         int used = 0;
         for (int c = 0; c < cols; c++) {
             // Column-major so the list reads top-to-bottom, like Emacs'.

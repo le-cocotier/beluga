@@ -47,7 +47,8 @@ src_files = files(
   'src/pty_session.c',
   'src/term_render.c',
   'src/ansi_parser.c',
-  'src/which_key.c'
+  'src/which_key.c',
+  'src/popup_ui.c'
 )
 
 # Executable

@@ -13,27 +13,12 @@
 #include "../include/terminal.h"
 #include "../include/utf8.h"
 #include "../include/define.h"
+#include "../include/popup_ui.h"
 
 #include <stdio.h>
 #include <string.h>
 
 extern EditorConfig E;
-
-// ─── ANSI helpers (same small private set lsp_ui.c keeps for itself) ──────────
-
-static void ab_move(struct abuf *ab, int row, int col) {
-    char esc[32];
-    int n = snprintf(esc, sizeof(esc), "\x1b[%d;%dH", row, col);
-    abAppend(ab, esc, n);
-}
-
-static void ab_sgr(struct abuf *ab, const char *codes) {
-    char esc[32];
-    int n = snprintf(esc, sizeof(esc), "\x1b[%sm", codes);
-    abAppend(ab, esc, n);
-}
-
-#define AB_RESET(ab) ab_sgr(ab, "0")
 
 /**
  * @brief Formats one buffer's display line: "<id>: <filename> [*]".
@@ -114,22 +99,18 @@ void bufferSwitcherDraw(struct abuf *ab) {
         b = b->next;
     } while (b->buffer_id != first_buffer_id);
 
-    if (content_w > E.screencols - 4) content_w = E.screencols - 4;
+    if (content_w > E.screencols - 6) content_w = E.screencols - 6;
     if (content_w < 10) content_w = 10;
-    int box_w = content_w + 4; // "| " + text + " |"
+    int box_w = content_w + 4; // border(2) + marker/margin(1) + margin(1)
     int box_h = count + 2; // rows + top/bottom border
 
-    int origin_x = (E.screencols - box_w) / 2;
-    int origin_y = (E.screenrows - box_h) / 2;
-    if (origin_x < 1) origin_x = 1;
-    if (origin_y < 1) origin_y = 1;
+    int origin_x, origin_y;
+    popupCenter(box_w, box_h, &origin_x, &origin_y);
 
-    // ── top border ──────────────────────────────────────────────────────────
-    ab_move(ab, origin_y, origin_x);
-    ab_sgr(ab, "0;37;40");
-    abAppend(ab, "┌", 3);
-    for (int i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
-    abAppend(ab, "┐", 3);
+    PopupStyle style;
+    popupStyleInit(&style);
+
+    popupDrawTop(ab, &style, origin_x, origin_y, box_w);
 
     // ── rows: second pass, walking the list again to draw ──────────────────
     int row = 0;
@@ -137,10 +118,7 @@ void bufferSwitcherDraw(struct abuf *ab) {
     do {
         int is_sel = (b->buffer_id == E.buffer_switcher.current_buffer_id);
 
-        ab_move(ab, origin_y + 1 + row, origin_x);
-        ab_sgr(ab, is_sel ? "7" : "0;37;40");
-
-        abAppend(ab, "| ", 2);
+        popupRowBegin(ab, &style, origin_x, origin_y + 1 + row, is_sel);
 
         char line[160];
         formatBufferLine(b, line, sizeof(line));
@@ -149,18 +127,12 @@ void bufferSwitcherDraw(struct abuf *ab) {
         padded[content_w] = '\0'; // truncate if the line itself overruns content_w
         abAppend(ab, padded, content_w);
 
-        abAppend(ab, " |", 2);
-        AB_RESET(ab);
+        popupRowEnd(ab, &style);
 
         row++;
         b = b->next;
     } while (b->buffer_id != first_buffer_id);
 
-    // ── bottom border ───────────────────────────────────────────────────────
-    ab_move(ab, origin_y + 1 + count, origin_x);
-    ab_sgr(ab, "0;37;40");
-    abAppend(ab, "└", 3);
-    for (int i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
-    abAppend(ab, "┘", 3);
-    AB_RESET(ab);
+    popupDrawBottom(ab, &style, origin_x, origin_y + 1 + count, box_w);
+    popupDrawShadow(ab, &style, origin_x, origin_y, box_w, box_h);
 }

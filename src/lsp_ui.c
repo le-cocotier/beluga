@@ -11,19 +11,17 @@
 #include "../include/cJSON.h"
 #include "../include/append_buffer.h"
 #include "../include/terminal.h"
+#include "../include/popup_ui.h"
 
 // ─── ANSI helpers ─────────────────────────────────────────────────────────────
-
-// Move terminal cursor to absolute (col, row) — 1-based
-static void ab_move(struct abuf *ab, int row, int col) {
-    char esc[32];
-    int  n = snprintf(esc, sizeof(esc), "\x1b[%d;%dH", row, col);
-    abAppend(ab, esc, n);   // your existing abAppend
-}
+// (the completion popup's chrome now lives in popup_ui.c — these remain for
+// the per-cell gutter/diagnostic-severity coloring below, which draws single
+// glyphs inline rather than whole popup rows)
 
 static void ab_sgr(struct abuf *ab, const char *codes) {
-    char esc[32];
+    char esc[48];
     int  n = snprintf(esc, sizeof(esc), "\x1b[%sm", codes);
+    if (n >= (int) sizeof(esc)) n = (int) sizeof(esc) - 1; // defensive: never over-read on truncation
     abAppend(ab, esc, n);
 }
 
@@ -74,19 +72,17 @@ static const char *kind_color(int k) {
 
 // ─── Draw completion popup ───────────────────────────────────────────────────
 //
-//  ┌──────────────────────┐
-//  │ include <header>     │  ← selected (reverse video)
-//  │ include "header"     │
-//  │ include_next "header │
-//  │ include_next <header │
-//  │ define macro(args)   │
-//  │ define macro         │
-//  │ error message        │
-//  │ if condition         │
-//  └──────────────────────┘
+//  ╭──────────────────────╮
+//  │▎fn  printf           │  ← selected: accent marker + tinted row
+//  │ kwd if                │
+//  │ var argc              │
+//  ╰──────────────────────╯░
+//   ░░░░░░░░░░░░░░░░░░░░░░░░
 //
 // Drawn using absolute cursor positioning — safe to call inside
-// editorRefreshScreen() before the final write().
+// editorRefreshScreen() before the final write(). Chrome (border, tinted
+// selection, drop shadow) is popup_ui.c's job; this function only knows
+// about completion-specific content (kind tags + labels).
 
 void lspUiDrawCompletion(struct abuf *ab, CompletionPopup *popup) {
     if (!popup->visible || popup->count == 0) return;
@@ -106,34 +102,30 @@ void lspUiDrawCompletion(struct abuf *ab, CompletionPopup *popup) {
         int label_len = (int) strlen(popup->items[idx].label);
         if (label_len > content_w) content_w = label_len;
     }
-    // +5 for "| " + a 3-char kind tag + the space separating it from the label
-    if (content_w > COMPLETION_MAX_WIDTH - 9) content_w = COMPLETION_MAX_WIDTH - 9;
-    int box_w = content_w + 9; // "| " + tag(3) + " " + text + " |"
+    // +5 for the tag(3) + the space separating it from the label; the
+    // marker/border/margin overhead is popupRowBegin/End's job, not ours.
+    if (content_w > COMPLETION_MAX_WIDTH - 5) content_w = COMPLETION_MAX_WIDTH - 5;
+    int box_w = content_w + 4 + 5; // border+marker+margin*2 (4) + tag+space (5)
 
-    // ── top border ────────────────────────────────────────────────────────────
-    ab_move(ab, popup->origin_y, popup->origin_x);
-    ab_sgr(ab, "0;37;40");
-    abAppend(ab, "┌", 3);
-    for (int i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
-    abAppend(ab, "┐", 3);
+    PopupStyle style;
+    popupStyleInit(&style);
 
-    // ── rows ──────────────────────────────────────────────────────────────────
+    popupDrawTop(ab, &style, popup->origin_x, popup->origin_y, box_w);
+
     for (int i = 0; i < visible_count; i++) {
         int idx = i + scroll;
         CompletionItem *it = &popup->items[idx];
         int is_sel = (idx == popup->selected);
-        const char *row_style = is_sel ? "7" : "0;37;40";
+        int row = popup->origin_y + 1 + i;
 
-        ab_move(ab, popup->origin_y + 1 + i, popup->origin_x);
-        ab_sgr(ab, row_style);
-        abAppend(ab, "| ", 2);
+        popupRowBegin(ab, &style, popup->origin_x, row, is_sel);
 
-        // Kind tag ("fn ", "var", "kwd"...) in its own color, then back to
-        // the row's base style (reverse video for the selected row, dim
-        // white otherwise) for the label text.
+        // Kind tag ("fn ", "var", "kwd"...) in its own fixed color — a
+        // bare fg override, same trick as the selection marker — then
+        // back to the row's own style for the label text.
         ab_sgr(ab, kind_color(it->kind));
         abAppend(ab, kind_tag(it->kind), 3);
-        ab_sgr(ab, row_style);
+        popupRowStyle(ab, &style, is_sel);
         abAppend(ab, " ", 1);
 
         char label_col[COMPLETION_MAX_WIDTH];
@@ -142,17 +134,11 @@ void lspUiDrawCompletion(struct abuf *ab, CompletionPopup *popup) {
         label_col[content_w] = '\0';
         abAppend(ab, label_col, content_w);
 
-        abAppend(ab, " |", 2);
-        AB_RESET(ab);
+        popupRowEnd(ab, &style);
     }
 
-    // ── bottom border ─────────────────────────────────────────────────────────
-    ab_move(ab, popup->origin_y + 1 + visible_count, popup->origin_x);
-    ab_sgr(ab, "0;37;40");
-    abAppend(ab, "└", 3);
-    for (int i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
-    abAppend(ab, "┘", 3);
-    AB_RESET(ab);
+    popupDrawBottom(ab, &style, popup->origin_x, popup->origin_y + 1 + visible_count, box_w);
+    popupDrawShadow(ab, &style, popup->origin_x, popup->origin_y, box_w, 2 + visible_count);
 }
 
 
