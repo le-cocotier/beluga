@@ -243,8 +243,6 @@ void editorRunLoop(void)
         editorRefreshScreen();
     }
 
-    terminalRestore();
-
     // Clean shutdown: close any live shells before exiting
     if (E.buffers != NULL)
     {
@@ -257,4 +255,5 @@ void editorRunLoop(void)
             b = b->next;
         } while (b->buffer_id != first_buffer_id);
     }
+    terminalRestore();
 }
