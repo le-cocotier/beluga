@@ -93,7 +93,7 @@ void editorOpen(struct buffer_t* buffer) {
   int line_length = 0;
   while (*pFileContent->character != '\0')
   {
-    while (*pEndLine->character != '\n')
+    while (*pEndLine->character != '\n' && *pEndLine->character != '\0')
     {
       // appDebug("%s %s", file_content->character, pEndLine->character);
       pEndLine++;
