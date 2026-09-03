@@ -517,6 +517,39 @@ void editorDrawMessageBar(struct abuf *ab) {
  * @see editorDrawMessageBar()
  */
 
+// ── Frame de-duplication ────────────────────────────────────────────────────
+//
+// editorRunLoop() calls this unconditionally on every ~50ms tick — needed so
+// time-driven UI (the which-key delay, the 5s status-message timeout) keeps
+// working without a keypress — but that means a totally static screen (user
+// reading, not typing) was being sent an identical, full-screen repaint
+// roughly 19 times a second, hiding and re-showing the cursor every single
+// time. That's what actually produced the flicker: many terminals (tmux
+// especially) visibly blink the hardware cursor on every hide/show pair even
+// when nothing underneath moved. Caching the last frame written and skipping
+// the write() when the new one is byte-for-byte identical (same content,
+// same cursor position) fixes it without touching the redraw cadence itself.
+// Never freed — a process-lifetime cache, same as several other globals here.
+static char *g_prev_frame = NULL;
+static int g_prev_frame_len = 0;
+static int g_prev_frame_cap = 0;
+
+static int screenFrameChanged(const char *buf, int len) {
+  if (len != g_prev_frame_len) return 1;
+  return len > 0 && memcmp(buf, g_prev_frame, (size_t) len) != 0;
+}
+
+static void screenFrameCache(const char *buf, int len) {
+  if (len > g_prev_frame_cap) {
+    char *grown = realloc(g_prev_frame, (size_t) len);
+    if (!grown) return; // best-effort: next frame just always looks "changed"
+    g_prev_frame = grown;
+    g_prev_frame_cap = len;
+  }
+  memcpy(g_prev_frame, buf, (size_t) len);
+  g_prev_frame_len = len;
+}
+
 void editorRefreshScreen() {
   struct abuf ab = ABUF_INIT;
   char buf[32];
@@ -580,6 +613,10 @@ void editorRefreshScreen() {
            active->cursor_x + active->origin_x + 1 + editorGutterWidth(buffer));
   abAppend(&ab, buf, (int)strlen(buf));
   abAppend(&ab, SHOW_CURSOR, 6);
-  write(STDOUT_FILENO, ab.b, ab.len);
+
+  if (screenFrameChanged(ab.b, ab.len)) {
+    write(STDOUT_FILENO, ab.b, ab.len);
+    screenFrameCache(ab.b, ab.len);
+  }
   abFree(&ab);
 }
