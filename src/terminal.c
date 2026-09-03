@@ -97,6 +97,15 @@ char* keyToString(Utf8Char* key)
     {
         strcpy(key_str, "TAB");
     }
+    else if (c == 0x00)
+    {
+        // Ctrl+Space (and, on most terminals, indistinguishably Ctrl+@)
+        // sends a literal NUL byte — Space is 0x20, and Ctrl clears bits
+        // 5-6, landing on 0. Named separately from the CTRL-<letter> range
+        // just below (which starts at 1, deliberately excluding this):
+        // 0 isn't "CTRL-`" in any convention a user would actually type.
+        strcpy(key_str, "CTRL-SPACE");
+    }
     else if (c >= 1 && c <= 26)
     {
         snprintf(key_str, sizeof(key_str), "CTRL-%c", 'a' + c - 1);
