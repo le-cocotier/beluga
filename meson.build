@@ -17,6 +17,7 @@ thread_dep = dependency('threads')
 # Darwin exposes these regardless, so defining this unconditionally costs
 # nothing on macOS.
 add_project_arguments('-D_GNU_SOURCE', language : 'c')
+add_project_arguments('-g', language : 'c')
 
 # forkpty() lives in libutil on Linux; on macOS/BSD it is in libc and this
 # lookup simply finds nothing, which is why it is not `required`.

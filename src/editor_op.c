@@ -222,7 +222,7 @@ void editorRunLoop(void)
                 } while (b->buffer_id != first_buffer_id);
             }
 
-            if (E.constantes.LSP && E.lsp_client && FD_ISSET(E.lsp_client->read_from_server_fd, &readfds))
+            if (E.constantes.LSP  && E.lsp_client && (E.lsp_client->read_from_server_fd >= 0) && FD_ISSET(E.lsp_client->read_from_server_fd, &readfds))
                 lspPoll(E.lsp_client);
 
             if (FD_ISSET(STDIN_FILENO, &readfds))

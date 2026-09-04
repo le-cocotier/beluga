@@ -164,10 +164,10 @@ fi
 # associative array, since macOS ships bash 3.2 as /bin/bash (no declare -A
 # support; that needs bash 4+) and this script's shebang targets /bin/bash.
 BELUGA_PACKAGES="
-outline https://git.giorgio-nas.fr/beluga/outine.git
-smart_delimiters https://git.giorgio-nas.fr/beluga/smart_delimiters.git
-c https://git.giorgio-nas.fr/beluga/c.git
-explorer https://git.giorgio-nas.fr/beluga/explorer.git
+outline https://git.giorgio-nas.fr/arthur/outine.git
+smart_delimiters https://git.giorgio-nas.fr/arthur/smart_delimiters.git
+c https://git.giorgio-nas.fr/arthur/c.git
+explorer https://git.giorgio-nas.fr/arthur/explorer.git
 "
 
 if [ "$SKIP_PACKAGES" -eq 1 ]; then

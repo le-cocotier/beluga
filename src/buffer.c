@@ -15,6 +15,13 @@
 #include <libgen.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <time.h>
+#include <errno.h>
 
 #include "../include/utf8.h"
 #include "../include/completion.h"
@@ -423,37 +430,130 @@ void bufferApplyTextEdit(struct buffer_t* buf, int start_row, int start_col,
  **********************************************************************************************************************/
 
 /**
+ * @brief Kills the whole process group (git and the sh that spawned it)
+ * and reaps it, so gitRunCommand()'s early-return paths don't each repeat
+ * the same three lines.
+ */
+static void gitKillAndReap(pid_t pid)
+{
+    kill(-pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+}
+
+/**
  * @brief Runs a shell command and returns its stdout, malloc'd and
  * NUL-terminated (trailing newline stripped), or NULL if it produced no
  * output (including "not a git repo" / "no such file" failures — git's own
  * stderr is silenced by the caller-supplied command with "2>/dev/null").
+ * @details Bounded to GIT_COMMAND_TIMEOUT_MS. A plain popen() + blocking
+ * read here would let a slow or hung git (huge repo, network-mounted
+ * .git, cold disk cache, a stuck credential/pager prompt) freeze the
+ * *entire editor* before even the first frame draws, since this runs
+ * synchronously inside bufferCreate() on every file open. If the deadline
+ * passes, the whole child process group is killed and NULL is returned —
+ * the same outcome as "not a git repo", which is exactly how a timed-out
+ * git integration should degrade.
  */
 static char* gitRunCommand(const char* cmd)
 {
-    FILE* pipe = popen(cmd, "r");
-    if (!pipe) return NULL;
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return NULL;
+
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return NULL;
+    }
+
+    if (pid == 0)
+    {
+        // Child: stdout -> pipe write end. stderr is already redirected
+        // by the caller's own "2>/dev/null" inside cmd. Its own process
+        // group lets the parent kill the whole sh+git tree on timeout,
+        // not just the immediate child.
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        setpgid(0, 0);
+        execl("/bin/sh", "sh", "-c", cmd, (char*) NULL);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    setpgid(pid, pid); // mirrors the child's own call — avoids the race
+                       // where the parent's kill(-pid, ...) below could
+                       // run before the child finishes joining its group
+    fcntl(pipefd[0], F_SETFL, O_NONBLOCK); // pipe fds start with flags 0,
+                                            // so this can't clobber anything
 
     size_t cap = 256, len = 0;
     char* out = malloc(cap);
-    if (!out) { pclose(pipe); return NULL; }
-
-    int c;
-    while ((c = fgetc(pipe)) != EOF)
+    if (!out)
     {
-        if (len + 1 >= cap)
+        close(pipefd[0]);
+        gitKillAndReap(pid);
+        return NULL;
+    }
+
+    const long GIT_COMMAND_TIMEOUT_MS = 1000;
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += GIT_COMMAND_TIMEOUT_MS / 1000;
+    deadline.tv_nsec += (GIT_COMMAND_TIMEOUT_MS % 1000) * 1000000;
+
+    int timed_out = 0;
+    for (;;)
+    {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long remaining_ms = (deadline.tv_sec - now.tv_sec) * 1000 +
+                            (deadline.tv_nsec - now.tv_nsec) / 1000000;
+        if (remaining_ms <= 0) { timed_out = 1; break; }
+
+        struct pollfd pfd = { .fd = pipefd[0], .events = POLLIN };
+        int pr = poll(&pfd, 1, (int) remaining_ms);
+        if (pr < 0)
         {
-            cap *= 2;
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (pr == 0) { timed_out = 1; break; } // deadline reached
+
+        char chunk[512];
+        ssize_t n = read(pipefd[0], chunk, sizeof(chunk));
+        if (n <= 0)
+        {
+            if (n < 0 && errno == EAGAIN) continue;
+            break; // EOF or a real read error — command is done
+        }
+
+        if (len + (size_t) n + 1 > cap)
+        {
+            while (len + (size_t) n + 1 > cap) cap *= 2;
             char* grown = realloc(out, cap);
-            if (!grown) { free(out); pclose(pipe); return NULL; }
+            if (!grown)
+            {
+                free(out);
+                close(pipefd[0]);
+                gitKillAndReap(pid);
+                return NULL;
+            }
             out = grown;
         }
-        out[len++] = (char) c;
+        memcpy(out + len, chunk, (size_t) n);
+        len += (size_t) n;
     }
-    pclose(pipe);
 
-    while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
-        len--;
+    close(pipefd[0]);
+    if (timed_out)
+        kill(-pid, SIGKILL); // whole process group: sh and the git it spawned
+    waitpid(pid, NULL, 0);
+
     out[len] = '\0';
+    while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
+        out[--len] = '\0';
 
     if (len == 0) { free(out); return NULL; }
     return out;
