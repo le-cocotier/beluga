@@ -204,6 +204,13 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   if (content_width < 0)
     content_width = 0;
 
+  // Seed the syntax highlighter's cross-row block-comment state for
+  // wherever this pane's scroll position actually starts, rather than
+  // whatever comment_section was last left at by a previous pane or a
+  // previous scroll position — see the comment_state fields on
+  // struct buffer_t and commentStateAtRowStart()'s own doc comment.
+  syntaxHighlighterSeed(commentStateAtRowStart((struct buffer_t *) buf, pane->y_offset));
+
   // Draw all pane
   for (int y = 0; y < pane->height; y++) {
     file_row = y + pane->y_offset;

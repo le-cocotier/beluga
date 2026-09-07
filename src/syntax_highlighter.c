@@ -135,6 +135,136 @@ const char *get_color(TokenType type)
 
 int comment_section = 0;
 
+// ─── Block-comment state cache ──────────────────────────────────────────────
+//
+// highlight_line() relies on comment_section carrying state across
+// *consecutive* calls to correctly continue a comment from one visible row
+// to the next — that part is fine, and stays as-is. The gap is what
+// comment_section is seeded with *before* the first visible row of a
+// pane's render: previously, whatever the last call anywhere happened to
+// leave it at. After a scroll or a jump (or in a second split-screen pane,
+// which shares this one global with the first), that's frequently wrong —
+// a block comment opened above the visible window, or in the other pane's
+// buffer, was never actually seen by the highlighter, so its continuation
+// rendered as plain code instead of a comment.
+//
+// commentStateAtRowStart() answers "does row Y start inside an unclosed
+// comment?" by scanning the whole buffer from the top — output.c calls it
+// once per pane, right before that pane's row loop, and seeds
+// comment_section from the result.
+
+/**
+ * @brief Advances `in_comment` across one row, tracking only what's needed
+ * to answer "does the *next* row start inside a comment": comment
+ * continuation, line comments, block-comment openings, and skipping
+ * strings/char literals whole (so a block-comment-opening sequence inside
+ * one isn't mistaken for a real one) — the same token precedence
+ * highlight_line() itself uses, minus everything that doesn't affect that
+ * answer (numbers, identifiers, operators).
+ */
+static void scanRowForCommentState(const Row *row, int *in_comment)
+{
+    int i = 0;
+    while (i < row->size)
+    {
+        if (*in_comment)
+        {
+            if (isAsciiChar(&row->characters[i], '*') && i + 1 < row->size &&
+                isAsciiChar(&row->characters[i + 1], '/'))
+            {
+                *in_comment = 0;
+                i += 2;
+            }
+            else
+            {
+                i++;
+            }
+            continue;
+        }
+
+        // Line comment: nothing else on this row can matter once one starts.
+        if (isAsciiChar(&row->characters[i], '/') && i + 1 < row->size &&
+            isAsciiChar(&row->characters[i + 1], '/'))
+            return;
+
+        if (isAsciiChar(&row->characters[i], '/') && i + 1 < row->size &&
+            isAsciiChar(&row->characters[i + 1], '*'))
+        {
+            *in_comment = 1;
+            i += 2;
+            continue;
+        }
+
+        if (isAsciiChar(&row->characters[i], '"') || isAsciiChar(&row->characters[i], '\''))
+        {
+            unsigned char quote = row->characters[i].character[0];
+            i++;
+            while (i < row->size && !(row->characters[i].length == 1 &&
+                                      row->characters[i].character[0] == quote))
+            {
+                if (isAsciiChar(&row->characters[i], '\\'))
+                    i++; // also skip the escaped character, if there is one
+                i++;
+            }
+            if (i < row->size)
+                i++; // consume the closing quote
+            continue;
+        }
+
+        i++;
+    }
+}
+
+/**
+ * @brief Rebuilds buf->comment_state[] in one pass over the whole buffer,
+ * if it's stale (syntaxHighlighterInvalidate() was called since the last
+ * build) or the row count has changed. A no-op otherwise — this is what
+ * keeps re-seeding the highlighter on every frame from being an O(file
+ * size) cost on every single redraw; it's only paid once per edit.
+ */
+static void ensureCommentStateFresh(Buffer *buf)
+{
+    if (buf->comment_state_valid && buf->comment_state_numrows == buf->numrows)
+        return;
+
+    unsigned char *fresh = buf->numrows > 0 ? malloc((size_t) buf->numrows) : NULL;
+    if (buf->numrows > 0 && !fresh)
+        return; // best-effort: leave the previous (stale) cache in place rather than crash
+
+    int in_comment = 0;
+    for (int r = 0; r < buf->numrows; r++)
+    {
+        fresh[r] = (unsigned char) in_comment; // state at the *start* of this row
+        scanRowForCommentState(&buf->row[r], &in_comment);
+    }
+
+    free(buf->comment_state);
+    buf->comment_state = fresh;
+    buf->comment_state_numrows = buf->numrows;
+    buf->comment_state_valid = 1;
+}
+
+int commentStateAtRowStart(Buffer *buf, int row)
+{
+    if (!buf)
+        return 0;
+    ensureCommentStateFresh(buf);
+    if (!buf->comment_state || row < 0 || row >= buf->comment_state_numrows)
+        return 0;
+    return buf->comment_state[row];
+}
+
+void syntaxHighlighterInvalidate(Buffer *buf)
+{
+    if (buf)
+        buf->comment_state_valid = 0;
+}
+
+void syntaxHighlighterSeed(int in_comment)
+{
+    comment_section = in_comment;
+}
+
 /**
  * @brief Highlight one editor row and return an ANSI-colored, ready-to-render
  * byte string (raw UTF-8 + color escapes — not a Utf8Char array, since this

@@ -30,6 +30,7 @@
 #include "../include/terminal.h"
 #include "../include/pty_session.h"
 #include "../include/builtins.h"
+#include "../include/syntax_highlighter.h"
 
 /***********************************************************************************************************************
  *
@@ -163,6 +164,7 @@ static void rowRemoveAt(struct buffer_t* buf, int at)
     bufferFreeRow(&buf->row[at]);
     memmove(&buf->row[at], &buf->row[at + 1], sizeof(Row) * (buf->numrows - at - 1));
     buf->numrows--;
+    syntaxHighlighterInvalidate(buf);
 }
 
 /**
@@ -1039,6 +1041,7 @@ int bufferClose(int buffer_id)
     free(buf->undo_stack.entries);
     free(buf->redo_stack.entries);
     free(buf->git_lines);
+    free(buf->comment_state);
     buf->buffer_id = -1;
 
     buf->next->prev = buf->prev;
@@ -1414,6 +1417,7 @@ void bufferInsertRow(struct buffer_t* buffer, int at, Utf8Char* string, int len)
     {
         buffer->dirty++;
     }
+    syntaxHighlighterInvalidate(buffer);
 }
 
 void bufferFreeRow(Row* row) {
@@ -1454,6 +1458,7 @@ void bufferRowInsertChar(struct buffer_t* buffer, Row* row, int at,
         {
             ++buffer->dirty;
         }
+        syntaxHighlighterInvalidate(buffer);
 
 }
 
@@ -1477,6 +1482,7 @@ void bufferRowDelChar(struct buffer_t* buffer, Row* row, int at)
     memmove(row->characters + at, row->characters + (at + 1), (row->size - at - 1) * sizeof(Utf8Char));
     row->size -= 1;
     END_OF_STRING(row->characters[row->size]);
+    syntaxHighlighterInvalidate(buffer);
 }
 
 

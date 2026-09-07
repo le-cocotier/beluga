@@ -421,6 +421,19 @@ typedef struct buffer_t
     GitLineStatus* git_lines;  // one entry per row, NULL until refreshed
     int git_lines_count;       // rows git_lines[] currently covers
 
+    // ── Syntax highlighter: block-comment state cache ────────────────────
+    // highlight_line() only ever sees whichever rows are currently on
+    // screen — it has no way to know, from a mid-file scroll position,
+    // whether row Y starts inside an unclosed "/* ... */" that opened
+    // somewhere above the visible window. comment_state[Y] answers that:
+    // 1 if row Y starts inside such a comment, computed by scanning the
+    // whole buffer from the top. Invalidated (comment_state_valid = 0) on
+    // any edit and recomputed lazily, once, the next time it's read —
+    // see ensureCommentStateFresh() in syntax_highlighter.c.
+    unsigned char* comment_state;
+    int comment_state_numrows;  // rows comment_state[] currently covers
+    int comment_state_valid;
+
     struct buffer_t* next;
     struct buffer_t* prev;
 
