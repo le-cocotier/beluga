@@ -129,14 +129,14 @@ void popupDrawTitleRow(struct abuf *ab, const PopupStyle *style,
                        const char *title, int content_w) {
     ab_move(ab, row, origin_x);
     ab_sgr(ab, style->chrome);
-    abAppend(ab, "│ ", 2);
+    abAppend(ab, "│ ", 4);
     ab_sgr(ab, style->title);
     char padded[128];
     int n = snprintf(padded, sizeof(padded), "%-*.*s", content_w, content_w, title);
     if (n > content_w) n = content_w;
     abAppend(ab, padded, n);
     ab_sgr(ab, style->chrome);
-    abAppend(ab, " │", 2);
+    abAppend(ab, " │", 4);
     AB_RESET(ab);
 }
 

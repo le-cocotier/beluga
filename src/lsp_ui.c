@@ -74,8 +74,8 @@ static const char *kind_color(int k) {
 //
 //  ╭──────────────────────╮
 //  │▎fn  printf           │  ← selected: accent marker + tinted row
-//  │ kwd if                │
-//  │ var argc              │
+//  │ kwd if               │
+//  │ var argc             │
 //  ╰──────────────────────╯░
 //   ░░░░░░░░░░░░░░░░░░░░░░░░
 //
@@ -133,6 +133,7 @@ void lspUiDrawCompletion(struct abuf *ab, CompletionPopup *popup) {
         // truncate if the label itself is longer than content_w
         label_col[content_w] = '\0';
         abAppend(ab, label_col, content_w);
+        abAppend(ab, " ", 1);
 
         popupRowEnd(ab, &style);
     }
