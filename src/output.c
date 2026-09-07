@@ -216,6 +216,17 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
     // Apply background color (6 bytes for RGB format)
     abAppend(ab, E.theme.BACKGROUND_COLOR,
              (int)strlen(E.theme.BACKGROUND_COLOR));
+    // ...and the theme's default foreground, so text drawn without its own
+    // explicit color (the tilde below, and the whole plain-text branch
+    // further down for anything that isn't a .c/.h file — the explorer
+    // sidebar included) renders in a deliberate, theme-consistent color
+    // instead of whatever was last left active by a previous row (line
+    // numbers reset to the terminal's own default and never re-set an
+    // explicit fg of their own; a syntax-highlighted C row leaves its
+    // last token's color active). Harmless for highlight_line() output:
+    // its very first byte is always one of its own color codes, which
+    // simply overrides this immediately.
+    abAppend(ab, E.theme.COLOR_DEFAULT, (int) strlen(E.theme.COLOR_DEFAULT));
 
     // pane line is out of buffer height
     if (file_row >= buf->numrows) {
@@ -239,6 +250,12 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         abAppend(ab, num_buf, num_len);
         abAppend(ab, "\x1b[0m", 4);
         abAppend(ab, E.theme.BACKGROUND_COLOR, (int) strlen(E.theme.BACKGROUND_COLOR));
+        // The \x1b[0m above also clears the default-fg set at the top of
+        // this row's render — re-set it before content starts, or every
+        // non-.c/.h FILE_BUFF (the common case — .txt, .md, .lisp, ...)
+        // renders its text in the terminal's own default color, not the
+        // theme's, the moment line numbers are on (the default).
+        abAppend(ab, E.theme.COLOR_DEFAULT, (int) strlen(E.theme.COLOR_DEFAULT));
       }
       if (has_gutter) {
         GitLineStatus git_status = (buf->git_lines && file_row < buf->git_lines_count)
