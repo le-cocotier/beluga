@@ -6,6 +6,7 @@
 #include "../include/split_screen.h"
 #include "../include/buffer.h"
 #include "../include/editor_op.h"
+#include "../include/pty_session.h"
 #include "include/builtins.h"
 #include "include/data.h"
 #include <stdlib.h>
@@ -98,6 +99,7 @@ int splitScreenVertical(int buffer_id_left, int buffer_id_right) {
     E.layout.panes[1].x_offset = 0;
     E.layout.panes[1].is_active = 0;
 
+    splitScreenSyncTerminalSizes();
     editorSetStatusMessage("Vertical split: %d | %d", buffer_id_left, buffer_id_right);
     return 0;
 }
@@ -148,6 +150,7 @@ int splitScreenHorizontal(int buffer_id_top, int buffer_id_bottom) {
     E.layout.panes[1].y_offset = 0;
     E.layout.panes[1].is_active = 0;
 
+    splitScreenSyncTerminalSizes();
     editorSetStatusMessage("Horizontal split: %d / %d", buffer_id_top, buffer_id_bottom);
     return 0;
 }
@@ -167,6 +170,38 @@ void splitScreenUnify(void) {
     E.layout.panes[0].is_active = 1;
 
     editorSetStatusMessage("Unified view");
+    splitScreenSyncTerminalSizes();
+}
+
+/**
+ * @brief Tells every terminal buffer currently in a pane how big its pane
+ * is now.
+ * @details A PTY is sized once, when the shell is spawned, from whatever
+ * pane it was opened in. Every later change to the layout — splitting,
+ * unifying, opening or closing the sidebar, resizing the window — moves
+ * that pane's edges without the shell hearing about it, so it keeps
+ * wrapping its output to the old width. The rows it produces are then
+ * wider than the pane they're drawn in (terminal rows are clipped at
+ * render time, so this shows up as truncation rather than as text spilling
+ * into the neighbouring pane, but the shell is still laying out for a
+ * screen that isn't there). Call this after anything that changes pane
+ * geometry.
+ * @note Walks the panes rather than the buffer list on purpose: a terminal
+ * buffer that isn't currently displayed has no size to be resized to, and
+ * SIGWINCH previously only ever resized the *active* pane's terminal —
+ * so a terminal sitting in the other half of a split silently kept a stale
+ * size for the rest of the session.
+ */
+void splitScreenSyncTerminalSizes(void) {
+    ScreenLayout *layout = &E.layout;
+    for (int i = 0; i < layout->num_panes; i++) {
+        EditorPane *pane = &layout->panes[i];
+        struct buffer_t *buf = bufferFindById(pane->buffer_id);
+        if (!buf || buf->type != TERMINAL_BUFF || buf->pty_master_fd < 0)
+            continue;
+        ptySessionResize(buf, pane->height, pane->width);
+        buf->term_state.pane_height = pane->height;
+    }
 }
 
 /**
@@ -232,6 +267,7 @@ int splitScreenWithSidebar(int sidebar_buffer_id, int main_buffer_id, int sideba
     struct prefix_t prefix = find_prefix(bufferFocusPrefix(bufferFindById(sidebar_buffer_id)));
     E.prefix_state = prefix.prefix_id;
 
+    splitScreenSyncTerminalSizes();
     editorSetStatusMessage("Explorer opened");
     return 0;
 }

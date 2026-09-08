@@ -151,13 +151,11 @@ void editorRunLoop(void)
             g_winch_received = 0;
             getWindowSize(&E.screenrows, &E.screencols);
             E.screenrows -= 2;
-            // Propagate to the active pane's PTY, if it's a terminal buffer
-            EditorPane* active = splitScreenGetActivePane();
-            struct buffer_t* buf = bufferFindById(active->buffer_id);
-            if (buf && buf->type == TERMINAL_BUFF) {
-                ptySessionResize(buf, active->height, active->width);
-                buf->term_state.pane_height = active->height;
-            }
+            // Every pane's terminal, not just the active one: a terminal
+            // sitting in the other half of a split is just as affected by
+            // the window changing size, and used to keep the size it was
+            // spawned with for the rest of the session.
+            splitScreenSyncTerminalSizes();
         }
 
         fd_set readfds;

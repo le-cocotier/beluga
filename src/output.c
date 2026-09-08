@@ -287,7 +287,11 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
       }
 
       if (buf->type == TERMINAL_BUFF) {
-        highlighted = termRenderRow(&buf->row[file_row], &byte_len_to_print);
+        // Clipped to the pane, exactly like the file paths below: a
+        // terminal row is as wide as the PTY was when the shell wrote it,
+        // which stops matching the pane the moment the layout changes.
+        highlighted = termRenderRow(&buf->row[file_row], &byte_len_to_print,
+                                    pane->x_offset, content_width);
         abAppend(ab, highlighted, byte_len_to_print);
         free(highlighted);
       } else {

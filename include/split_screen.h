@@ -46,6 +46,12 @@ void splitScreenUnify(void);
  */
 int splitScreenWithSidebar(int sidebar_buffer_id, int main_buffer_id, int sidebar_width);
 
+// Tells every terminal buffer currently shown in a pane how big its pane
+// is now. Call after anything that changes pane geometry — a split, a
+// unify, a sidebar open/close, a window resize — or the shell keeps
+// wrapping its output to whatever size it was spawned with.
+void splitScreenSyncTerminalSizes(void);
+
 /**
  * @brief Collapses a sidebar split back to fullscreen, keeping whichever
  * pane ISN'T an EXPLORER_BUFF visible (rather than always keeping pane 0,

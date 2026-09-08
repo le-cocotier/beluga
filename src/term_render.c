@@ -22,9 +22,20 @@ static void appendSgrFor(char* out, int* pos, int buf_size, TermCellAttr a)
     *pos += snprintf(out + *pos, buf_size - *pos, "%s", codes);
 }
 
-char* termRenderRow(const Row* row, int* length)
+char* termRenderRow(const Row* row, int* length, int x_offset, int width)
 {
-    int buf_size = (row->size + 1) * 32 + 64;
+    if (x_offset < 0) x_offset = 0;
+    if (width < 0) width = 0;
+
+    int start = x_offset;
+    int end = x_offset + width;
+    if (start > row->size) start = row->size;
+    if (end > row->size) end = row->size;
+
+    int visible = end - start;
+    if (visible < 0) visible = 0;
+
+    int buf_size = (visible + 1) * 32 + 64;
     char* result = malloc(buf_size);
     if (!result) { *length = 0; return NULL; }
 
@@ -32,7 +43,7 @@ char* termRenderRow(const Row* row, int* length)
     TermCellAttr last_attr;
     memset(&last_attr, 0xFF, sizeof(last_attr)); // force a mismatch on first cell
 
-    for (int i = 0; i < row->size; i++)
+    for (int i = start; i < end; i++)
     {
         TermCellAttr attr = row->attrs ? row->attrs[i] : (TermCellAttr){0};
 
