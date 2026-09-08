@@ -75,6 +75,92 @@ void editorCloseFile(void) {
  * @note Newline characters are stripped from loaded lines
  * @see editorInsertRow()
  */
+/**
+ * @brief Expands raw tab bytes (0x09) in one line into spaces, aligned to
+ * real tab stops (every TAB_LENGTH columns), before the line ever reaches
+ * a Row.
+ * @details Every OTHER way a tab could end up in a buffer already goes
+ * through spaces instead — editor-insert-tab (bound to the TAB key)
+ * inserts TAB_LENGTH literal space characters, never a raw 0x09 — so a
+ * buffer's rows were never actually expected to contain one. Loading a
+ * file is the one path that bypassed that: whatever bytes were on disk
+ * went straight into the row unchanged, tab included.
+ *
+ * That's not just a cosmetic gap. Nothing in the renderer's width
+ * accounting (gutter width, content_width clipping, the trailing pad-to-
+ * width loop) has any idea a raw 0x09 can occupy more than the one column
+ * everything else assumes — but a real terminal expands it to the next
+ * tab stop, anywhere from 1 to TAB_LENGTH columns depending on where it
+ * lands. The gap between what beluga budgeted and what the terminal
+ * actually consumed compounds across a row and, once it's enough to
+ * exceed the pane's width, corrupts every row below it as the terminal's
+ * own auto-wrap kicks in somewhere beluga never intended a line break.
+ *
+ * Expanding at load time — rather than teaching every column-position
+ * consumer (cursor movement, undo, the syntax highlighter, selection
+ * bounds) to treat a tab as variable-width — keeps a buffer's rows in the
+ * same "1 character = 1 column" world every one of those already assumes,
+ * at the cost of the file's own tab bytes not surviving a save unchanged
+ * (they come back as the equivalent spaces) — the same trade-off
+ * editor-insert-tab already makes for freshly-typed ones.
+ * @return A newly malloc'd, tab-expanded copy of `line` if it contained
+ * any tabs (caller frees it), or NULL if it didn't (caller keeps using
+ * `line` as-is — the common case, worth not allocating for).
+ */
+static Utf8Char* expandTabsForLine(const Utf8Char* line, int len, int* out_len)
+{
+  int has_tab = 0;
+  for (int i = 0; i < len; i++)
+    if (line[i].length == 1 && line[i].character[0] == '\t') { has_tab = 1; break; }
+  if (!has_tab)
+    return NULL;
+
+  int tab_len = E.constantes.TAB_LENGTH > 0 ? E.constantes.TAB_LENGTH : 4;
+
+  // Worst case, a tab at column 0 costs tab_len columns; one pass to find
+  // the real expanded length, then a second to actually fill it, rather
+  // than repeatedly grow a single buffer as we go.
+  int col = 0, expanded_len = 0;
+  for (int i = 0; i < len; i++)
+  {
+    if (line[i].length == 1 && line[i].character[0] == '\t')
+    {
+      int spaces = tab_len - (col % tab_len);
+      expanded_len += spaces;
+      col += spaces;
+    }
+    else
+    {
+      expanded_len++;
+      col++;
+    }
+  }
+
+  Utf8Char* out = malloc((size_t) expanded_len * sizeof(Utf8Char));
+  if (!out) return NULL;
+
+  int j = 0;
+  col = 0;
+  Utf8Char space = { .character = { ' ', 0, 0, 0 }, .length = 1 };
+  for (int i = 0; i < len; i++)
+  {
+    if (line[i].length == 1 && line[i].character[0] == '\t')
+    {
+      int spaces = tab_len - (col % tab_len);
+      for (int s = 0; s < spaces; s++) out[j++] = space;
+      col += spaces;
+    }
+    else
+    {
+      out[j++] = line[i];
+      col++;
+    }
+  }
+
+  *out_len = expanded_len;
+  return out;
+}
+
 void editorOpen(struct buffer_t* buffer) {
 
 
@@ -99,7 +185,19 @@ void editorOpen(struct buffer_t* buffer) {
       pEndLine++;
     }
     line_length = (int) (pEndLine - pFileContent);
-    bufferInsertRow(buffer, buffer->numrows, pFileContent, line_length);
+
+    int expanded_len = 0;
+    Utf8Char* expanded = expandTabsForLine(pFileContent, line_length, &expanded_len);
+    if (expanded)
+    {
+      bufferInsertRow(buffer, buffer->numrows, expanded, expanded_len);
+      free(expanded);
+    }
+    else
+    {
+      bufferInsertRow(buffer, buffer->numrows, pFileContent, line_length);
+    }
+
     pEndLine++;
     pFileContent = pEndLine;
   }
