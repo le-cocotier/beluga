@@ -1,5 +1,6 @@
 #include "../include/init.h"
 #include "../include/builtins.h"
+#include "../include/project_search.h"
 #include "../include/color.h"
 #include "../include/data.h"
 #include "../include/terminal.h"
@@ -99,6 +100,8 @@ void initBuiltins() {
   registerBuiltin("editor-scratch-set-lines", editorScratchSetLines);
   registerBuiltin("editor-explorer-sidebar-open", editorExplorerSidebarOpen);
   registerBuiltin("editor-explorer-close", editorExplorerClose);
+  registerBuiltin("project-search", l_projectSearch);
+  registerBuiltin("project-search-goto", l_projectSearchGoto);
 }
 
 void initConfig() {
@@ -221,10 +224,23 @@ void initEditor() {
   E.number_of_lsp_servers = 0;
   E.number_of_prefix = 0;
   // General prefix is 0 (no prefix)
-  E.prefix = (struct prefix_t *)malloc(sizeof(struct prefix_t)); // Allocation for inly one prefix
+  E.prefix = (struct prefix_t *)malloc(sizeof(struct prefix_t) * 2);
   E.prefix[0].prefix_id = 0;
   E.prefix[0].sticky = 0;
   sprintf(E.prefix[0].prefix_name, "no-prefix");
+
+  // "search" is registered here rather than left to init.lisp because the
+  // search results buffer switches to it from C the moment results are
+  // shown. A config predating this feature would leave find_prefix()
+  // returning -1 there, so the buffer would come up under whatever prefix
+  // happened to be active — with ENTER meaning something else entirely.
+  // Sticky, so arrow keys can walk the result list without dropping out
+  // after the first press.
+  E.number_of_prefix = 1;
+  E.prefix[1].prefix_id = 1;
+  E.prefix[1].sticky = 1;
+  sprintf(E.prefix[1].prefix_name, "search");
+
   E.prefix_state = 0;
   E.prompt_input = NULL;
   E.prompt_is_command = 0;
@@ -269,6 +285,9 @@ void deInitEditor()
 
     // free prefix
     free(E.prefix);
+
+    // free the project-search result list
+    projectSearchFree();
     // free lsp_client
     if (E.lsp_client)
     {

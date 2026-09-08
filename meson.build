@@ -49,7 +49,9 @@ src_files = files(
   'src/term_render.c',
   'src/ansi_parser.c',
   'src/which_key.c',
-  'src/popup_ui.c'
+  'src/popup_ui.c',
+  'src/subprocess.c',
+  'src/project_search.c'
 )
 
 # Executable

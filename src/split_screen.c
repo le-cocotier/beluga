@@ -170,6 +170,20 @@ void splitScreenUnify(void) {
 }
 
 /**
+ * @brief The key prefix a buffer wants active while it has focus.
+ * @details Scratch buffers can carry their own keymap (the explorer
+ * sidebar's arrows and ENTER, the search results buffer's ENTER-to-jump).
+ * Which one is a property of the buffer, not of its type — both are
+ * EXPLORER_BUFFs — so the name is read off the buffer, falling back to
+ * "explorer" for every scratch buffer created before this field existed.
+ */
+static const char *bufferFocusPrefix(const struct buffer_t *buf) {
+    if (buf && buf->focus_prefix[0])
+        return buf->focus_prefix;
+    return "explorer";
+}
+
+/**
  * @brief Splits the screen vertically with a fixed-width left pane
  * (e.g. an explorer sidebar) and the rest of the screen on the right.
  */
@@ -215,7 +229,7 @@ int splitScreenWithSidebar(int sidebar_buffer_id, int main_buffer_id, int sideba
 
     // Focus starts on the sidebar — the whole point of just having opened
     // it is to pick something in it.
-    struct prefix_t prefix = find_prefix("explorer");
+    struct prefix_t prefix = find_prefix(bufferFocusPrefix(bufferFindById(sidebar_buffer_id)));
     E.prefix_state = prefix.prefix_id;
 
     editorSetStatusMessage("Explorer opened");
@@ -269,7 +283,7 @@ int splitScreenSwitchPane(void) {
             E.prefix_state = prefix.prefix_id;
         }
     } else if (active_buffer && active_buffer->type == EXPLORER_BUFF) {
-        struct prefix_t prefix = find_prefix("explorer");
+        struct prefix_t prefix = find_prefix(bufferFocusPrefix(active_buffer));
         if (prefix.prefix_id != -1) {
             E.prefix_state = prefix.prefix_id;
         }

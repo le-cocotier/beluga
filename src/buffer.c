@@ -31,6 +31,7 @@
 #include "../include/pty_session.h"
 #include "../include/builtins.h"
 #include "../include/syntax_highlighter.h"
+#include "../include/subprocess.h"
 
 /***********************************************************************************************************************
  *
@@ -432,158 +433,24 @@ void bufferApplyTextEdit(struct buffer_t* buf, int start_row, int start_col,
  **********************************************************************************************************************/
 
 /**
- * @brief Kills the whole process group (git and the sh that spawned it)
- * and reaps it, so gitRunCommand()'s early-return paths don't each repeat
- * the same three lines.
- */
-static void gitKillAndReap(pid_t pid)
-{
-    kill(-pid, SIGKILL);
-    waitpid(pid, NULL, 0);
-}
-
-/**
- * @brief Runs a shell command and returns its stdout, malloc'd and
- * NUL-terminated (trailing newline stripped), or NULL if it produced no
- * output (including "not a git repo" / "no such file" failures — git's own
- * stderr is silenced by the caller-supplied command with "2>/dev/null").
- * @details Bounded to GIT_COMMAND_TIMEOUT_MS. A plain popen() + blocking
- * read here would let a slow or hung git (huge repo, network-mounted
- * .git, cold disk cache, a stuck credential/pager prompt) freeze the
- * *entire editor* before even the first frame draws, since this runs
- * synchronously inside bufferCreate() on every file open. If the deadline
- * passes, the whole child process group is killed and NULL is returned —
- * the same outcome as "not a git repo", which is exactly how a timed-out
- * git integration should degrade.
+ * @brief Thin git-flavored wrappers over the shared subprocess helper.
+ * @details These were the original implementation; project search needed
+ * the same hardened fork/pipe/poll-with-deadline logic, so the body moved
+ * to subprocess.c and these stayed behind as the git integration's own
+ * defaults — a 1s deadline (this runs synchronously inside bufferCreate()
+ * on every file open, so it must never be the reason a file takes a
+ * visible moment to appear) and no output cap, since git's own output
+ * here is a branch name or one file's diff.
  */
 static char* gitRunCommand(const char* cmd)
 {
-    int pipefd[2];
-    if (pipe(pipefd) != 0) return NULL;
-
-    pid_t pid = fork();
-    if (pid < 0)
-    {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return NULL;
-    }
-
-    if (pid == 0)
-    {
-        // Child: stdout -> pipe write end. stderr is already redirected
-        // by the caller's own "2>/dev/null" inside cmd. Its own process
-        // group lets the parent kill the whole sh+git tree on timeout,
-        // not just the immediate child.
-        close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[1]);
-        setpgid(0, 0);
-        execl("/bin/sh", "sh", "-c", cmd, (char*) NULL);
-        _exit(127);
-    }
-
-    close(pipefd[1]);
-    setpgid(pid, pid); // mirrors the child's own call — avoids the race
-                       // where the parent's kill(-pid, ...) below could
-                       // run before the child finishes joining its group
-    fcntl(pipefd[0], F_SETFL, O_NONBLOCK); // pipe fds start with flags 0,
-                                            // so this can't clobber anything
-
-    size_t cap = 256, len = 0;
-    char* out = malloc(cap);
-    if (!out)
-    {
-        close(pipefd[0]);
-        gitKillAndReap(pid);
-        return NULL;
-    }
-
     const long GIT_COMMAND_TIMEOUT_MS = 1000;
-    struct timespec deadline;
-    clock_gettime(CLOCK_MONOTONIC, &deadline);
-    deadline.tv_sec += GIT_COMMAND_TIMEOUT_MS / 1000;
-    deadline.tv_nsec += (GIT_COMMAND_TIMEOUT_MS % 1000) * 1000000;
-
-    int timed_out = 0;
-    for (;;)
-    {
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        long remaining_ms = (deadline.tv_sec - now.tv_sec) * 1000 +
-                            (deadline.tv_nsec - now.tv_nsec) / 1000000;
-        if (remaining_ms <= 0) { timed_out = 1; break; }
-
-        struct pollfd pfd = { .fd = pipefd[0], .events = POLLIN };
-        int pr = poll(&pfd, 1, (int) remaining_ms);
-        if (pr < 0)
-        {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (pr == 0) { timed_out = 1; break; } // deadline reached
-
-        char chunk[512];
-        ssize_t n = read(pipefd[0], chunk, sizeof(chunk));
-        if (n <= 0)
-        {
-            if (n < 0 && errno == EAGAIN) continue;
-            break; // EOF or a real read error — command is done
-        }
-
-        if (len + (size_t) n + 1 > cap)
-        {
-            while (len + (size_t) n + 1 > cap) cap *= 2;
-            char* grown = realloc(out, cap);
-            if (!grown)
-            {
-                free(out);
-                close(pipefd[0]);
-                gitKillAndReap(pid);
-                return NULL;
-            }
-            out = grown;
-        }
-        memcpy(out + len, chunk, (size_t) n);
-        len += (size_t) n;
-    }
-
-    close(pipefd[0]);
-    if (timed_out)
-        kill(-pid, SIGKILL); // whole process group: sh and the git it spawned
-    waitpid(pid, NULL, 0);
-
-    out[len] = '\0';
-    while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
-        out[--len] = '\0';
-
-    if (len == 0) { free(out); return NULL; }
-    return out;
+    return runCommandCapture(cmd, GIT_COMMAND_TIMEOUT_MS, 0);
 }
 
-/**
- * @brief Wraps `path` in single quotes for safe use inside a shell command
- * string, escaping any embedded single quotes ('\'' — close the quote,
- * emit an escaped quote, reopen).
- */
 static void gitShellQuote(const char* path, char* out, size_t out_size)
 {
-    size_t pos = 0;
-    if (pos + 1 < out_size) out[pos++] = '\'';
-    for (const char* p = path; *p && pos + 5 < out_size; p++)
-    {
-        if (*p == '\'')
-        {
-            memcpy(out + pos, "'\\''", 4);
-            pos += 4;
-        }
-        else
-        {
-            out[pos++] = *p;
-        }
-    }
-    if (pos + 1 < out_size) out[pos++] = '\'';
-    out[pos] = '\0';
+    shellQuote(path, out, out_size);
 }
 
 /**
@@ -990,6 +857,29 @@ int bufferSwitch(int buffer_id)
         return -1;
     }
     E.layout.panes[E.layout.active_pane].buffer_id = buffer_id;
+
+    // Same focus-prefix routing splitScreenSwitchPane() does, so a buffer
+    // that carries its own keymap gets it however you arrive: the buffer
+    // switcher and CTRL-x ARROW-RIGHT come through here, not through a
+    // pane switch. This also covers re-opening the terminal while its
+    // buffer already exists — bufferCreate() dedups to bufferSwitch() and
+    // returns before ever reaching the code that sets the "term" prefix.
+    const char* prefix_name = NULL;
+    if (target->type == TERMINAL_BUFF)
+        prefix_name = "term";
+    else if (target->type == EXPLORER_BUFF)
+        prefix_name = target->focus_prefix[0] ? target->focus_prefix : "explorer";
+
+    if (prefix_name)
+    {
+        struct prefix_t prefix = find_prefix(prefix_name);
+        if (prefix.prefix_id != -1)
+            E.prefix_state = prefix.prefix_id;
+    }
+    else
+    {
+        E.prefix_state = 0; // plain file buffer: never inherit a stale keymap
+    }
 
     editorSetStatusMessage("Switched to: %u (buffer %d)",
                            target->filename, buffer_id);

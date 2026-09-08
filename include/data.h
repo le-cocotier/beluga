@@ -434,6 +434,16 @@ typedef struct buffer_t
     int comment_state_numrows;  // rows comment_state[] currently covers
     int comment_state_valid;
 
+    // Which key prefix to activate when this buffer gets focus, for
+    // buffers that come with their own keymap. Only meaningful for
+    // EXPLORER_BUFF, which used to imply "explorer" and nothing else —
+    // now the explorer sidebar and the search results buffer are the
+    // same kind of read-only scratch buffer wanting two different
+    // keymaps, so the name lives on the buffer instead of being
+    // hardcoded by type. Empty means "explorer", which is what every
+    // scratch buffer got before this existed.
+    char focus_prefix[64];
+
     struct buffer_t* next;
     struct buffer_t* prev;
 

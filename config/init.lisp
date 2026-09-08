@@ -195,3 +195,26 @@
 (map-key "h" lsp-hover "user")
 (map-key "r" lsp-rename "user")
 (map-key "CTRL-f" lsp-format-buffer "user")
+
+;; Project-wide search. CTRL-x s prompts for a literal string, greps the
+;; whole project (git grep inside a repo, so .gitignore is honored) and
+;; lists the hits in a "*search*" buffer, grouped by file.
+;;
+;; That buffer activates the "search" prefix whenever it has focus — the
+;; prefix itself is registered in C, so these bindings are all that's
+;; needed here. It's sticky, so the arrows below keep working as you walk
+;; the list instead of dropping out after one press. Split the screen
+;; first (CTRL-x ") and ENTER opens each hit in the other pane, keeping
+;; the results in view.
+(map-key "s" project-search "user")
+(map-key "ENTER" project-search-goto "search")
+(map-key "ARROW-UP" '(move-cursor "up") "search")
+(map-key "ARROW-DOWN" '(move-cursor "down") "search")
+(map-key "PAGE-UP" move-cursor-page-up "search")
+(map-key "PAGE-DOWN" move-cursor-page-down "search")
+(map-key "CTRL-g" '(editor-set-prefix "no-prefix") "search")
+;; A sticky prefix swallows anything it doesn't bind, so without this
+;; CTRL-x is dead inside the results buffer — no save, no quit, no second
+;; search — until you first press CTRL-g. Re-bind it here so the normal
+;; command prefix keeps working from the result list.
+(map-key "CTRL-x" '(editor-set-prefix "user") "search")

@@ -7,6 +7,7 @@
  */
 
 #include "../include/builtins.h"
+#include "../include/project_search.h"
 #include "../include/buffer.h"
 #include "../include/data.h"
 #include "../include/output.h"
@@ -824,7 +825,11 @@ Lisp editorSwitchNextBuffer(Lisp args, LispError *e, LispContext ctx) {
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *current = bufferFindById(active->buffer_id);
   if (current) {
-    active->buffer_id = current->next->buffer_id;
+    // Through bufferSwitch() rather than assigning buffer_id directly, so
+    // this lands in the same keymap the buffer switcher popup would give:
+    // a terminal or a scratch buffer with its own prefix needs that prefix
+    // activated however you arrived at it.
+    bufferSwitch(current->next->buffer_id);
   }
 
   return lisp_null();
@@ -1494,5 +1499,35 @@ Lisp lspFormatBuffer(Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
 
   lspRequestFormatting(E.lsp_client, buf);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to search the whole project for a literal string
+ * @details (project-search) prompts for the text, greps from the working
+ * directory down (git grep inside a repo, plain grep -r otherwise), and
+ * shows the hits in a "*search*" buffer grouped by file. See
+ * project_search.c for what runs and why.
+ * @param args Lisp arguments (unused)
+ * @return lisp_null()
+ */
+Lisp l_projectSearch(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  projectSearchPrompt();
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to jump to the search result under the cursor
+ * @details (project-search-goto) — bound to ENTER under the "search"
+ * prefix, which the results buffer activates when it gets focus. Opens
+ * the hit's file in the other pane when the screen is split, keeping the
+ * result list visible; in place otherwise.
+ * @param args Lisp arguments (unused)
+ * @return lisp_null()
+ */
+Lisp l_projectSearchGoto(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  projectSearchGotoCursor();
   return lisp_null();
 }
