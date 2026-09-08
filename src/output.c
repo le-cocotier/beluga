@@ -249,11 +249,25 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
       if (lineno_width) {
         // The cursor's own line is highlighted (bold, undimmed) so the eye
         // can find it without hunting for the terminal cursor itself.
+        //
+        // Colors come from the theme rather than a hardcoded "\x1b[2;37m"/
+        // "\x1b[1;37m" (dim/bold ANSI white): COLOR_COMMENT is already,
+        // by every theme's own design, the muted/secondary tone relative
+        // to COLOR_DEFAULT, which is exactly the dim/prominent pairing
+        // this gutter wants — and unlike literal ANSI white, it can't end
+        // up lighter than the background. It did: bold+white is rendered
+        // bright/intense by most terminals, which on theme-light's
+        // near-white background (250,251,252) made the cursor's own line
+        // number — the one meant to stand out — the least visible thing
+        // on screen.
         int is_cursor_line = (pane->is_active && file_row == buf->y);
+        char *lineno_color = is_cursor_line ? E.theme.COLOR_DEFAULT : E.theme.COLOR_COMMENT;
         char num_buf[24];
         int num_len = snprintf(num_buf, sizeof(num_buf), "%*d ",
                                lineno_width - 1, file_row + 1);
-        abAppend(ab, is_cursor_line ? "\x1b[1;37m" : "\x1b[2;37m", 7);
+        if (is_cursor_line)
+          abAppend(ab, "\x1b[1m", 4);
+        abAppend(ab, lineno_color, (int) strlen(lineno_color));
         abAppend(ab, num_buf, num_len);
         abAppend(ab, "\x1b[0m", 4);
         abAppend(ab, E.theme.BACKGROUND_COLOR, (int) strlen(E.theme.BACKGROUND_COLOR));
