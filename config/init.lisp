@@ -55,8 +55,9 @@
 ;; the FIRST binding registered wins, so only one comment toggle is ever
 ;; reachable. c/python/rust each hardcode one comment prefix; latex/yaml/
 ;; nodejs instead dispatch on the file's extension and handle all of these
-;; languages. Put one of those three above (add-package "c") if you want
-;; CTRL-d to do the right thing in every file type.
+;; languages. Move whichever of those three you enable up above the
+;; c/python/rust add-package lines if you want CTRL-d to do the right
+;; thing in every file type.
 
 ;; HOOKS
 ;;
