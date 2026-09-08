@@ -116,7 +116,15 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
         struct buffer_t* b = E.buffers;
         do
         {
-            if (b->type == FILE_BUFF && !b->b_lsp_open && lspServerConfigFor(b->fullname))
+            // Same match as bufferMaybeSyncLsp(): a buffer opened in this
+            // window (before the handshake completed) whose own
+            // registered server isn't the one that just came up must not
+            // be pushed to it either — a .tex buffer opened while
+            // clangd's handshake was still in flight used to get
+            // didOpen'd to clangd, tagged with clangd's own language_id.
+            struct lspServerConfig_t *cfg = lspServerConfigFor(b->fullname);
+            if (b->type == FILE_BUFF && !b->b_lsp_open && cfg &&
+                lspServerConfigMatchesRunning(cfg))
             {
                 // Same reasoning as bufferMaybeSyncLsp(): if another
                 // buffer already has this exact file open and synced,
@@ -756,6 +764,23 @@ void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
     char* text = bufferToText(buf);
     if (!text) return;
 
+    // The buffer's OWN registered server config, not lsp->language_id (the
+    // whole client's session-wide value, set once from whichever file
+    // started the server). Several extensions can share one real server
+    // with a different language id each — that's the entire point of the
+    // nodejs package registering typescript-language-server under
+    // "javascript"/"typescript"/"javascriptreact"/"typescriptreact" — and
+    // this used to send every file after the first under the *first*
+    // file's language id regardless. For a server that dispatches parsing
+    // on languageId (typescript-language-server does — it's exactly how
+    // it tells .ts's type annotations from .js), that turned into TS
+    // syntax reported as JS syntax errors the moment a JS file happened
+    // to be opened first in the session.
+    struct lspServerConfig_t* file_cfg = lspServerConfigFor(buf->fullname);
+    const char* language_id = (file_cfg && file_cfg->language_id[0])
+                                   ? file_cfg->language_id
+                                   : (lsp->language_id[0] ? lsp->language_id : "c");
+
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "jsonrpc", "2.0");
     cJSON_AddStringToObject(root, "method", "textDocument/didOpen");
@@ -763,7 +788,7 @@ void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
     cJSON* params = cJSON_CreateObject();
     cJSON* textDoc = cJSON_CreateObject();
     cJSON_AddStringToObject(textDoc, "uri", uri);
-    cJSON_AddStringToObject(textDoc, "languageId", lsp->language_id[0] ? lsp->language_id : "c");
+    cJSON_AddStringToObject(textDoc, "languageId", language_id);
     cJSON_AddNumberToObject(textDoc, "version", 1);
     cJSON_AddStringToObject(textDoc, "text", text);
     cJSON_AddItemToObject(params, "textDocument", textDoc);

@@ -194,6 +194,12 @@ struct lsp_client_t
     int completion_just_arrived;
     int completion_requested;
     char language_id[32]; // set from the matching lspServerConfig_t at start
+    // The running server's argv[0] (e.g. "clangd", "digestif"), set
+    // alongside language_id at start — see lspServerConfigMatchesRunning()
+    // in buffer.c for why this exists: "only one language server runs at
+    // a time" means a second file whose *own* registered server isn't
+    // this one must not be forwarded to it anyway.
+    char command[64];
 
     // ── State ─────────────────────────────────────────────────────────────────
     LspState state;

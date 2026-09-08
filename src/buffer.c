@@ -1030,11 +1030,21 @@ void bufferMaybeStartLsp(struct buffer_t* buf)
     free(root);
 
     strncpy(E.lsp_client->language_id, cfg->language_id, sizeof(E.lsp_client->language_id) - 1);
+    E.lsp_client->language_id[sizeof(E.lsp_client->language_id) - 1] = '\0';
+    strncpy(E.lsp_client->command, cfg->argv[0], sizeof(E.lsp_client->command) - 1);
+    E.lsp_client->command[sizeof(E.lsp_client->command) - 1] = '\0';
 
     if (lspStart(E.lsp_client, root_str, cfg->argv) != 0)
         editorSetStatusMessage("Failed to start LSP server");
 
     free(root_str);
+}
+
+int lspServerConfigMatchesRunning(const struct lspServerConfig_t *cfg)
+{
+    if (!cfg || !cfg->argv[0] || !E.lsp_client) return 0;
+    if (E.lsp_client->state == LSP_NOT_STARTED || E.lsp_client->state == LSP_SHUTDOWN) return 0;
+    return strcmp(cfg->argv[0], E.lsp_client->command) == 0;
 }
 
 /**
@@ -1053,7 +1063,16 @@ void bufferMaybeSyncLsp(struct buffer_t* buf)
     if (E.lsp_client->state != LSP_READY) return; // not ready yet — the retroactive didOpen loop will cover it
     if (buf->b_lsp_open) return; // already synced
 
-    if (!lspServerConfigFor(buf->filename)) return; // no server registered for this extension
+    struct lspServerConfig_t* cfg = lspServerConfigFor(buf->filename);
+    if (!cfg) return; // no server registered for this extension
+    // ...and that server has to be the one actually running — "only one
+    // language server runs at a time" means a file whose own registered
+    // server is something else (e.g. this is a .c file but a LaTeX
+    // buffer opened first and started digestif) must not be forwarded to
+    // whatever's running instead. It used to be: any registered extension
+    // was enough, so the second file's content went to the wrong server
+    // tagged with the wrong languageId.
+    if (!lspServerConfigMatchesRunning(cfg)) return;
 
     // Same file already open (and synced) in another buffer — the server
     // only expects one didOpen per URI, so just piggyback on that
