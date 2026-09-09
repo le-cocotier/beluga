@@ -111,7 +111,12 @@ check_dep() {
         die "Please install '$1' and re-run this script."
     fi
     cmd="$(install_cmd_for "$mgr" "$2")"
-    if [ "$ASSUME_YES" -eq 0 ] && confirm "Run \`$cmd\` now to install it?"; then
+    # -y means "assume yes to every prompt", which has to include this one —
+    # it used to mean the opposite here: [ "$ASSUME_YES" -eq 0 ] && confirm
+    # is false the moment ASSUME_YES is 1, so --yes skipped straight past
+    # the install and died on "still missing" instead of just installing it,
+    # defeating the entire point of an unattended/-y run on a fresh machine.
+    if [ "$ASSUME_YES" -eq 1 ] || confirm "Run \`$cmd\` now to install it?"; then
         eval "$cmd"
         command -v "$1" &>/dev/null || die "'$1' still not found after installing — install it manually and re-run."
     else
@@ -164,7 +169,7 @@ fi
 # associative array, since macOS ships bash 3.2 as /bin/bash (no declare -A
 # support; that needs bash 4+) and this script's shebang targets /bin/bash.
 BELUGA_PACKAGES="
-outline https://git.giorgio-nas.fr/arthur/outine.git
+outline https://git.giorgio-nas.fr/arthur/outline.git
 smart_delimiters https://git.giorgio-nas.fr/arthur/smart_delimiters.git
 c https://git.giorgio-nas.fr/arthur/c.git
 explorer https://git.giorgio-nas.fr/arthur/explorer.git
