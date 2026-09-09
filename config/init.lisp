@@ -178,6 +178,11 @@
 (map-key "ARROW-RIGHT" editor-switch-next-buffer "user")
 (map-key "b" editor-switch-buffer-popup "user")
 (map-key "\"" editor-split-screen-vertical "user")
+;; Splits the ACTIVE pane, so both of these compose without a limit —
+;; split, move to the new pane with CTRL-x o, split again. The new pane
+;; starts on the same buffer; CTRL-x ARROW-RIGHT or CTRL-x b changes it.
+;; CTRL-x * collapses everything back to one pane.
+(map-key "%" editor-split-screen-horizontal "user")
 (map-key "o" editor-switch-next-pane "user")
 (map-key "*" editor-unify-panes "user")
 (map-key "CTRL-y" editor-paste "no-prefix")

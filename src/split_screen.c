@@ -36,7 +36,7 @@ void splitScreenInit(void) {
     E.layout.panes[0].buffer_id = -1; // No buffer for now
     E.layout.panes[0].origin_y = 0;
     E.layout.panes[0].origin_x = 0;
-    E.layout.panes[0].height = E.screenrows - 2;  // Leave room for status bar
+    E.layout.panes[0].height = E.screenrows; // already excludes the 2 status rows
     E.layout.panes[0].width = E.screencols;
     E.layout.panes[0].cursor_x = 0;
     E.layout.panes[0].cursor_y = 0;
@@ -46,112 +46,143 @@ void splitScreenInit(void) {
 }
 
 /**
- * @brief Splits screen vertically (left-right)
- * @param buffer_id_left Buffer ID for left pane
- * @param buffer_id_right Buffer ID for right pane
- * @return 0 on success, -1 on failure
+ * @brief The key prefix a buffer wants active while it has focus.
+ * @details Scratch buffers can carry their own keymap (the explorer
+ * sidebar's arrows and ENTER, the search results buffer's ENTER-to-jump).
+ * Which one is a property of the buffer, not of its type — both are
+ * EXPLORER_BUFFs — so the name is read off the buffer, falling back to
+ * "explorer" for every scratch buffer created before this field existed.
  */
-int splitScreenVertical(int buffer_id_left, int buffer_id_right) {
-    // Verify both buffers exist
-    if (bufferFindById(buffer_id_left) == NULL ||
-        bufferFindById(buffer_id_right) == NULL) {
-        editorSetStatusMessage("Error: invalid buffer IDs");
-        return -1;
-    }
+static const char *bufferFocusPrefix(const struct buffer_t *buf) {
+    if (buf && buf->focus_prefix[0])
+        return buf->focus_prefix;
+    return "explorer";
+}
 
-    // bReallocate panes array
-    E.layout.panes = realloc(E.layout.panes, sizeof(EditorPane) * 2);
-    E.layout.mode = SPLIT_VERTICAL;
-    E.layout.num_panes = 2;
-    E.layout.active_pane = 0;
+/**
+ * @brief Puts the key prefix in the state the now-focused pane's buffer
+ * expects.
+ * @details Landing in a terminal pane has to switch to "term", or the
+ * no-prefix bindings (arrows, ENTER, CTRL-a...) match first in
+ * executeKeyBind() and are consumed as editor commands instead of falling
+ * through to ptyForwardKey() and reaching the shell. A scratch buffer
+ * likewise wants its own keymap. Anything else must land back in
+ * no-prefix, or a "term"/"explorer" prefix left over from the pane you
+ * came from silently swallows every keystroke here — nothing is mapped
+ * under it, so nothing matches.
+ *
+ * Shared by pane switching and by splitting, which both change which pane
+ * has focus: a split of a terminal pane used to leave the new (still
+ * terminal) pane in whatever prefix was active, with the shell unable to
+ * see the arrow keys.
+ */
+static void splitScreenApplyFocusPrefix(void) {
+    Buffer *buf = bufferFindById(E.layout.panes[E.layout.active_pane].buffer_id);
+    const char *name = NULL;
 
-    int half_width = E.screencols / 2;
-    int pane_height = E.screenrows;  // Leave room for status bar
-
-    // Left pane
-    E.layout.panes[0].buffer_id = buffer_id_left;
-    E.layout.panes[0].origin_y = 0;
-    E.layout.panes[0].origin_x = 0;
-    E.layout.panes[0].height = pane_height;
-    E.layout.panes[0].width = half_width;
-    E.layout.panes[0].cursor_x = 0;
-    E.layout.panes[0].cursor_y = 0;
-    E.layout.panes[0].y_offset = 0;
-    E.layout.panes[0].x_offset = 0;
-    E.layout.panes[0].is_active = 1;
-
-    Buffer* buf = bufferFindById(buffer_id_left);
     if (buf && buf->type == TERMINAL_BUFF)
-    {
-        struct prefix_t prefix = find_prefix("term");
-        E.prefix_state = prefix.prefix_id;
+        name = "term";
+    else if (buf && buf->type == EXPLORER_BUFF)
+        name = bufferFocusPrefix(buf);
+
+    if (name) {
+        struct prefix_t prefix = find_prefix(name);
+        if (prefix.prefix_id != -1)
+            E.prefix_state = prefix.prefix_id;
+    } else {
+        E.prefix_state = 0;
     }
-
-    // Right pane
-    E.layout.panes[1].buffer_id = buffer_id_right;
-    E.layout.panes[1].origin_y = 0;
-    E.layout.panes[1].origin_x = half_width;
-    E.layout.panes[1].height = pane_height;
-    E.layout.panes[1].width = E.screencols - half_width;
-    E.layout.panes[1].cursor_x = 0;
-    E.layout.panes[1].cursor_y = 0;
-    E.layout.panes[1].y_offset = 0;
-    E.layout.panes[1].x_offset = 0;
-    E.layout.panes[1].is_active = 0;
-
-    splitScreenSyncTerminalSizes();
-    editorSetStatusMessage("Vertical split: %d | %d", buffer_id_left, buffer_id_right);
-    return 0;
 }
 
 /**
- * @brief Splits screen horizontally (top-bottom)
- * @param buffer_id_top Buffer ID for top pane
- * @param buffer_id_bottom Buffer ID for bottom pane
- * @return 0 on success, -1 on failure
+ * @brief Splits the *active* pane in two, in `direction`.
+ * @details Replaces the old splitScreenVertical()/splitScreenHorizontal()
+ * pair, which each rebuilt the whole layout as exactly two panes taken
+ * from two specific buffer ids. That capped the editor at two panes no
+ * matter what, and only ever paired the head of the buffer list with
+ * whatever happened to sit behind it.
+ *
+ * Splitting the active pane's own rectangle instead composes without a
+ * limit: every pane already carries its own origin/width/height, so
+ * halving one and handing the other half to a new pane subdivides the
+ * screen to any depth — split left/right, focus the right half, split it
+ * top/bottom, and so on. No pane tree is needed for that; the rectangles
+ * alone describe the layout, and the dividers are drawn from the gaps
+ * between them (see editorDrawAllPanes()).
+ *
+ * One column (or row) is deliberately left unclaimed between the two
+ * halves for the divider to live in, so it no longer paints over the last
+ * column of the pane to its left the way the old fixed layout did.
+ *
+ * The new pane shows the same buffer as the one it was split from — the
+ * predictable thing every other editor does, and the buffer is one
+ * CTRL-x ARROW-RIGHT (or CTRL-x b) away from being changed. Focus moves
+ * to the new pane, since the reason to split is almost always to put
+ * something else in the half you just made.
+ * @return 0 on success, -1 if the pane is too small to divide.
  */
-int splitScreenHorizontal(int buffer_id_top, int buffer_id_bottom) {
-    // Verify both buffers exist
-    if (bufferFindById(buffer_id_top) == NULL ||
-        bufferFindById(buffer_id_bottom) == NULL) {
-        editorSetStatusMessage("Error: invalid buffer IDs");
+int splitScreenSplitActive(SplitMode direction) {
+    // Below this a pane has no room for a gutter plus readable text, and
+    // halving it repeatedly would eventually produce zero/negative sizes.
+    const int MIN_WIDTH  = 20;
+    const int MIN_HEIGHT = 4;
+
+    EditorPane *active = &E.layout.panes[E.layout.active_pane];
+
+    if (direction == SPLIT_VERTICAL && active->width < MIN_WIDTH * 2 + 1) {
+        editorSetStatusMessage("Pane too narrow to split");
+        return -1;
+    }
+    if (direction == SPLIT_HORIZONTAL && active->height < MIN_HEIGHT * 2 + 1) {
+        editorSetStatusMessage("Pane too short to split");
         return -1;
     }
 
-    // bReallocate panes array
-    E.layout.panes = realloc(E.layout.panes, sizeof(EditorPane) * 2);
-    E.layout.mode = SPLIT_HORIZONTAL;
-    E.layout.num_panes = 2;
-    E.layout.active_pane = 0;
+    EditorPane *grown = realloc(E.layout.panes,
+                                sizeof(EditorPane) * (size_t)(E.layout.num_panes + 1));
+    if (!grown) {
+        editorSetStatusMessage("Error: realloc failed");
+        return -1;
+    }
+    E.layout.panes = grown;
+    // realloc may have moved the array — re-derive rather than reusing the
+    // pointer taken above it.
+    active = &E.layout.panes[E.layout.active_pane];
 
-    int half_height = (E.screenrows - 2) / 2;  // Account for status bar
+    EditorPane *fresh = &E.layout.panes[E.layout.num_panes];
+    *fresh = *active;              // inherit buffer and geometry, then carve
+    fresh->cursor_x = 0;
+    fresh->cursor_y = 0;
+    fresh->x_offset = 0;
+    fresh->y_offset = 0;
 
-    // Top pane
-    E.layout.panes[0].buffer_id = buffer_id_top;
-    E.layout.panes[0].origin_y = 0;
-    E.layout.panes[0].origin_x = 0;
-    E.layout.panes[0].height = half_height;
-    E.layout.panes[0].width = E.screencols;
-    E.layout.panes[0].cursor_x = 0;
-    E.layout.panes[0].cursor_y = 0;
-    E.layout.panes[0].y_offset = 0;
-    E.layout.panes[0].x_offset = 0;
-    E.layout.panes[0].is_active = 1;
+    if (direction == SPLIT_VERTICAL) {
+        int left = (active->width - 1) / 2;   // -1 for the divider column
+        fresh->origin_x = active->origin_x + left + 1;
+        fresh->width    = active->width - left - 1;
+        active->width   = left;
+    } else {
+        int top = (active->height - 1) / 2;   // -1 for the divider row
+        fresh->origin_y = active->origin_y + top + 1;
+        fresh->height   = active->height - top - 1;
+        active->height  = top;
+    }
 
-    // Bottom pane
-    E.layout.panes[1].buffer_id = buffer_id_bottom;
-    E.layout.panes[1].origin_y = half_height;
-    E.layout.panes[1].origin_x = 0;
-    E.layout.panes[1].height = E.screenrows - 2 - half_height;
-    E.layout.panes[1].width = E.screencols;
-    E.layout.panes[1].cursor_x = 0;
-    E.layout.panes[1].cursor_y = 0;
-    E.layout.panes[1].x_offset = 0;
-    E.layout.panes[1].y_offset = 0;
-    E.layout.panes[1].is_active = 0;
+    active->is_active = 0;
+    fresh->is_active = 1;
+    E.layout.active_pane = E.layout.num_panes;
+    E.layout.num_panes++;
+    E.layout.mode = direction;
+    splitScreenApplyFocusPrefix();
 
+    // The active pane's cursor may now sit outside its narrower/shorter
+    // rectangle; editorScroll() pulls it back on the next redraw, but the
+    // PTY behind a terminal buffer has to be told directly.
     splitScreenSyncTerminalSizes();
-    editorSetStatusMessage("Horizontal split: %d / %d", buffer_id_top, buffer_id_bottom);
+
+    editorSetStatusMessage("Split %s — %d panes",
+                           direction == SPLIT_VERTICAL ? "vertically" : "horizontally",
+                           E.layout.num_panes);
     return 0;
 }
 
@@ -204,19 +235,6 @@ void splitScreenSyncTerminalSizes(void) {
     }
 }
 
-/**
- * @brief The key prefix a buffer wants active while it has focus.
- * @details Scratch buffers can carry their own keymap (the explorer
- * sidebar's arrows and ENTER, the search results buffer's ENTER-to-jump).
- * Which one is a property of the buffer, not of its type — both are
- * EXPLORER_BUFFs — so the name is read off the buffer, falling back to
- * "explorer" for every scratch buffer created before this field existed.
- */
-static const char *bufferFocusPrefix(const struct buffer_t *buf) {
-    if (buf && buf->focus_prefix[0])
-        return buf->focus_prefix;
-    return "explorer";
-}
 
 /**
  * @brief Splits the screen vertically with a fixed-width left pane
@@ -312,25 +330,7 @@ int splitScreenSwitchPane(void) {
 
     // Move to next pane
     E.layout.active_pane = (E.layout.active_pane + 1) % E.layout.num_panes;
-    Buffer *active_buffer = bufferFindById(E.layout.panes[E.layout.active_pane].buffer_id);
-    if (active_buffer && active_buffer->type == TERMINAL_BUFF) {
-        struct prefix_t prefix = find_prefix("term");
-        if (prefix.prefix_id != -1) {
-            E.prefix_state = prefix.prefix_id;
-        }
-    } else if (active_buffer && active_buffer->type == EXPLORER_BUFF) {
-        struct prefix_t prefix = find_prefix(bufferFocusPrefix(active_buffer));
-        if (prefix.prefix_id != -1) {
-            E.prefix_state = prefix.prefix_id;
-        }
-    } else {
-        // Plain FILE_BUFF (or no buffer) — always land in no-prefix, so a
-        // "term"/"explorer" prefix left over from the pane you just came
-        // from doesn't silently swallow ENTER/arrows/backspace here (they're
-        // only mapped under "no-prefix", so a stale prefix state means none
-        // of them match anything and every keystroke is just dropped).
-        E.prefix_state = 0;
-    }
+    splitScreenApplyFocusPrefix();
 
     // Activate new pane
     E.layout.panes[E.layout.active_pane].is_active = 1;

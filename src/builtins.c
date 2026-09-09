@@ -248,12 +248,33 @@ Lisp editorQuit(Lisp args, LispError *e, LispContext ctx) {
  * @see editorSave()
  */
 
+/**
+ * @brief (editor-split-screen-vertical) — splits the active pane
+ * left/right.
+ * @details Used to rebuild the layout as exactly two panes showing
+ * E.buffers and E.buffers->next, which capped the editor at two panes and
+ * needed two buffers open to do anything at all. It now subdivides
+ * whichever pane is active, so it composes to any number of panes and
+ * works with a single buffer open — the new pane starts on the same
+ * buffer, and CTRL-x ARROW-RIGHT / CTRL-x b changes it.
+ */
 Lisp l_editorSplitScreenVertical(Lisp args, LispError *e, LispContext ctx) {
-  if (E.number_of_buffer >= 2 && E.buffers != NULL) {
-    splitScreenVertical(E.buffers->buffer_id, E.buffers->next->buffer_id);
-  } else {
-    editorSetStatusMessage("Need at least 2 buffers open");
-  }
+  (void) args; (void) e; (void) ctx;
+  splitScreenSplitActive(SPLIT_VERTICAL);
+  return lisp_null();
+}
+
+/**
+ * @brief (editor-split-screen-horizontal) — splits the active pane
+ * top/bottom.
+ * @details The horizontal counterpart existed in split_screen.c from the
+ * start but was never registered as a builtin, so there was no way to
+ * reach it from a keybind or M-x — the screen could only ever be split
+ * one way.
+ */
+Lisp l_editorSplitScreenHorizontal(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  splitScreenSplitActive(SPLIT_HORIZONTAL);
   return lisp_null();
 }
 

@@ -73,6 +73,7 @@ Lisp bufferFindReverse_L(Lisp args, LispError *e, LispContext ctx);
 // Pane
 
 Lisp l_editorSplitScreenVertical(Lisp args, LispError *e, LispContext ctx);
+Lisp l_editorSplitScreenHorizontal(Lisp args, LispError *e, LispContext ctx);
 Lisp editorSwitchNextPane(Lisp args, LispError *e, LispContext ctx);
 Lisp editorUnifiedPanes(Lisp args, LispError *e, LispContext ctx);
 

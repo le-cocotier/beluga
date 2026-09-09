@@ -368,37 +368,53 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
 /**
  * @brief Renders all panes based on current split configuration
  */
+/**
+ * @brief Draws every pane, then the dividers between them.
+ * @details Dividers are derived from the panes' own rectangles rather than
+ * from a single global split mode, which is what lets the layout nest
+ * arbitrarily: splitScreenSplitActive() always leaves one column (or row)
+ * unclaimed between the two halves it makes, so any pane whose right edge
+ * stops short of the screen has a gap there, and the same for its bottom
+ * edge. Drawing a rule down/along each such edge fills exactly those gaps,
+ * for any number of panes in any arrangement.
+ *
+ * The old version only understood a two-pane layout and read the split
+ * direction from layout->mode, so it drew a full-height rule at pane 0's
+ * width — which also painted over pane 0's last text column, since that
+ * layout left no room for the divider to sit in.
+ *
+ * Each rule is bounded to its own pane's span, not the whole screen, so a
+ * divider between two stacked panes on the right doesn't cut across the
+ * pane on the left. Neighbouring panes may name the same gap; drawing it
+ * twice is harmless.
+ */
 static void editorDrawAllPanes(struct abuf *ab) {
   const ScreenLayout *layout = splitScreenGetLayout();
 
-  if (layout->num_panes == 1) {
-    // Single pane fullscreen
-    editorDrawPane(ab, &layout->panes[0]);
-  } else if (layout->num_panes == 2) {
-    // Draw both panes
-    for (int i = 0; i < 2; i++) {
-      editorDrawPane(ab, &layout->panes[i]);
+  for (int i = 0; i < layout->num_panes; i++)
+    editorDrawPane(ab, &layout->panes[i]);
 
-      // Draw pane border/divider if not the last pane
-      if (layout->mode == SPLIT_VERTICAL && i == 0) {
-        // Draw vertical divider
-        int divider_col = layout->panes[0].width;
-        for (int y = 0; y < layout->panes[0].height; y++) {
-          char pos_buf[32];
-          snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH", y + 1, divider_col);
-          abAppend(ab, pos_buf, (int)strlen(pos_buf));
-          abAppend(ab, "\x1b[1m|\x1b[0m", 9); // Bold pipe divider
-        }
-      } else if (layout->mode == SPLIT_HORIZONTAL && i == 0) {
-        // Draw horizontal divider
-        int divider_row = layout->panes[0].height;
-        char pos_buf[32];
-        snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH", divider_row + 1, 1);
-        abAppend(ab, pos_buf, (int)strlen(pos_buf));
-        for (int x = 0; x < E.screencols; x++) {
-          abAppend(ab, "\x1b[1m-\x1b[0m", 9); // Bold dash divider
-        }
+  for (int i = 0; i < layout->num_panes; i++) {
+    const EditorPane *p = &layout->panes[i];
+    char pos_buf[32];
+
+    // Vertical rule down the gap on this pane's right edge.
+    if (p->origin_x + p->width < E.screencols) {
+      for (int y = 0; y < p->height; y++) {
+        int len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
+                           p->origin_y + y + 1, p->origin_x + p->width + 1);
+        abAppend(ab, pos_buf, len);
+        abAppend(ab, "\x1b[1m|\x1b[0m", 9);
       }
+    }
+
+    // Horizontal rule along the gap under this pane.
+    if (p->origin_y + p->height < E.screenrows) {
+      int len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
+                         p->origin_y + p->height + 1, p->origin_x + 1);
+      abAppend(ab, pos_buf, len);
+      for (int x = 0; x < p->width; x++)
+        abAppend(ab, "\x1b[1m-\x1b[0m", 9);
     }
   }
 }
@@ -484,6 +500,7 @@ void editorDrawStatusBar(struct abuf *ab) {
   char status[E.screencols];
   char buf_status[1024] = "";
   char marker, dirty_marker;
+  char mode_buf[24];
   char *mode_str = "";
   char *string_filename = NULL;
 
@@ -492,12 +509,25 @@ void editorDrawStatusBar(struct abuf *ab) {
   Buffer *b = NULL;
   ScreenLayout *layout = splitScreenGetLayout();
 
+  // Positioned explicitly rather than inheriting wherever the pane loop
+  // happened to leave the cursor. That implicit coupling held only while
+  // the last thing drawn was always the bottom-right pane; once dividers
+  // were drawn after the panes (needed to support arbitrary splits), the
+  // status bar started rendering at the last divider instead of at the
+  // bottom of the screen. E.screenrows already excludes these two rows.
+  char bar_pos[32];
+  int bar_pos_len = snprintf(bar_pos, sizeof(bar_pos), "\x1b[%d;1H", E.screenrows + 1);
+  abAppend(ab, bar_pos, bar_pos_len);
+
   abAppend(ab, "\x1b[7m", 4); // inverting colors
 
-  if (layout->mode == SPLIT_VERTICAL)
-    mode_str = " [V-SPLIT]";
-  else if (layout->mode == SPLIT_HORIZONTAL)
-    mode_str = " [H-SPLIT]";
+  // Pane count rather than the old " [V-SPLIT]"/" [H-SPLIT]": layout->mode
+  // only records the *last* split direction, which stopped describing the
+  // screen once panes could be split repeatedly and in both directions.
+  if (layout->num_panes > 1) {
+    snprintf(mode_buf, sizeof(mode_buf), " [%d panes]", layout->num_panes);
+    mode_str = mode_buf;
+  }
 
   char git_status[80] = "";
   if (buf && buf->git_available) {
@@ -548,6 +578,12 @@ void editorDrawStatusBar(struct abuf *ab) {
 void editorDrawMessageBar(struct abuf *ab) {
   char *status = utf8ToString(E.status_msg);
   int msg_len = (int)strlen(status);
+
+  // Same reasoning as the status bar: place it, don't inherit a position.
+  char pos[32];
+  int pos_len = snprintf(pos, sizeof(pos), "\x1b[%d;1H", E.screenrows + 2);
+  abAppend(ab, pos, pos_len);
+
   abAppend(ab, ERASE_END_LINE, 3);
   if (msg_len && time(NULL) - E.status_msg_time < 5) {
     abAppend(ab, status, msg_len);

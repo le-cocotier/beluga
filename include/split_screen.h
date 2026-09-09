@@ -13,21 +13,18 @@
  */
 void splitScreenInit(void);
 
-/**
- * @brief Splits screen vertically (left-right)
- * @param buffer_id_left Buffer ID for left pane
- * @param buffer_id_right Buffer ID for right pane
- * @return 0 on success, -1 on failure
- */
-int splitScreenVertical(int buffer_id_left, int buffer_id_right);
-
-/**
- * @brief Splits screen horizontally (top-bottom)
- * @param buffer_id_top Buffer ID for top pane
- * @param buffer_id_bottom Buffer ID for bottom pane
- * @return 0 on success, -1 on failure
- */
-int splitScreenHorizontal(int buffer_id_top, int buffer_id_bottom);
+// Splits the active pane in two, left/right for SPLIT_VERTICAL or
+// top/bottom for SPLIT_HORIZONTAL, leaving one column/row between them for
+// the divider. The new pane shows the same buffer and takes focus.
+//
+// Composes without a limit — each call subdivides whichever pane is
+// currently active, so the screen can be split to any depth in either
+// direction. This replaced splitScreenVertical()/splitScreenHorizontal(),
+// which rebuilt the layout as exactly two panes from two given buffer ids
+// and so could never produce a third.
+//
+// Returns 0, or -1 if the active pane is already too small to divide.
+int splitScreenSplitActive(SplitMode direction);
 
 /**
  * @brief Returns to single buffer fullscreen

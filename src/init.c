@@ -61,6 +61,7 @@ void initBuiltins() {
   registerBuiltin("editor-insert-tab", l_editorInserTab);
   registerBuiltin("editor-switch-next-buffer", editorSwitchNextBuffer);
   registerBuiltin("editor-split-screen-vertical", l_editorSplitScreenVertical);
+  registerBuiltin("editor-split-screen-horizontal", l_editorSplitScreenHorizontal);
   registerBuiltin("editor-switch-next-pane", editorSwitchNextPane);
   registerBuiltin("editor-unify-panes", editorUnifiedPanes);
   registerBuiltin("editor-paste", editorPaste);
