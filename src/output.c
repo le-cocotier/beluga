@@ -414,6 +414,13 @@ void editorScroll() {
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buf = bufferFindById(active->buffer_id);
 
+  // bufferFindById() returns NULL for an id that isn't in the list — a
+  // pane still pointing at a closed buffer, or at -1 after a failed
+  // bufferCreate(). The cursor-tracking loop below dereferences buf on
+  // every iteration, so there's nothing to scroll toward without it.
+  if (buf == NULL)
+    return;
+
   // Same gutter accounting as editorDrawPane(): with the gutter reserving
   // GUTTER_WIDTH columns, only what's left is actually available before the
   // cursor needs to scroll right, or it would visually run past the pane.
@@ -618,8 +625,10 @@ void editorRefreshScreen() {
 
     // ── LSP: diagnostic for current line in status bar
     // ────────────────────────
-    const char *diag = lspUiDiagnosticAtCursor(&E.lsp_diagnostics,
-                                               active->buffer_id, buffer->y);
+    const char *diag = buffer ? lspUiDiagnosticAtCursor(&E.lsp_diagnostics,
+                                                       active->buffer_id,
+                                                       buffer->y)
+                              : NULL;
     if (diag) {
       char single_line[512];
       int i = 0;

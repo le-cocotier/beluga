@@ -320,9 +320,20 @@ void lspParseDiagnostics(const char *json, DiagnosticList *diags,
         cJSON *sev      = cJSON_GetObjectItem(d, "severity");
         cJSON *msg      = cJSON_GetObjectItem(d, "message");
 
-        diag->line      = cJSON_GetObjectItem(start, "line")->valueint;
-        diag->col_start = cJSON_GetObjectItem(start, "character")->valueint;
-        diag->col_end   = cJSON_GetObjectItem(end_pos, "character")->valueint;
+        // Every one of these is cJSON_GetObjectItem()'s NULL-on-missing —
+        // dereferencing ->valueint straight off it (as this did) turns any
+        // diagnostic missing a range, start, end or line/character field
+        // into a null dereference. The severity and message lines below
+        // were already written defensively; these four weren't. A server
+        // is meant to always send a full range, so this is about not
+        // crashing the editor over a payload we merely didn't expect.
+        cJSON *line_it  = start ? cJSON_GetObjectItem(start, "line") : NULL;
+        cJSON *scol_it  = start ? cJSON_GetObjectItem(start, "character") : NULL;
+        cJSON *ecol_it  = end_pos ? cJSON_GetObjectItem(end_pos, "character") : NULL;
+
+        diag->line      = line_it ? line_it->valueint : 0;
+        diag->col_start = scol_it ? scol_it->valueint : 0;
+        diag->col_end   = ecol_it ? ecol_it->valueint : diag->col_start;
         diag->severity  = sev ? (DiagSeverity)sev->valueint : DIAG_ERROR;
 
         const char *raw = msg ? msg->valuestring : "";

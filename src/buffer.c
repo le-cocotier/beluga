@@ -967,6 +967,14 @@ struct buffer_t* bufferGetCurrent(void)
  */
 struct lspServerConfig_t* lspServerConfigFor(Utf8Char* filename)
 {
+    // A buffer with no name at all has no extension and so no server —
+    // and utf8StringLen() would dereference the NULL rather than say so.
+    // Scratch buffers (EXPLORER_BUFF: the explorer sidebar, "*search*",
+    // "*tree*") legitimately have fullname NULL, so this is a state
+    // callers can reach by ordinary use, not a caller bug.
+    if (!filename)
+        return NULL;
+
     int len = utf8StringLen(filename); // includes terminator
     if (len < 3) return NULL; // need at least "x.e" -> 3 real chars + terminator
 

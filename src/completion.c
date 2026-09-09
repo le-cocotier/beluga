@@ -122,9 +122,16 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
             // be pushed to it either — a .tex buffer opened while
             // clangd's handshake was still in flight used to get
             // didOpen'd to clangd, tagged with clangd's own language_id.
-            struct lspServerConfig_t *cfg = lspServerConfigFor(b->fullname);
-            if (b->type == FILE_BUFF && !b->b_lsp_open && cfg &&
-                lspServerConfigMatchesRunning(cfg))
+            //
+            // The type check has to stay *before* lspServerConfigFor():
+            // only a FILE_BUFF is guaranteed a fullname, and a scratch
+            // EXPLORER_BUFF (the explorer sidebar, "*search*", "*tree*")
+            // has it NULL by design. Hoisting the lookup out of the &&
+            // short-circuit — which is exactly what 84b881b did — walked
+            // every buffer in the list and dereferenced that NULL the
+            // moment a handshake completed with a sidebar open.
+            if (b->type == FILE_BUFF && !b->b_lsp_open &&
+                lspServerConfigMatchesRunning(lspServerConfigFor(b->fullname)))
             {
                 // Same reasoning as bufferMaybeSyncLsp(): if another
                 // buffer already has this exact file open and synced,
@@ -753,13 +760,43 @@ int lspStart(LspClient *client, const char *root_dir, char *const server_argv[])
     return -1;
 }
 
+/**
+ * @brief Builds the "file://<path>" URI for `buf` into `uri`.
+ * @details Every LSP request needs this, and each site used to inline
+ * `snprintf(uri, ..., "file://%s", (char*) utf8ToString(buf->fullname))`,
+ * which had two problems repeated seven times over: it leaked the string
+ * utf8ToString() mallocs (only lspDidClose() freed it), and it walked
+ * straight into utf8ToString()'s unguarded `while (*string->character)`
+ * when fullname was NULL. That isn't hypothetical — a scratch
+ * EXPLORER_BUFF (the explorer sidebar, "*search*", "*tree*") has fullname
+ * NULL by design, so pressing CTRL-x h with the search results focused
+ * was a null dereference.
+ * @return 1 on success, 0 if this buffer has no backing file — callers
+ * bail on 0 rather than send the server a request for a document that
+ * doesn't exist.
+ */
+static int lspBufferUri(const struct buffer_t *buf, char *uri, size_t uri_size)
+{
+    if (!buf || !buf->fullname)
+        return 0;
+
+    char *full = (char *) utf8ToString(buf->fullname);
+    if (!full)
+        return 0;
+
+    snprintf(uri, uri_size, "file://%s", full);
+    free(full);
+    return 1;
+}
+
 void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
 {
     if (!lsp || !buf)
         return;
 
     char uri[PATH_MAX + 8];
-    snprintf(uri, sizeof(uri), "file://%s", (char*) utf8ToString(buf->fullname));
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
 
     char* text = bufferToText(buf);
     if (!text) return;
@@ -808,7 +845,8 @@ void lspDidChange(LspClient* lsp, struct buffer_t* buf)
         return;
 
     char uri[PATH_MAX + 8];
-    snprintf(uri, sizeof(uri), "file://%s", (char*) utf8ToString(buf->fullname));
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
 
     char* text = bufferToText(buf);
     if (!text) return;
@@ -845,10 +883,8 @@ void lspDidClose(LspClient* lsp, struct buffer_t* buf)
         return;
 
     char uri[PATH_MAX + 8];
-    char *string_fullname = (char*)utf8ToString(buf->fullname);
-    snprintf(uri, sizeof(uri), "file://%s", string_fullname);
-    free(string_fullname);
-    string_fullname = NULL;
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
 
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "jsonrpc", "2.0");
@@ -877,7 +913,8 @@ void lspRequestCompletion(LspClient *lsp, struct buffer_t *buf,
     lsp->completion_cursor_y = screen_y;
 
     char uri[PATH_MAX + 8];
-    snprintf(uri, sizeof(uri), "file://%s", (char*) utf8ToString(buf->fullname));
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
 
     int req_id = lsp->next_id++;
 
@@ -922,7 +959,8 @@ void lspRequestDefinition(LspClient *lsp, struct buffer_t *buf,
         return;
 
     char uri[PATH_MAX + 8];
-    snprintf(uri, sizeof(uri), "file://%s", (char*) utf8ToString(buf->fullname));
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
 
     int req_id = lsp->next_id++;
 
@@ -957,7 +995,8 @@ void lspRequestHover(LspClient *lsp, struct buffer_t *buf, int line, int col)
         return;
 
     char uri[PATH_MAX + 8];
-    snprintf(uri, sizeof(uri), "file://%s", (char*) utf8ToString(buf->fullname));
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
 
     int req_id = lsp->next_id++;
 
@@ -993,7 +1032,8 @@ void lspRequestRename(LspClient *lsp, struct buffer_t *buf, int line, int col,
         return;
 
     char uri[PATH_MAX + 8];
-    snprintf(uri, sizeof(uri), "file://%s", (char*) utf8ToString(buf->fullname));
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
 
     int req_id = lsp->next_id++;
 
@@ -1030,7 +1070,8 @@ void lspRequestFormatting(LspClient *lsp, struct buffer_t *buf)
         return;
 
     char uri[PATH_MAX + 8];
-    snprintf(uri, sizeof(uri), "file://%s", (char*) utf8ToString(buf->fullname));
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
 
     // The server computes edit ranges against ITS copy of the document, and
     // ours is only pushed on the completion debounce — so without an
