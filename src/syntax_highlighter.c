@@ -7,17 +7,6 @@
 
 extern EditorConfig E;
 
-const char *c_keywords[] = {
-    "if",     "else",     "while",    "for",     "do",       "switch",
-    "case",   "break",    "#include", "#define", "#if", "#endif", "#ifndef", "continue", "return",
-    "goto",   "struct",   "union",    "enum",    "typedef",  "static",
-    "extern", "const",    "volatile", "sizeof",  "auto",     "register",
-    "inline", "restrict", NULL};
-
-const char *c_types[] = {"int",    "char", "float", "double",
-                         "void",   "long", "short", "unsigned",
-                         "signed", "bool", NULL};
-
 /**
  * @brief Decode the Unicode codepoint stored in a Utf8Char.
  * @note Utf8Char already carries its own byte length, so this is a direct
@@ -46,6 +35,13 @@ static uint32_t utf8CharCodepoint(const Utf8Char *c)
 
 /**
  * @brief Is this character a "word" character for identifier/keyword purposes?
+ * @details '#' is included for every language, not just C — it costs
+ * nothing for a language that never emits a bare '#' outside of a comment
+ * (the comment check always runs first in highlight_line(), so it never
+ * gets the chance to be scanned as a word start there), and it's what lets
+ * the "c" package register "#include"/"#define"/... as ordinary multi-
+ * character keyword strings rather than needing special preprocessor
+ * handling of its own.
  * @param c A single decoded Utf8Char (not a byte pointer)
  */
 int is_word_char(const Utf8Char *c)
@@ -83,6 +79,29 @@ static int isAsciiChar(const Utf8Char *c, char ch)
 }
 
 /**
+ * @brief Does `needle` (a short, plain-ASCII delimiter — "//", a block-open
+ * like "/" + "*", "#", ...) match starting at row->characters[i]?
+ * @details An empty needle always reports no match — that's how a language
+ * with no block comment (say) encodes "this delimiter doesn't exist" rather
+ * than every call site needing its own `lang->block_comment_open[0] &&`
+ * guard before calling in.
+ * @return The number of characters matched (== strlen(needle)) on a match,
+ * or 0.
+ */
+static int rowMatchesAt(const Row *row, int i, const char *needle)
+{
+    if (!needle[0]) return 0;
+    int n = 0;
+    while (needle[n])
+    {
+        if (i + n >= row->size || !isAsciiChar(&row->characters[i + n], needle[n]))
+            return 0;
+        n++;
+    }
+    return n;
+}
+
+/**
  * @brief Copy one full character (1-4 raw bytes) from a Utf8Char array into
  * a plain byte output buffer, advancing both the character index and the
  * byte-output position.
@@ -104,22 +123,6 @@ static void copy_utf8_char(char *dst, int *dst_pos, const Utf8Char *src, int *sr
     (*src_pos)++;
 }
 
-int is_keyword(const char *word)
-{
-    for (int i = 0; c_keywords[i] != NULL; i++)
-        if (strcmp(word, c_keywords[i]) == 0)
-            return 1;
-    return 0;
-}
-
-int is_type(const char *word)
-{
-    for (int i = 0; c_types[i] != NULL; i++)
-        if (strcmp(word, c_types[i]) == 0)
-            return 1;
-    return 0;
-}
-
 const char *get_color(TokenType type)
 {
     switch (type)
@@ -131,6 +134,18 @@ const char *get_color(TokenType type)
         case TOKEN_NUMBER:   return E.theme.COLOR_NUMBER;
         default:             return E.theme.COLOR_DEFAULT;
     }
+}
+
+const LanguageSyntax *syntaxLanguageFor(Utf8Char *filename)
+{
+    char ext[16];
+    if (!utf8FilenameExtension(filename, ext, sizeof(ext)))
+        return NULL;
+
+    for (int i = 0; i < E.number_of_languages; i++)
+        if (strcmp(E.languages[i].extension, ext) == 0)
+            return &E.languages[i];
+    return NULL;
 }
 
 int comment_section = 0;
@@ -160,47 +175,45 @@ int comment_section = 0;
  * strings/char literals whole (so a block-comment-opening sequence inside
  * one isn't mistaken for a real one) — the same token precedence
  * highlight_line() itself uses, minus everything that doesn't affect that
- * answer (numbers, identifiers, operators).
+ * answer (numbers, identifiers, operators). Driven by `lang`'s own
+ * delimiters rather than anything hardcoded, so this is exactly as correct
+ * (or as inapplicable — an empty block_comment_open means it simply never
+ * matches) for any registered language, not just C.
  */
-static void scanRowForCommentState(const Row *row, int *in_comment)
+static void scanRowForCommentState(const Row *row, int *in_comment, const LanguageSyntax *lang)
 {
     int i = 0;
     while (i < row->size)
     {
         if (*in_comment)
         {
-            if (isAsciiChar(&row->characters[i], '*') && i + 1 < row->size &&
-                isAsciiChar(&row->characters[i + 1], '/'))
-            {
-                *in_comment = 0;
-                i += 2;
-            }
-            else
-            {
-                i++;
-            }
+            int closeLen = rowMatchesAt(row, i, lang->block_comment_close);
+            if (closeLen) { *in_comment = 0; i += closeLen; }
+            else i++;
             continue;
         }
 
         // Line comment: nothing else on this row can matter once one starts.
-        if (isAsciiChar(&row->characters[i], '/') && i + 1 < row->size &&
-            isAsciiChar(&row->characters[i + 1], '/'))
+        if (rowMatchesAt(row, i, lang->line_comment))
             return;
 
-        if (isAsciiChar(&row->characters[i], '/') && i + 1 < row->size &&
-            isAsciiChar(&row->characters[i + 1], '*'))
+        int openLen = rowMatchesAt(row, i, lang->block_comment_open);
+        if (openLen)
         {
             *in_comment = 1;
-            i += 2;
+            i += openLen;
             continue;
         }
 
-        if (isAsciiChar(&row->characters[i], '"') || isAsciiChar(&row->characters[i], '\''))
+        int quote = -1;
+        for (int q = 0; q < lang->num_quote_chars; q++)
+            if (isAsciiChar(&row->characters[i], lang->quote_chars[q])) { quote = q; break; }
+        if (quote >= 0)
         {
-            unsigned char quote = row->characters[i].character[0];
+            unsigned char qc = (unsigned char) lang->quote_chars[quote];
             i++;
             while (i < row->size && !(row->characters[i].length == 1 &&
-                                      row->characters[i].character[0] == quote))
+                                      row->characters[i].character[0] == qc))
             {
                 if (isAsciiChar(&row->characters[i], '\\'))
                     i++; // also skip the escaped character, if there is one
@@ -222,7 +235,7 @@ static void scanRowForCommentState(const Row *row, int *in_comment)
  * keeps re-seeding the highlighter on every frame from being an O(file
  * size) cost on every single redraw; it's only paid once per edit.
  */
-static void ensureCommentStateFresh(Buffer *buf)
+static void ensureCommentStateFresh(Buffer *buf, const LanguageSyntax *lang)
 {
     if (buf->comment_state_valid && buf->comment_state_numrows == buf->numrows)
         return;
@@ -235,7 +248,7 @@ static void ensureCommentStateFresh(Buffer *buf)
     for (int r = 0; r < buf->numrows; r++)
     {
         fresh[r] = (unsigned char) in_comment; // state at the *start* of this row
-        scanRowForCommentState(&buf->row[r], &in_comment);
+        scanRowForCommentState(&buf->row[r], &in_comment, lang);
     }
 
     free(buf->comment_state);
@@ -248,7 +261,12 @@ int commentStateAtRowStart(Buffer *buf, int row)
 {
     if (!buf)
         return 0;
-    ensureCommentStateFresh(buf);
+    const LanguageSyntax *lang = syntaxLanguageFor(buf->filename);
+    // No registered language, or one with no block comment at all (e.g.
+    // YAML): nothing can ever be "inside" one, so there's nothing to scan.
+    if (!lang || !lang->block_comment_open[0])
+        return 0;
+    ensureCommentStateFresh(buf, lang);
     if (!buf->comment_state || row < 0 || row >= buf->comment_state_numrows)
         return 0;
     return buf->comment_state[row];
@@ -269,11 +287,21 @@ void syntaxHighlighterSeed(int in_comment)
  * @brief Highlight one editor row and return an ANSI-colored, ready-to-render
  * byte string (raw UTF-8 + color escapes — not a Utf8Char array, since this
  * is terminal output, not editable text).
+ * @details Entirely driven by `lang`: which words are keywords vs types,
+ * what starts a line/block comment, which characters open a string. There
+ * is nothing language-specific left in this function itself — a package
+ * registering its own language via (syntax-define-language ...) plus
+ * repeated syntax-add-keyword/syntax-add-type calls gets exactly the same
+ * highlighting machinery C does, because C now goes through the identical
+ * path (the "c" package registers its own keyword/type list the same way).
  * @param row The row to highlight (row->characters / row->size)
  * @param length Out-param: length in bytes of the returned string (including terminator)
+ * @param lang The calling buffer's registered language (must be non-NULL —
+ * callers only get here once syntaxLanguageFor() has already found one)
  * @return Newly allocated string, caller must free(); NULL on allocation failure
  */
-char *highlight_line(const Row *row, int *length, int x_offset, int width)
+char *highlight_line(const Row *row, int *length, int x_offset, int width,
+                     const LanguageSyntax *lang)
 {
     // Worst case per character: a color code (~20 bytes) + up to 4 raw bytes
     // + a reset code (~10 bytes). Generous margin, plus a flat buffer for
@@ -291,8 +319,8 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width)
     // order to stay correct across the whole line (and across lines, for
     // block comments) — but copy_utf8_char only writes bytes for characters
     // whose column falls in [x_start, x_end), so the *output* is clipped to
-    // exactly what the pane can show, matching how the plain-text (non-C)
-    // row path already respects x_offset/width.
+    // exactly what the pane can show, matching how the plain-text row path
+    // already respects x_offset/width.
     int x_start = x_offset;
     int x_end = x_offset + width;
 
@@ -310,13 +338,24 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width)
 
         if (comment_section)
         {
+            // Stop coloring the moment the close delimiter is found, not at
+            // end of row — a row where a multi-line comment closes partway
+            // through (e.g. "  spans lines */ int x = 5;") has real code
+            // after the "*/" that has to fall through to the rest of this
+            // loop, not render as part of the comment. This mirrors the
+            // block-comment-open branch below, which already breaks the
+            // same way; a row where comment_section carries in from a
+            // *previous* row used to be the one case that didn't.
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_COMMENT);
             while (i < row->size)
             {
-                if (isAsciiChar(&chars[i], '*') && i + 1 < row->size &&
-                    isAsciiChar(&chars[i + 1], '/'))
+                int closeLen = rowMatchesAt(row, i, lang->block_comment_close);
+                if (closeLen)
                 {
+                    for (int k = 0; k < closeLen; k++)
+                        copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
                     comment_section = 0;
+                    break;
                 }
                 copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
             }
@@ -326,8 +365,7 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width)
         }
 
         // Line comments
-        if (isAsciiChar(&chars[i], '/') && i + 1 < row->size &&
-            isAsciiChar(&chars[i + 1], '/'))
+        if (rowMatchesAt(row, i, lang->line_comment))
         {
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_COMMENT);
             while (i < row->size)
@@ -337,20 +375,20 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width)
         }
 
         // Block comments
-        if (isAsciiChar(&chars[i], '/') && i + 1 < row->size &&
-            isAsciiChar(&chars[i + 1], '*'))
+        int openLen = rowMatchesAt(row, i, lang->block_comment_open);
+        if (openLen)
         {
             comment_section = 1;
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_COMMENT);
-            copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-            copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
+            for (int k = 0; k < openLen; k++)
+                copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
             while (i < row->size)
             {
-                if (isAsciiChar(&chars[i], '*') && i + 1 < row->size &&
-                    isAsciiChar(&chars[i + 1], '/'))
+                int closeLen = rowMatchesAt(row, i, lang->block_comment_close);
+                if (closeLen)
                 {
-                    copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-                    copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
+                    for (int k = 0; k < closeLen; k++)
+                        copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
                     comment_section = 0;
                     break;
                 }
@@ -360,12 +398,18 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width)
             continue;
         }
 
-        // Strings
-        if (isAsciiChar(&chars[i], '"'))
+        // Strings — any of this language's configured quote characters,
+        // all sharing the same backslash-escape handling.
+        int quote_idx = -1;
+        for (int q = 0; q < lang->num_quote_chars; q++)
+            if (isAsciiChar(&chars[i], lang->quote_chars[q])) { quote_idx = q; break; }
+        if (quote_idx >= 0)
         {
-            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s\"", E.theme.COLOR_STRING);
+            unsigned char quote = (unsigned char) lang->quote_chars[quote_idx];
+            char qbuf[2] = { (char) quote, '\0' };
+            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s%s", E.theme.COLOR_STRING, qbuf);
             i++;
-            while (i < row->size && !isAsciiChar(&chars[i], '"'))
+            while (i < row->size && !(chars[i].length == 1 && chars[i].character[0] == quote))
             {
                 if (isAsciiChar(&chars[i], '\\'))
                 {
@@ -378,37 +422,13 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width)
                     copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
                 }
             }
-            if (i < row->size && isAsciiChar(&chars[i], '"'))
+            if (i < row->size && chars[i].length == 1 && chars[i].character[0] == quote)
                 copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);
             continue;
         }
 
-        // Character literals
-        if (isAsciiChar(&chars[i], '\''))
-        {
-            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s'", E.theme.COLOR_STRING);
-            i++;
-            while (i < row->size && !isAsciiChar(&chars[i], '\''))
-            {
-                if (isAsciiChar(&chars[i], '\\'))
-                {
-                    copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-                    if (i < row->size)
-                        copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-                }
-                else
-                {
-                    copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-                }
-            }
-            if (i < row->size && isAsciiChar(&chars[i], '\''))
-                copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);
-            continue;
-        }
-
-        // Numbers
+        // Numbers — generic across every language, no per-language config
         if (chars[i].length == 1 && chars[i].character[0] >= '0' && chars[i].character[0] <= '9')
         {
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_NUMBER);
@@ -438,10 +458,14 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width)
             word[word_byte_len] = '\0';
 
             TokenType type = TOKEN_DEFAULT;
-            if (is_keyword(word))
-                type = TOKEN_KEYWORD;
-            else if (is_type(word))
-                type = TOKEN_TYPE;
+            for (int wi = 0; wi < lang->num_words; wi++)
+            {
+                if (strcmp(word, lang->words[wi].word) == 0)
+                {
+                    type = lang->words[wi].is_type ? TOKEN_TYPE : TOKEN_KEYWORD;
+                    break;
+                }
+            }
 
             // Classification above needs the full word regardless of what's
             // visible, but only the columns in [x_start, x_end) get emitted.

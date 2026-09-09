@@ -30,6 +30,15 @@ Utf8Char *lastSlashUtf8(Utf8Char * string);
 void utf8Cpy(Utf8Char * dest, Utf8Char * src);
 void utf8NCpy(Utf8Char * dest, Utf8Char * src, int n);
 
+// Extracts the part of `filename` after its last '.' into `out` (plain C
+// string, NUL-terminated, truncated to fit out_size). Returns 1 on success,
+// 0 if filename is NULL (a scratch buffer's fullname legitimately is),
+// there's no '.', the extension is empty, or it contains a non-ASCII byte
+// (no registered extension can ever match one). Shared by the LSP-server
+// lookup and the syntax-highlighter language lookup — both previously kept
+// their own copy of this exact scan.
+int utf8FilenameExtension(const Utf8Char *filename, char *out, size_t out_size);
+
 int utf8Printf(Utf8Char * dest, size_t capacity, const char * format, ...);
 int utf8VaPrintf(Utf8Char * dest, size_t capacity, const char * format, va_list ap);
 

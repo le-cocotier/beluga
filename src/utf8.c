@@ -443,6 +443,31 @@ Utf8Char *lastSlashUtf8(Utf8Char * string){
     return last_slash;
 }
 
+int utf8FilenameExtension(const Utf8Char *filename, char *out, size_t out_size)
+{
+    out[0] = '\0';
+    if (!filename || out_size == 0)
+        return 0;
+
+    int len = utf8StringLen(filename); // includes the terminator
+    if (len < 3) return 0; // need at least "x.e" -> 3 real chars + terminator
+
+    int dot = -1;
+    for (int i = 0; i < len - 1; i++)
+        if (filename[i].length == 1 && filename[i].character[0] == '.')
+            dot = i;
+    if (dot < 0) return 0;
+
+    size_t j = 0;
+    for (int i = dot + 1; i < len - 1 && j < out_size - 1; i++)
+    {
+        if (filename[i].length != 1) return 0; // non-ASCII: no registered extension can match
+        out[j++] = (char) filename[i].character[0];
+    }
+    out[j] = '\0';
+    return j > 0;
+}
+
 void utf8Cpy(Utf8Char * dest, Utf8Char * src) {
     while (*src->character != '\0') {
         dest->length = src->length;

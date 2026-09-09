@@ -962,35 +962,16 @@ struct buffer_t* bufferGetCurrent(void)
  * @brief Finds the registered lsp-server config matching a filename's
  * extension (see the Lisp `lsp-server` builtin), or NULL if none was
  * registered for it.
- * @note Guards against short/empty filenames rather than assuming a
- * minimum length, since utf8StringLen(...) - 3 would underflow otherwise.
+ * @note A buffer with no name at all (EXPLORER_BUFF: the explorer sidebar,
+ * "*search*", "*tree*" — legitimately NULL fullname) has no extension and
+ * so no server; utf8FilenameExtension() reports that rather than
+ * dereferencing the NULL.
  */
 struct lspServerConfig_t* lspServerConfigFor(Utf8Char* filename)
 {
-    // A buffer with no name at all has no extension and so no server —
-    // and utf8StringLen() would dereference the NULL rather than say so.
-    // Scratch buffers (EXPLORER_BUFF: the explorer sidebar, "*search*",
-    // "*tree*") legitimately have fullname NULL, so this is a state
-    // callers can reach by ordinary use, not a caller bug.
-    if (!filename)
+    char ext[16];
+    if (!utf8FilenameExtension(filename, ext, sizeof(ext)))
         return NULL;
-
-    int len = utf8StringLen(filename); // includes terminator
-    if (len < 3) return NULL; // need at least "x.e" -> 3 real chars + terminator
-
-    int dot = -1;
-    for (int i = 0; i < len - 1; i++)
-        if (filename[i].length == 1 && filename[i].character[0] == '.')
-            dot = i;
-    if (dot < 0) return NULL;
-
-    char ext[16] = {0};
-    int j = 0;
-    for (int i = dot + 1; i < len - 1 && j < (int)sizeof(ext) - 1; i++)
-    {
-        if (filename[i].length != 1) return NULL; // non-ASCII extension: no registered server can match
-        ext[j++] = (char) filename[i].character[0];
-    }
 
     for (int i = 0; i < E.number_of_lsp_servers; i++)
         if (strcmp(E.lsp_servers[i].extension, ext) == 0)

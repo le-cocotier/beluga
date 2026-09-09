@@ -8,6 +8,10 @@ struct prefix_t find_prefix(const char prefix_name[64]);
 Lisp l_projectSearch(Lisp args, LispError *e, LispContext ctx);
 Lisp l_projectSearchGoto(Lisp args, LispError *e, LispContext ctx);
 
+Lisp l_syntaxDefineLanguage(Lisp args, LispError *e, LispContext ctx);
+Lisp l_syntaxAddKeyword(Lisp args, LispError *e, LispContext ctx);
+Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx);
+
 // Mouvement
 
 Lisp moveCursor(Lisp args, LispError *e, LispContext ctx);

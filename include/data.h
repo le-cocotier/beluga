@@ -182,6 +182,49 @@ struct lspServerConfig_t
     char* argv[LSP_SERVER_MAX_ARGS + 1]; // NULL-terminated, for execvp
 };
 
+// ── Syntax highlighting: per-language rules ──────────────────────────────────
+// One keyword or type name registered via the Lisp `syntax-add-keyword` /
+// `syntax-add-type` builtins. is_type picks which of the two theme roles
+// (COLOR_KEYWORD vs COLOR_TYPE) an identifier matching `word` renders in —
+// see get_color() in syntax_highlighter.c.
+typedef struct
+{
+    char word[32];
+    int is_type;
+} SyntaxWord;
+
+// A language's highlighting rules for one file extension, registered via
+// (syntax-define-language "ext" line-comment block-open block-close
+// quote-chars) and built up with repeated syntax-add-keyword/
+// syntax-add-type calls — see builtins.c. highlight_line() in
+// syntax_highlighter.c is entirely generic over this: there is nothing
+// C-specific left in the highlighter itself, only in whatever the "c"
+// package happens to register.
+//
+// An empty line_comment/block_comment_open/block_comment_close means "this
+// language doesn't have that kind of comment at all" (e.g. YAML has no
+// block comment) rather than "not configured yet" — the highlighter and
+// the cross-row comment-state cache both treat an empty delimiter as
+// something that can never match, so there's nothing to special-case at
+// the call sites.
+typedef struct
+{
+    char extension[16];
+    SyntaxWord* words;
+    int num_words;
+    int words_cap;
+
+    char line_comment[8];        // e.g. "//" or "#"
+    char block_comment_open[8];  // e.g. "/*"
+    char block_comment_close[8]; // e.g. "*/"
+
+    // Characters that open a string/char literal, checked one at a time —
+    // e.g. "\"'" for PHP/JS (both quote styles), "\"" for languages with
+    // only double-quoted strings.
+    char quote_chars[8];
+    int num_quote_chars;
+} LanguageSyntax;
+
 struct lsp_client_t
 {
     // ── Process ───────────────────────────────────────────────────────────────
@@ -476,6 +519,10 @@ typedef struct editor_config_t
 
     struct lspServerConfig_t* lsp_servers;
     int number_of_lsp_servers;
+
+    // One entry per extension registered via (syntax-define-language ...).
+    LanguageSyntax* languages;
+    int number_of_languages;
 
     int dirty;
 

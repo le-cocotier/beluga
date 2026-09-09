@@ -103,6 +103,9 @@ void initBuiltins() {
   registerBuiltin("editor-explorer-close", editorExplorerClose);
   registerBuiltin("project-search", l_projectSearch);
   registerBuiltin("project-search-goto", l_projectSearchGoto);
+  registerBuiltin("syntax-define-language", l_syntaxDefineLanguage);
+  registerBuiltin("syntax-add-keyword", l_syntaxAddKeyword);
+  registerBuiltin("syntax-add-type", l_syntaxAddType);
 }
 
 void initConfig() {
@@ -223,6 +226,9 @@ void initEditor() {
   // Same reasoning: init.lisp calls lsp-server while loading
   E.lsp_servers = NULL;
   E.number_of_lsp_servers = 0;
+  // ...and syntax-define-language, from every language package
+  E.languages = NULL;
+  E.number_of_languages = 0;
   E.number_of_prefix = 0;
   // General prefix is 0 (no prefix)
   E.prefix = (struct prefix_t *)malloc(sizeof(struct prefix_t) * 2);
@@ -289,6 +295,13 @@ void deInitEditor()
 
     // free the project-search result list
     projectSearchFree();
+
+    // free syntax-highlighter language registrations (each has its own
+    // separately-allocated word list)
+    for (int i = 0; i < E.number_of_languages; i++)
+        free(E.languages[i].words);
+    free(E.languages);
+
     // free lsp_client
     if (E.lsp_client)
     {

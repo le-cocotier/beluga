@@ -17,17 +17,32 @@ typedef enum {
   TOKEN_DEFAULT
 } TokenType;
 
-char *highlight_line(const Row *row, int *length, int x_offset, int width);
+// Finds the LanguageSyntax registered for `filename`'s extension (see the
+// Lisp `syntax-define-language` builtin), or NULL if none was registered —
+// which is exactly what a file gets rendered as plain text, no highlight_line()
+// call at all. There is no built-in fallback language: even C's highlighting
+// comes entirely from what the "c" package registers, the same as every
+// other language.
+const LanguageSyntax *syntaxLanguageFor(Utf8Char *filename);
+
+// Highlights one row according to `lang`'s rules, clipped to the pane's
+// visible window like the plain-text row path. `lang` must be non-NULL —
+// callers only reach this once syntaxLanguageFor() has already found one.
+char *highlight_line(const Row *row, int *length, int x_offset, int width,
+                     const LanguageSyntax *lang);
 int is_word_char(const Utf8Char *c);
 
 // ── Block-comment state cache ──────────────────────────────────────────────
 // See the comment_state fields on struct buffer_t (data.h) for why this
 // exists: highlight_line() only ever sees the rows currently on screen, so
 // after a scroll it has no way to know whether the first visible row starts
-// inside a "/* ... */" that opened somewhere above it.
+// inside a block comment that opened somewhere above it.
 
 // Returns 1 if `row` starts inside an unclosed block comment, computed (and
-// cached) by scanning the whole buffer from the top. Call this once per
+// cached) by scanning the whole buffer from the top using the buffer's own
+// registered language's comment delimiters. Always 0 for a buffer with no
+// registered language, or one whose language has no block comment at all
+// (e.g. YAML) — there's nothing to track in either case. Call this once per
 // pane, right before rendering its first visible row, and seed the
 // highlighter's carry-over state from the result.
 int commentStateAtRowStart(struct buffer_t *buf, int row);

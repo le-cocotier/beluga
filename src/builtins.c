@@ -1552,3 +1552,128 @@ Lisp l_projectSearchGoto(Lisp args, LispError *e, LispContext ctx) {
   projectSearchGotoCursor();
   return lisp_null();
 }
+
+/**
+ * @brief Finds the LanguageSyntax entry for `ext`, or NULL if none has
+ * been registered yet (syntax-add-keyword/syntax-add-type before the
+ * matching syntax-define-language do nothing rather than crash — same
+ * "register the container first" order as add-prefix before map-key).
+ */
+static LanguageSyntax* findLanguageByExtension(const char *ext) {
+  for (int i = 0; i < E.number_of_languages; i++)
+    if (strcmp(E.languages[i].extension, ext) == 0)
+      return &E.languages[i];
+  return NULL;
+}
+
+/**
+ * @brief Lisp function to register a language's syntax-highlighting rules
+ * for a file extension
+ * @details (syntax-define-language "ext" line-comment block-comment-open
+ * block-comment-close quote-chars) — e.g.
+ * (syntax-define-language "php" "//" "/\*" "*\/" "\"'"). Any of the four
+ * strings can be "" to mean "this language doesn't have that" (YAML has
+ * no block comment, so its block-open/close are both ""). Call this once
+ * per extension, before any syntax-add-keyword/syntax-add-type calls for
+ * it — this is what allocates the entry those look up by name.
+ *
+ * Re-registering an already-defined extension resets its word list back
+ * to empty rather than leaving stale entries from a previous call —
+ * harmless in practice (a package only calls this once for its own
+ * extension), but means loading the same package twice doesn't leave a
+ * duplicated keyword list behind.
+ * @param args Lisp list: (extension line-comment block-open block-close quote-chars)
+ * @return lisp_null()
+ * @note Updates global editor state E (languages array)
+ */
+Lisp l_syntaxDefineLanguage(Lisp args, LispError *e, LispContext ctx) {
+  const char *ext = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  const char *line_comment = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  const char *block_open = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  const char *block_close = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  const char *quote_chars = lisp_string(lisp_car(args));
+
+  LanguageSyntax *lang = findLanguageByExtension(ext);
+  if (!lang) {
+    void *mem = realloc(E.languages, (size_t)(E.number_of_languages + 1) * sizeof(LanguageSyntax));
+    if (!mem)
+      return lisp_null();
+    E.languages = (LanguageSyntax *) mem;
+    lang = &E.languages[E.number_of_languages++];
+  } else {
+    free(lang->words); // re-registering: drop whatever keywords/types it had
+  }
+  memset(lang, 0, sizeof(*lang));
+  strncpy(lang->extension, ext, sizeof(lang->extension) - 1);
+  strncpy(lang->line_comment, line_comment, sizeof(lang->line_comment) - 1);
+  strncpy(lang->block_comment_open, block_open, sizeof(lang->block_comment_open) - 1);
+  strncpy(lang->block_comment_close, block_close, sizeof(lang->block_comment_close) - 1);
+
+  lang->num_quote_chars = 0;
+  for (int i = 0; quote_chars[i] != '\0' && lang->num_quote_chars < (int) sizeof(lang->quote_chars) - 1; i++)
+    lang->quote_chars[lang->num_quote_chars++] = quote_chars[i];
+
+  return lisp_null();
+}
+
+/**
+ * @brief Shared body for syntax-add-keyword/syntax-add-type — appends one
+ * word to `ext`'s LanguageSyntax, growing the array as needed.
+ */
+static void syntaxAddWord(const char *ext, const char *word, int is_type) {
+  LanguageSyntax *lang = findLanguageByExtension(ext);
+  if (!lang)
+    return; // no (syntax-define-language "ext" ...) yet — silently no-op,
+             // matching map-key's own fallback when its prefix isn't
+             // registered yet
+
+  if (lang->num_words >= lang->words_cap) {
+    int new_cap = lang->words_cap ? lang->words_cap * 2 : 32;
+    void *mem = realloc(lang->words, (size_t) new_cap * sizeof(SyntaxWord));
+    if (!mem)
+      return;
+    lang->words = (SyntaxWord *) mem;
+    lang->words_cap = new_cap;
+  }
+
+  SyntaxWord *w = &lang->words[lang->num_words++];
+  memset(w, 0, sizeof(*w));
+  strncpy(w->word, word, sizeof(w->word) - 1);
+  w->is_type = is_type;
+}
+
+/**
+ * @brief Lisp function to add one keyword to a registered language
+ * @details (syntax-add-keyword "ext" "word") — colors any identifier
+ * matching `word` exactly (not a substring/prefix match) with the theme's
+ * "keyword" color. Call syntax-define-language for `ext` first; called
+ * before that, this silently does nothing.
+ * @param args Lisp list: (extension word)
+ * @return lisp_null()
+ */
+Lisp l_syntaxAddKeyword(Lisp args, LispError *e, LispContext ctx) {
+  const char *ext = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  const char *word = lisp_string(lisp_car(args));
+  syntaxAddWord(ext, word, 0);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to add one type name to a registered language
+ * @details (syntax-add-type "ext" "word") — same as syntax-add-keyword,
+ * but colors with the theme's "type" color instead.
+ * @param args Lisp list: (extension word)
+ * @return lisp_null()
+ */
+Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx) {
+  const char *ext = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  const char *word = lisp_string(lisp_car(args));
+  syntaxAddWord(ext, word, 1);
+  return lisp_null();
+}

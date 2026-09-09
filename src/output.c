@@ -310,12 +310,20 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         free(highlighted);
       } else {
 
-        if (*buf->filename[utf8StringLen(buf->filename) - 2].character == 'c' ||
-            *buf->filename[utf8StringLen(buf->filename) - 2].character == 'h') {
+        // Extension-based lookup against whatever packages have actually
+        // registered via (syntax-define-language ...), rather than a
+        // hardcoded "does the filename end in c or h" check — the old
+        // check also matched anything merely *ending* in those letters
+        // (a file called "search" would have gone through the C
+        // tokenizer), and gave C highlighting no matter what packages
+        // were loaded. Now a buffer with no registered language for its
+        // extension always falls through to plain text, C included.
+        const LanguageSyntax *lang = syntaxLanguageFor(buf->filename);
+        if (lang) {
           byte_len_to_print = 0;
           // Render line with syntax highlighting, constrain to pane width
           highlighted = highlight_line(&buf->row[file_row], &byte_len_to_print,
-                                       pane->x_offset, content_width);
+                                       pane->x_offset, content_width, lang);
 
           if (has_selection) {
             int wrapped_len = 0;
