@@ -47,6 +47,7 @@
 (add-package "c")
 ;; (add-package "python")   ; needs pyright-langserver on PATH
 ;; (add-package "rust")     ; needs rust-analyzer on PATH
+;; (add-package "php")      ; needs intelephense on PATH — no PHP install required
 ;; (add-package "latex")    ; digestif ships with TeX Live; texlab is a one-line swap
 ;; (add-package "yaml")     ; needs yaml-language-server on PATH
 ;; (add-package "nodejs")   ; needs typescript-language-server + typescript@5
