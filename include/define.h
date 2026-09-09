@@ -62,7 +62,7 @@
 
 #define BACKSPACE    127    // 0x7F (DEL byte many terminals send for Backspace)
 
-#define ABUF_INIT {NULL, 0}
+#define ABUF_INIT {NULL, 0, 0}
 
 #define BELUGA_VERSION "3.1"
 

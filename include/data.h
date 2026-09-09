@@ -529,6 +529,7 @@ struct abuf
 {
     char* b; /**< Text that will be printed */
     int len; /**< Length of the text */
+    int bf_size; /**< Total length of buffer */
 };
 
 
