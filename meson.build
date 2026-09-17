@@ -1,5 +1,5 @@
 project('beluga', 'c',
-  version : '3.1',
+  version : '3.2',
   default_options : [
     'c_std=c99'
   ]
@@ -51,7 +51,8 @@ src_files = files(
   'src/which_key.c',
   'src/popup_ui.c',
   'src/subprocess.c',
-  'src/project_search.c'
+  'src/project_search.c',
+  'src/file_finder.c'
 )
 
 # Executable

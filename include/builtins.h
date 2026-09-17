@@ -7,6 +7,9 @@ struct prefix_t find_prefix(const char prefix_name[64]);
 
 Lisp l_projectSearch(Lisp args, LispError *e, LispContext ctx);
 Lisp l_projectSearchGoto(Lisp args, LispError *e, LispContext ctx);
+Lisp l_findFile(Lisp args, LispError *e, LispContext ctx);
+Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx);
+Lisp editorPromptLisp(Lisp args, LispError *e, LispContext ctx);
 
 Lisp l_syntaxDefineLanguage(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddKeyword(Lisp args, LispError *e, LispContext ctx);
@@ -54,6 +57,7 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx);
 Lisp editorOpenFilePath(Lisp args, LispError *e, LispContext ctx);
 
 // Directory listing / scratch buffers — file explorer, tree dump, etc.
+Lisp l_listBuffers(Lisp args, LispError *e, LispContext ctx);
 Lisp editorSwitchToBuffer(Lisp args, LispError *e, LispContext ctx);
 Lisp editorPwd(Lisp args, LispError *e, LispContext ctx);
 Lisp listDirectory(Lisp args, LispError *e, LispContext ctx);

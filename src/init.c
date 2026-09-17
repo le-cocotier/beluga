@@ -1,6 +1,7 @@
 #include "../include/init.h"
 #include "../include/builtins.h"
 #include "../include/project_search.h"
+#include "../include/file_finder.h"
 #include "../include/color.h"
 #include "../include/data.h"
 #include "../include/terminal.h"
@@ -94,8 +95,11 @@ void initBuiltins() {
   registerBuiltin("editor-goto-line", editorGotoLine);
   registerBuiltin("editor-list-popup", editorListPopup);
   registerBuiltin("editor-open-file-path", editorOpenFilePath);
+  registerBuiltin("list-buffers", l_listBuffers);
   registerBuiltin("editor-switch-to-buffer", editorSwitchToBuffer);
   registerBuiltin("editor-pwd", editorPwd);
+  registerBuiltin("project-root", l_projectRoot);
+  registerBuiltin("editor-prompt", editorPromptLisp);
   registerBuiltin("list-directory", listDirectory);
   registerBuiltin("editor-scratch-open", editorScratchOpen);
   registerBuiltin("editor-scratch-set-lines", editorScratchSetLines);
@@ -103,11 +107,25 @@ void initBuiltins() {
   registerBuiltin("editor-explorer-close", editorExplorerClose);
   registerBuiltin("project-search", l_projectSearch);
   registerBuiltin("project-search-goto", l_projectSearchGoto);
+  registerBuiltin("find-file", l_findFile);
   registerBuiltin("syntax-define-language", l_syntaxDefineLanguage);
   registerBuiltin("syntax-add-keyword", l_syntaxAddKeyword);
   registerBuiltin("syntax-add-type", l_syntaxAddType);
 }
 
+/**
+ * @brief Sets up the Lisp interpreter, registers all builtins, then reads
+ * and evaluates config/init.lisp.
+ * @details This is the one call that actually loads the user's config:
+ * evaluating init.lisp runs every top-level form in it in sequence, which
+ * is what add-package's each package's own init.lisp, runs map-key/add-hook/
+ * lsp-server calls, and — via whichever theme package calls
+ * editor-set-theme-color — is what sets E.theme's real colors. There is no
+ * separate "load the theme" step; it all happens here as a side effect of
+ * evaluating Lisp. initStartupConstants(), called right after this returns,
+ * only picks a handful of plain (non-color) values back out of the
+ * resulting environment.
+ */
 void initConfig() {
 
   E.ctx = lisp_init();
@@ -147,15 +165,20 @@ static int readBoolConst(const char *name, int fallback) {
 }
 
 /**
- * @brief Reads non-color startup constants from init.lisp
- * @details Theme *colors* are no longer read here — they're set directly
- * onto E.theme by the editor-set-theme-color builtin, called from
- * whichever theme package (add-package "theme-dark", "theme-light", or
- * a user's own) config/init.lisp loads. initEditor() seeds E.theme with
- * a hardcoded fallback before initConfig() runs, so there's always a
- * valid theme even if no package sets one.
+ * @brief Reads non-color startup constants (LSP, LINE-NUMBERS, WHICH-KEY,
+ * TAB-LENGTH, QUIT-TIMES) out of the Lisp environment initConfig() just
+ * finished loading, into E.constantes.
+ * @details Despite the historical name this doesn't touch theme *colors*
+ * at all — those are set directly onto E.theme by the editor-set-theme-color
+ * builtin, called as a side effect of evaluating config/init.lisp inside
+ * initConfig() (whichever theme package it add-package's — "theme-dark",
+ * "theme-light", or a user's own — calls editor-set-theme-color while its
+ * own init.lisp loads). initEditor() seeds E.theme with a hardcoded
+ * fallback before initConfig() runs, so there's always a valid theme even
+ * if no package sets one. Must run after initConfig(): it looks up symbols
+ * (LSP, TAB-LENGTH, ...) that only exist once init.lisp has been evaluated.
  */
-void initTheme() {
+void initStartupConstants() {
   E.constantes.LSP = lisp_bool(lisp_eval(lisp_read("LSP", &E.ctx_error, E.ctx), &E.ctx_error, E.ctx));
   E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
   E.constantes.WHICH_KEY = readBoolConst("WHICH-KEY", 1);
@@ -230,8 +253,14 @@ void initEditor() {
   E.languages = NULL;
   E.number_of_languages = 0;
   E.number_of_prefix = 0;
-  // General prefix is 0 (no prefix)
-  E.prefix = (struct prefix_t *)malloc(sizeof(struct prefix_t) * 2);
+
+  // "no-prefix" MUST stay id 0 — every hardcoded `E.prefix_state = 0`
+  // reset scattered across the codebase (buffer.c, input.c,
+  // project_search.c, split_screen.c, which_key.c) assumes id 0 means
+  // "no-prefix" rather than looking it up by name each time. Put any new
+  // built-in prefix (like "*" below) after the existing ones instead of
+  // renumbering these.
+  E.prefix = (struct prefix_t *)malloc(sizeof(struct prefix_t) * 3);
   E.prefix[0].prefix_id = 0;
   E.prefix[0].sticky = 0;
   sprintf(E.prefix[0].prefix_name, "no-prefix");
@@ -243,10 +272,21 @@ void initEditor() {
   // happened to be active — with ENTER meaning something else entirely.
   // Sticky, so arrow keys can walk the result list without dropping out
   // after the first press.
-  E.number_of_prefix = 1;
   E.prefix[1].prefix_id = 1;
   E.prefix[1].sticky = 1;
   sprintf(E.prefix[1].prefix_name, "search");
+
+  // "*" is the global prefix: STAR_PREFIX in input.c matches a keybind
+  // registered under it regardless of E.prefix_state, so e.g. CTRL-g can
+  // reset to no-prefix from inside any other prefix with one binding
+  // instead of one per prefix. Its own id is never assigned to
+  // E.prefix_state — nothing ever "enters" the global prefix — so unlike
+  // "no-prefix" and "search" above, no other code depends on this
+  // particular index; it just has to not collide with them.
+  E.number_of_prefix = 2;
+  E.prefix[2].prefix_id = 2;
+  E.prefix[2].sticky = 0;
+  sprintf(E.prefix[2].prefix_name, "*");
 
   E.prefix_state = 0;
   E.prompt_input = NULL;
@@ -258,6 +298,7 @@ void initEditor() {
   // overwrite these during config load, but there's always something
   // valid in E.theme even if no theme package is installed/loaded.
   E.theme.BACKGROUND_COLOR = ANSI_BG_RGB(40, 44, 52);
+  E.theme.LINE_CURSOR_BACKGROUND = ANSI_BG_RGB(60, 64, 72);
   E.theme.COLOR_KEYWORD = ANSI_FG_RGB(198, 120, 221);
   E.theme.COLOR_TYPE = ANSI_FG_RGB(97, 175, 239);
   E.theme.COLOR_STRING = ANSI_FG_RGB(152, 195, 121);
@@ -266,7 +307,7 @@ void initEditor() {
   E.theme.COLOR_DEFAULT = ANSI_FG_RGB(171, 178, 191);
 
   initConfig();
-  initTheme();
+  initStartupConstants();
   E.lsp_client = (LspClient *)malloc(sizeof(LspClient));
   E.lsp_client->state = LSP_NOT_STARTED;
   // Both left as garbage otherwise until lspStart() actually runs, but
@@ -275,13 +316,21 @@ void initEditor() {
   // whether to start a server.
   E.lsp_client->read_from_server_fd = -1;
   E.lsp_client->write_to_server_fd = -1;
+  // Also left as garbage otherwise — lspSyncDebounceTick() (completion.c)
+  // reads sync_debounce_pending/deadline before any lspScheduleCompletion-
+  // style call would ever overwrite them, since it self-arms rather than
+  // waiting to be told to. An uninitialized deadline that happens to land
+  // far in the future would silently stall diagnostics resyncing forever.
+  E.lsp_client->sync_debounce_pending = 0;
+  E.lsp_client->sync_debounce_deadline_ms = 0;
+  E.lsp_client->sync_debounce_buffer_id = -1;
 
   E.quit_times_buffer = E.constantes.QUIT_TIMES;
 }
 
 void deInitEditor()
 {
-	// free EditorPane
+    // free EditorPane
     free(E.layout.panes);
 
     // free status_msg
@@ -295,6 +344,9 @@ void deInitEditor()
 
     // free the project-search result list
     projectSearchFree();
+
+    // free the fuzzy file finder's path snapshot
+    fileFinderClose();
 
     // free syntax-highlighter language registrations (each has its own
     // separately-allocated word list)

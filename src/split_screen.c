@@ -188,18 +188,55 @@ int splitScreenSplitActive(SplitMode direction) {
 
 /**
  * @brief Returns to single buffer fullscreen
+ * @details Prefers a real (non-EXPLORER_BUFF) pane's buffer as what
+ * survives the collapse. panes[0] is otherwise just "whichever pane
+ * happens to be first" — and the sidebar always sits at panes[0] (see
+ * splitScreenWithSidebar()), so blindly keeping it would leave the
+ * read-only tree fullscreen and silently drop whatever real content was
+ * in the other pane. This used to be a search splitScreenCloseSidebar()
+ * ran itself before calling this; moved here because that isn't the only
+ * way to reach a collapse-to-one-pane with the sidebar still open — ESC
+ * out of the sidebar's own keymap back to no-prefix first (its focus
+ * doesn't move off the sidebar pane), then a plain CTRL-x * reaches this
+ * function directly, and used to strand you looking at *explorer* with
+ * no visible way back to what you were editing.
+ *
+ * Also resyncs E.prefix_state to whatever buffer actually survives (see
+ * splitScreenApplyFocusPrefix()) — this function used to leave the prefix
+ * exactly as it was before the collapse, no matter what. Landing on a
+ * terminal buffer while the prefix was still e.g. "no-prefix" is the
+ * dangerous case: ENTER/BACKSPACE/typing would then run as ordinary
+ * buffer-editing calls (bufferInsertNewLine, bufferRowInsertChar, ...)
+ * directly on that row instead of being forwarded to the PTY. Those know
+ * nothing about a terminal row's attrs[] (an ANSI-parser-only concept —
+ * see ansi_parser.c's ensureAttrs()) and grow row->size/characters
+ * without it, so a later termRenderRow() call reads attrs[] past its
+ * actual allocation — a real heap-buffer-overflow, not just a display
+ * glitch, reproduced via exactly this sequence (open a terminal, land on
+ * it through a collapse with the wrong prefix, then edit).
  */
 void splitScreenUnify(void) {
+    int keep_buffer_id = E.layout.panes[0].buffer_id;
+    for (int i = 0; i < E.layout.num_panes; i++) {
+        struct buffer_t *b = bufferFindById(E.layout.panes[i].buffer_id);
+        if (b && b->type != EXPLORER_BUFF) {
+            keep_buffer_id = E.layout.panes[i].buffer_id;
+            break;
+        }
+    }
+
     E.layout.mode = SPLIT_NONE;
     E.layout.num_panes = 1;
     E.layout.active_pane = 0;
 
+    E.layout.panes[0].buffer_id = keep_buffer_id;
     E.layout.panes[0].origin_x = 0;
     E.layout.panes[0].origin_y = 0;
     E.layout.panes[0].height = E.screenrows;
     E.layout.panes[0].width = E.screencols;
     E.layout.panes[0].is_active = 1;
 
+    splitScreenApplyFocusPrefix();
     editorSetStatusMessage("Unified view");
     splitScreenSyncTerminalSizes();
 }
@@ -293,26 +330,53 @@ int splitScreenWithSidebar(int sidebar_buffer_id, int main_buffer_id, int sideba
 /**
  * @brief Collapses a sidebar split back to fullscreen, keeping whichever
  * pane ISN'T an EXPLORER_BUFF visible.
- * @note Falls back to plain splitScreenUnify() behavior (keep pane 0) if
- * no pane holds a non-explorer buffer — shouldn't normally happen, but a
- * layout with two EXPLORER_BUFF panes is at least handled gracefully.
+ * @note Both the "keep a real pane, not the sidebar" search and the
+ * prefix resync now live in splitScreenUnify() itself — every path that
+ * collapses to one pane goes through it, not just this one. Kept as its
+ * own named entry point for callers that mean specifically "close the
+ * sidebar" (editor-explorer-close), even though it no longer does
+ * anything splitScreenUnify() doesn't already do on its own. This used
+ * to force E.prefix_state to 0 unconditionally here — wrong the moment
+ * the pane that survives is a terminal, which needs "term", not
+ * no-prefix (see splitScreenUnify()'s own doc comment for why that
+ * particular mismatch is a real memory-safety bug, not just a UX one).
  */
 void splitScreenCloseSidebar(void) {
-    if (E.layout.num_panes < 2) {
-        splitScreenUnify();
-        return;
-    }
-
-    for (int i = 0; i < E.layout.num_panes; i++) {
-        struct buffer_t *b = bufferFindById(E.layout.panes[i].buffer_id);
-        if (!b || b->type != EXPLORER_BUFF) {
-            E.layout.panes[0].buffer_id = E.layout.panes[i].buffer_id;
-            break;
-        }
-    }
-
     splitScreenUnify();
-    E.prefix_state = 0;
+}
+
+/**
+ * @brief Moves focus to some other pane that isn't a sidebar-style
+ * EXPLORER_BUFF, without touching pane count or geometry.
+ * @details For "open this into the other pane" callers (project-search's
+ * jump-to-result is the first one) that want a real content pane to land
+ * in, not just splitScreenSwitchPane()'s blind next-in-rotation — which
+ * happily lands on the explorer sidebar if one happens to be part of the
+ * current split, silently overwriting it with whatever the caller was
+ * about to show. Prefers the pane right after the current one, then wraps
+ * around; does nothing (and returns 0) if every other pane is a sidebar
+ * (or there's only one pane to begin with) — callers fall back to opening
+ * in place, same as they already do when there's no split at all.
+ * @return 1 if focus moved to a different pane, 0 if it stayed put.
+ */
+int splitScreenFocusOtherRealPane(void) {
+    if (E.layout.num_panes < 2)
+        return 0;
+
+    int start = E.layout.active_pane;
+    for (int step = 1; step < E.layout.num_panes; step++) {
+        int i = (start + step) % E.layout.num_panes;
+        struct buffer_t *b = bufferFindById(E.layout.panes[i].buffer_id);
+        if (b && b->type == EXPLORER_BUFF)
+            continue;
+
+        E.layout.panes[start].is_active = 0;
+        E.layout.active_pane = i;
+        E.layout.panes[i].is_active = 1;
+        splitScreenApplyFocusPrefix();
+        return 1;
+    }
+    return 0;
 }
 
 /**

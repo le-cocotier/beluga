@@ -49,17 +49,45 @@ Utf8Char* readUtf8Char(void)
         {
             if (seq0 == 'x' || seq0 == 'X')
                 new_char->character[0] = ALT_X;
+            else if (seq0 == 'f')
+                // ESC f / ESC b — readline's forward-word / backward-word,
+                // which is exactly what Terminal.app and iTerm2 send for
+                // Option+Right / Option+Left with their default settings.
+                new_char->character[0] = ALT_ARROW_RIGHT;
+            else if (seq0 == 'b')
+                new_char->character[0] = ALT_ARROW_LEFT;
+            else if (seq0 == '\x1b')
+            {
+                // ESC ESC [ C  /  ESC ESC O C — a plain arrow sequence
+                // behind a Meta prefix, the form a terminal in "Option as
+                // Meta key" mode uses for Option+arrow.
+                char m1, m2;
+                if (read(STDIN_FILENO, &m1, 1) == 1 && (m1 == '[' || m1 == 'O') &&
+                    read(STDIN_FILENO, &m2, 1) == 1)
+                {
+                    switch (m2)
+                    {
+                        case 'C': new_char->character[0] = ALT_ARROW_RIGHT; break;
+                        case 'D': new_char->character[0] = ALT_ARROW_LEFT;  break;
+                        case 'A': new_char->character[0] = ARROW_UP;        break;
+                        case 'B': new_char->character[0] = ARROW_DOWN;      break;
+                        default:  new_char->character[0] = '\x1b';          break;
+                    }
+                }
+                else
+                    new_char->character[0] = '\x1b';
+            }
             else
-                // No general Alt+<key> encoding yet — only Alt-x is
-                // recognized so far, matching the sole current binding.
-                // Falling back to a bare ESC here (instead of the actual
-                // character) used to silently swallow every other
-                // Option-modified key: on many non-US layouts (e.g. French
-                // AZERTY), typing symbols like "{", "}", "[", "]" requires
-                // holding Option too, so with "Option as Meta" enabled in
-                // the terminal, that keystroke arrives as ESC+<char> and
-                // looked exactly like an unrecognized Alt binding — the
-                // character itself is still the best fallback.
+                // No general Alt+<key> encoding yet — the ones above are
+                // the keys actually bound. Falling back to a bare ESC here
+                // (instead of the actual character) used to silently
+                // swallow every other Option-modified key: on many non-US
+                // layouts (e.g. French AZERTY), typing symbols like "{",
+                // "}", "[", "]" requires holding Option too, so with
+                // "Option as Meta" enabled in the terminal, that keystroke
+                // arrives as ESC+<char> and looked exactly like an
+                // unrecognized Alt binding — the character itself is still
+                // the best fallback.
                 new_char->character[0] = seq0;
             new_char->length = 1;
             return new_char;
@@ -76,13 +104,41 @@ Utf8Char* readUtf8Char(void)
         {
             if (seq1 >= '0' && seq1 <= '9')
             {
-                // Extended sequence like \x1b[3~ (Delete), \x1b[5~ (PageUp), etc.
+                // Extended sequence like \x1b[3~ (Delete), \x1b[5~ (PageUp),
+                // or a modified key like \x1b[1;3C (Alt+Right).
                 char final;
-                if (read(STDIN_FILENO, &final, 1) != 1 || final != '~') {
+                if (read(STDIN_FILENO, &final, 1) != 1) {
+                    new_char->length = 1;
+                    return new_char;
+                }
+                if (seq1 == '1' && final == ';')
+                {
+                    // CSI 1 ; <mod> <letter>. mod 3 = Alt, 9 = Meta
+                    // (macOS "Option as Meta"); Shift (2) / Ctrl (5) etc.
+                    // aren't bound, so those fall through to the plain key.
+                    char mod, letter;
+                    if (read(STDIN_FILENO, &mod, 1) != 1 ||
+                        read(STDIN_FILENO, &letter, 1) != 1) {
+                        new_char->length = 1;
+                        return new_char;
+                    }
+                    int is_alt = (mod == '3' || mod == '9');
+                    switch (letter)
+                    {
+                        case 'C': new_char->character[0] = is_alt ? ALT_ARROW_RIGHT : ARROW_RIGHT; break;
+                        case 'D': new_char->character[0] = is_alt ? ALT_ARROW_LEFT  : ARROW_LEFT;  break;
+                        case 'A': new_char->character[0] = ARROW_UP;   break;
+                        case 'B': new_char->character[0] = ARROW_DOWN; break;
+                        case 'H': new_char->character[0] = BEG_LINE;   break;
+                        case 'F': new_char->character[0] = END_LINE;   break;
+                        default:  new_char->character[0] = '\x1b';     break;
+                    }
+                }
+                else if (final != '~') {
                     new_char->length = 1;
                     return new_char; // unrecognized, fall back to ESC
                 }
-                switch (seq1)
+                else switch (seq1)
                 {
                     case '1': new_char->character[0] = BEG_LINE;   break;
                     case '3': new_char->character[0] = DEL_KEY;    break;

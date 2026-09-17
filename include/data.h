@@ -101,6 +101,7 @@ typedef struct
 typedef struct theme
 {
     char* BACKGROUND_COLOR;
+    char* LINE_CURSOR_BACKGROUND;
     char* COLOR_KEYWORD;
     char* COLOR_TYPE;
     char* COLOR_STRING;
@@ -262,6 +263,15 @@ struct lsp_client_t
     int completion_latest_request_id;      // id of the most recently *sent* completion
                                             // request; responses for older ids are stale
 
+    // ── Document sync debounce ────────────────────────────────────────────────
+    // Separate from the completion debounce above: fires a plain didChange
+    // (no completion request) whenever the active buffer's `dirty` counter
+    // has moved past what was last sent, regardless of which edit caused
+    // it — see lspSyncDebounceTick() in completion.c.
+    int sync_debounce_pending;       // 1 = a resync is scheduled but not sent yet
+    long sync_debounce_deadline_ms;  // monotonic ms timestamp to fire at
+    int sync_debounce_buffer_id;     // which buffer the pending resync is for
+
     // ── Completion trigger characters ─────────────────────────────────────────
     // Populated from the server's own initialize response. Falls back to
     // "." alone if the server didn't advertise any — without this,
@@ -317,12 +327,47 @@ typedef struct
 {
     int visible;
     char title[128];
-    Lisp items;      // proper list of (label . value) pairs
+    Lisp items;      // the list currently shown/navigated — all of all_items
+                       // when not filterable, a live subset of it when filterable
     int count;        // cached length of items
     int selected;      // 0-based index into items
     Lisp on_select;    // (lambda (value) ...), called with the chosen pair's cdr
     Lisp on_cancel;    // (lambda () ...) or lisp_null() — called on ESC
+
+    // ── optional live filtering (5th arg to editor-list-popup) ──────────
+    // all_items is the complete, never-mutated list passed in; items above
+    // is rebuilt from it (case-insensitive substring match on each pair's
+    // label) every time query changes. Rebuilding a Lisp list per
+    // keystroke is fine at the scale this popup is meant for (a file's
+    // outline, a handful of environments, buffer names, ...) — a picker
+    // over thousands of items (find-file's project-wide file list) wants
+    // its own C-side snapshot instead, same reasoning file_finder.c
+    // already documents for why it isn't built on this popup.
+    int filterable;
+    Lisp all_items;
+    char query[128];
+    int query_len;
 } ListPopup;
+
+/**
+ * @brief State for the (find-file) fuzzy project-file picker — a modal
+ * popup that snapshots every file in the project once on open, then
+ * narrows the list live as you type and opens the highlighted one on
+ * ENTER. Its own module (file_finder.c) rather than a mode on the generic
+ * list picker: the snapshot is a flat char* array so filtering every
+ * keystroke is a plain C scan, not a walk of a Lisp list.
+ */
+typedef struct
+{
+    int visible;
+    char **paths;      // every project file, root-relative, owned
+    int path_count;
+    int *match;         // indices into paths[] passing the current query, best first
+    int match_count;
+    char query[256];    // what's been typed so far
+    int query_len;      // bytes in query (never splits a UTF-8 char)
+    int selected;       // index into match[] (0-based)
+} FileFinder;
 
 // Numbered to match LSP's own DiagnosticSeverity (1=Error..4=Hint) exactly,
 // so a server's raw severity int can be stored directly with no translation
@@ -447,6 +492,11 @@ typedef struct buffer_t
 
     enum bufferStatus_e state;
     int dirty; /**< Has this buffer been modified since last save */
+    // Value of `dirty` as of the last didChange (or didOpen) sent for this
+    // buffer. lspSyncDebounceTick() compares the two to notice ANY edit —
+    // typing, deleting, undo/redo, paste, kill-region, LSP-applied edits —
+    // not just the word-char/trigger-char keystrokes that arm completion.
+    int lsp_synced_dirty;
 
     // ── Undo/redo (per-buffer; zero-initialized by bufferCreate's calloc) ──
     UndoList undo_stack;
@@ -516,6 +566,7 @@ typedef struct editor_config_t
 
     BufferSwitcherPopup buffer_switcher;
     ListPopup list_popup;
+    FileFinder file_finder;
 
     struct lspServerConfig_t* lsp_servers;
     int number_of_lsp_servers;

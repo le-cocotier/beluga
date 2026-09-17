@@ -63,6 +63,14 @@ void splitScreenCloseSidebar(void);
 int splitScreenSwitchPane(void);
 
 /**
+ * @brief Moves focus to some other pane that isn't the sidebar, for
+ * "open this into the other pane" callers. See split_screen.c for why
+ * this differs from splitScreenSwitchPane()'s blind rotation.
+ * @return 1 if focus moved, 0 if there was no suitable other pane.
+ */
+int splitScreenFocusOtherRealPane(void);
+
+/**
  * @brief Updates the active pane's buffer
  * @param buffer_id New buffer ID for active pane
  * @return 0 on success, -1 on failure

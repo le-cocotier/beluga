@@ -1,9 +1,11 @@
-// src/ansi_parser.c
+/* 
+* @file src/ansi_parser.c
+* @author Giorgio
+*/
+
 #include "../include/ansi_parser.h"
 #include "../include/buffer.h"
 #include "../include/utf8.h"
-#include "../include/terminal.h"
-#include "include/split_screen.h"
 #include <string.h>
 #include <stdlib.h>
 

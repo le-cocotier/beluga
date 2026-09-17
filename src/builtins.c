@@ -8,6 +8,8 @@
 
 #include "../include/builtins.h"
 #include "../include/project_search.h"
+#include "../include/file_finder.h"
+#include "../include/subprocess.h"
 #include "../include/buffer.h"
 #include "../include/data.h"
 #include "../include/output.h"
@@ -239,16 +241,6 @@ Lisp editorQuit(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
- * @brief Lisp function to save the current file
- * @details Wrapper around editorSave() for use in Lisp keybindings.
- * @param args Lisp arguments (unused)
- * @param e Error pointer for Lisp error handling
- * @param ctx Lisp context
- * @return lisp_null()
- * @see editorSave()
- */
-
-/**
  * @brief (editor-split-screen-vertical) — splits the active pane
  * left/right.
  * @details Used to rebuild the layout as exactly two panes showing
@@ -443,6 +435,47 @@ Lisp editorMoveCursorPageDown(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function: generic interactive text prompt
+ * @details (editor-prompt "message: %u" placeholder path-mode?) — shows
+ * `message` on the status line (its one required "%u" is where the
+ * in-progress input renders live, exactly like editor-open-file's
+ * "Open : %u" or M-x's "M-x: %u") and returns whatever the user typed,
+ * or #f if they pressed ESC. `placeholder` pre-fills the input ("" for
+ * none); when `path-mode?` is true, TAB completes filesystem paths
+ * against it, same as editor-open-file.
+ *
+ * This is the same primitive editor-open-file/execute-command/lsp-rename
+ * are each already built on internally (editorPrompt() in input.c) —
+ * exposed generically so a package (e.g. explorer, asking where to root
+ * itself when it can't find a project) can ask its own question without
+ * needing a dedicated C builtin for it.
+ * @param args Lisp list of 3 arguments: (message placeholder path-mode?)
+ * @return Lisp string, or #f if cancelled
+ */
+Lisp editorPromptLisp(Lisp args, LispError *e, LispContext ctx) {
+  const char *prompt = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  const char *placeholder_str = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  int path_mode = lisp_is_true(lisp_car(args));
+
+  Utf8Char *placeholder = placeholder_str[0]
+                               ? stringToUtf8((unsigned char *) placeholder_str)
+                               : NULL;
+  Utf8Char *result = editorPrompt((char *) prompt, placeholder, (char) path_mode);
+  free(placeholder);
+
+  if (!result)
+    return lisp_make_bool(0); // ESC / cancelled
+
+  char *result_str = (char *) utf8ToString(result);
+  free(result);
+  Lisp out = lisp_make_string2(result_str, ctx);
+  free(result_str);
+  return out;
+}
+
+/**
  * @brief Lisp function to open a file
  * @details Prompts user for filename and opens the file for editing.
  * @param args Lisp arguments (unused)
@@ -488,8 +521,8 @@ Lisp editorOpenConfig(Lisp args, LispError *e, LispContext ctx) {
 /**
  * @brief Lisp function to set one theme color
  * @details (editor-set-theme-color role r g b) — role is one of
- * "background", "keyword", "type", "string", "comment", "number",
- * "default"; r/g/b are 0-255. Writes straight into E.theme, replacing
+ * "background", "line-cursor-background", "keyword", "type", "string",
+ * "comment", "number", "default"; r/g/b are 0-255. Writes straight into E.theme, replacing
  * whatever the fallback (or an earlier-loaded theme package) set —
  * lets a theme be an ordinary package (packages/theme-dark,
  * packages/theme-light, or your own) instead of a hardcoded C palette.
@@ -505,11 +538,12 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx) {
   args = lisp_cdr(args);
   int b = (int) lisp_int(lisp_car(args));
 
-  int is_background = !strcmp(role, "background");
+  int is_background = (strstr(role, "background") != NULL);
   char *ansi = malloc(24); // "\x1b[38;2;255;255;255m" + NUL fits well within this
   snprintf(ansi, 24, "\x1b[%d;2;%d;%d;%dm", is_background ? 48 : 38, r, g, b);
 
-  if (is_background)                         E.theme.BACKGROUND_COLOR = ansi;
+  if (!strcmp(role, "background"))           E.theme.BACKGROUND_COLOR = ansi;
+  else if (!strcmp(role, "line-cursor-background")) E.theme.LINE_CURSOR_BACKGROUND = ansi;
   else if (!strcmp(role, "keyword"))         E.theme.COLOR_KEYWORD = ansi;
   else if (!strcmp(role, "type"))            E.theme.COLOR_TYPE = ansi;
   else if (!strcmp(role, "string"))          E.theme.COLOR_STRING = ansi;
@@ -562,6 +596,41 @@ Lisp editorPwd(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function to find the enclosing git repo's root
+ * @details (project-root) — runs `git rev-parse --show-toplevel` from the
+ * working directory and returns its (trimmed) output, or "" if the
+ * working directory isn't inside a git work tree at all (or getcwd()
+ * fails). Same "ask git directly" check project-search and find-file
+ * already each make their own way (rootIsGitRepo() in project_search.c /
+ * file_finder.c) — this is the one that also wants the actual path, for
+ * packages like explorer that need to know *where* the project is, not
+ * just whether there is one.
+ * @param args Lisp arguments (unused)
+ * @return Lisp string: the repo root, or ""
+ */
+Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e;
+  char cwd[PATH_MAX];
+  if (getcwd(cwd, sizeof(cwd)) == NULL)
+    return lisp_make_string2("", ctx);
+
+  char qdir[PATH_MAX + 4];
+  shellQuote(cwd, qdir, sizeof(qdir));
+
+  char cmd[PATH_MAX + 64];
+  snprintf(cmd, sizeof(cmd),
+           "git -C %s rev-parse --show-toplevel 2>/dev/null", qdir);
+
+  char *out = runCommandCapture(cmd, 1000, PATH_MAX);
+  if (!out)
+    return lisp_make_string2("", ctx);
+
+  Lisp result = lisp_make_string2(out, ctx);
+  free(out);
+  return result;
+}
+
+/**
  * @brief Lisp function to list a directory's entries
  * @details (list-directory path) — returns a list of (name . is-dir)
  * pairs, one per entry, excluding "." and "..". Order is whatever
@@ -594,6 +663,48 @@ Lisp listDirectory(Lisp args, LispError *e, LispContext ctx) {
   }
   closedir(dir);
   return result;
+}
+
+/**
+ * @brief Lisp function to list every open buffer
+ * @details (list-buffers) — one (label . id) pair per buffer, in the same
+ * "<id>: <filename>[ *]" format and iteration order the CTRL-x b popup
+ * (buffer_switcher.c) already draws, so a Lisp-driven picker built on
+ * (editor-list-popup ...) + this looks identical to it — just add
+ * filterable? #t for the live-search version that popup doesn't have.
+ * A snapshot, unlike buffer_switcher.c's own live E.buffers walk: fine
+ * here since editor-list-popup's items are captured once when it opens,
+ * same as every other picker built on it.
+ * @param args Lisp arguments (unused)
+ * @return Lisp list of (label . id) pairs
+ */
+Lisp l_listBuffers(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e;
+  if (E.buffers == NULL)
+    return lisp_null();
+
+  Lisp head = lisp_null();
+  Lisp tail = lisp_null();
+
+  int first_buffer_id = E.buffers->buffer_id;
+  struct buffer_t *b = E.buffers;
+  do {
+    char *filename = (char *) utf8ToString(b->filename);
+    char line[PATH_MAX + 32];
+    snprintf(line, sizeof(line), "%d: %s%s", b->buffer_id,
+             (filename && filename[0]) ? filename : "[No Name]",
+             b->dirty ? " *" : "");
+    free(filename);
+
+    Lisp pair = lisp_cons(lisp_make_string2(line, ctx), lisp_make_int(b->buffer_id), ctx);
+    Lisp cell = lisp_cons(pair, lisp_null(), ctx);
+    if (lisp_is_null(head)) head = cell; else lisp_set_cdr(tail, cell);
+    tail = cell;
+
+    b = b->next;
+  } while (b->buffer_id != first_buffer_id);
+
+  return head;
 }
 
 /**
@@ -690,12 +801,28 @@ Lisp editorExplorerSidebarOpen(Lisp args, LispError *e, LispContext ctx) {
   EditorPane *active = splitScreenGetActivePane();
   int main_id = active->buffer_id;
 
+  // bufferFindByFilename() only decides whether the *buffer* needs
+  // creating (the sidebar's tree content survives a close, same as any
+  // other scratch buffer, so reopening usually finds it already there) —
+  // it says nothing about whether the *split* still exists. Closing the
+  // sidebar collapses back to one fullscreen pane (splitScreenCloseSidebar
+  // -> splitScreenUnify), so on reopen there's no second pane to switch
+  // into: splitScreenWithSidebar() has to run every time, to actually
+  // recreate the two-pane layout, not just on the buffer's first creation.
+  // Skipping it (as this used to, in the reuse branch) left the explorer
+  // buffer to bufferSwitch() into whatever single pane was active —
+  // fullscreen, at that pane's stale geometry, with the previous frame's
+  // gutter/content never cleared underneath it.
   Utf8Char *uname = stringToUtf8((unsigned char *) name);
-  int sidebar_id = bufferCreate(uname, READ_ONLY, EXPLORER_BUFF);
+  int sidebar_id = bufferFindByFilename(uname);
+  if (sidebar_id == -1)
+      sidebar_id = bufferCreate(uname, READ_ONLY, EXPLORER_BUFF);
   free(uname);
 
-  splitScreenWithSidebar(sidebar_id, main_id, width);
+  if (sidebar_id == -1)
+      return lisp_make_int(-1); // bufferCreate() itself failed
 
+  splitScreenWithSidebar(sidebar_id, main_id, width);
   return lisp_make_int(sidebar_id);
 }
 
@@ -715,7 +842,14 @@ Lisp editorExplorerClose(Lisp args, LispError *e, LispContext ctx) {
 Lisp editorOpenTerminal(Lisp args, LispError *e, LispContext ctx) {
   appDebug("[EDITOR OPEN TERMINAL]\n");
   EditorPane *active = splitScreenGetActivePane();
-  active->buffer_id = bufferCreate(NULL, READ_AND_WRITE, TERMINAL_BUFF);
+  unsigned char temp_str_file[5] = "term";
+  Utf8Char * filename = stringToUtf8(temp_str_file);
+  int bufId = bufferFindByFilename(filename);
+  free(filename);
+  if (bufId == -1)
+      active->buffer_id = bufferCreate(NULL, READ_AND_WRITE, TERMINAL_BUFF);
+  else
+      bufferSwitch(bufId);
   return lisp_null();
 }
 
@@ -920,27 +1054,31 @@ Lisp bufferFindReverse_L(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
- * @brief Lisp function to read character at cursor
- * @details Returns the character at the current cursor position as a Lisp
- * character. Returns 'a' if at end of line.
+ * @brief Lisp function to read the character under the cursor
+ * @details (editor-read-char) — returns the character at the active
+ * buffer's cursor position. Returns #f when there is nothing there: the
+ * cursor sits at (or past) the end of the line, the row is out of range,
+ * or there's no buffer. Callers test for that with a plain (if ch ...).
+ *
+ * A char in this dialect is one byte, so for a multi-byte UTF-8 cell this
+ * hands back the lead byte — which is >= 0x80 and so reads as "not a word
+ * character" to the ASCII-range predicates in init.lisp. That's the
+ * intended behaviour for word motion; it is not a general text accessor.
  * @param args Lisp arguments (unused)
- * @param e Error pointer for Lisp error handling
- * @param ctx Lisp context
- * @return Lisp character object representing the character at cursor
+ * @return Lisp character, or #f
  */
 Lisp editorReadChar_L(Lisp args, LispError *e, LispContext ctx) {
-  Lisp returned_char;
+  (void) args; (void) e; (void) ctx;
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buffer = bufferFindById(active->buffer_id);
-    returned_char = lisp_make_char('a');
-#if 0
-  if (buffer->row[buffer->y].chars[buffer->x] == 0) {
-    returned_char = lisp_make_char('a');
-  } else {
-    returned_char = lisp_make_char(buffer->row[buffer->y].chars[buffer->x]);
-  }
-#endif
-  return returned_char;
+  if (!buffer || buffer->y < 0 || buffer->y >= buffer->numrows)
+    return lisp_make_bool(0);
+
+  Row *row = &buffer->row[buffer->y];
+  if (buffer->x < 0 || buffer->x >= row->size)
+    return lisp_make_bool(0);
+
+  return lisp_make_char(row->characters[buffer->x].character[0]);
 }
 
 /**
@@ -1362,13 +1500,22 @@ Lisp editorGotoLine(Lisp args, LispError *e, LispContext ctx) {
 
 /**
  * @brief Lisp function to open a generic modal list picker
- * @details (editor-list-popup title items on-select [on-cancel]) — a
- * primitive any Lisp package can use to show a selectable list without
- * writing its own C popup. `items` is a list of (label . value) pairs
- * where label is a string; `on-select` is called with the chosen pair's
- * cdr when the user presses ENTER, `on-cancel` (optional) with no
- * arguments if they press ESC instead. See list_popup.h.
- * @param args Lisp list of 3 or 4 arguments: (title items on-select [on-cancel])
+ * @details (editor-list-popup title items on-select [on-cancel] [filterable?])
+ * — a primitive any Lisp package can use to show a selectable list
+ * without writing its own C popup. `items` is a list of (label . value)
+ * pairs where label is a string; `on-select` is called with the chosen
+ * pair's cdr when the user presses ENTER, `on-cancel` (optional, pass
+ * '() for none) with no arguments if they press ESC instead.
+ *
+ * `filterable?` (optional, defaults to #f) turns on live filtering: any
+ * printed key and BACKSPACE edit a query shown in the title bar, and the
+ * list narrows to labels containing it (case-insensitive substring) as
+ * you type — see find-file (CTRL-P) for what that feels like from the
+ * user's side, and list_popup.c's own doc comment for when this is (and
+ * isn't) the right primitive to reach for. Omitting it, or every existing
+ * 3- and 4-argument caller (outline, latex-insert-environment, ...),
+ * keeps the old modal-arrows-only behavior exactly as it was.
+ * @param args Lisp list of 3-5 arguments: (title items on-select [on-cancel] [filterable?])
  * @return lisp_null()
  */
 Lisp editorListPopup(Lisp args, LispError *e, LispContext ctx) {
@@ -1379,8 +1526,10 @@ Lisp editorListPopup(Lisp args, LispError *e, LispContext ctx) {
   Lisp on_select = lisp_car(args);
   args = lisp_cdr(args);
   Lisp on_cancel = lisp_is_pair(args) ? lisp_car(args) : lisp_null();
+  if (lisp_is_pair(args)) args = lisp_cdr(args);
+  int filterable = lisp_is_pair(args) && lisp_is_true(lisp_car(args));
 
-  listPopupOpen(title, items, on_select, on_cancel);
+  listPopupOpen(title, items, on_select, on_cancel, filterable);
   return lisp_null();
 }
 
@@ -1550,6 +1699,23 @@ Lisp l_projectSearch(Lisp args, LispError *e, LispContext ctx) {
 Lisp l_projectSearchGoto(Lisp args, LispError *e, LispContext ctx) {
   (void) args; (void) e; (void) ctx;
   projectSearchGotoCursor();
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to open the fuzzy project-file picker
+ * @details (find-file) — pops up a modal list of every file in the
+ * project (git ls-files inside a repo, a pruned find(1) otherwise, rooted
+ * at the working directory), narrows it as you type, and opens the
+ * highlighted file into the active pane on ENTER (reusing an already-open
+ * buffer for that path rather than stacking a duplicate). ESC cancels.
+ * See file_finder.c.
+ * @param args Lisp arguments (unused)
+ * @return lisp_null()
+ */
+Lisp l_findFile(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  fileFinderOpen();
   return lisp_null();
 }
 

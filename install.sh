@@ -207,7 +207,9 @@ if [ -d build ]; then
 else
     meson setup build "${MESON_ARGS[@]}"
 fi
-meson compile -C build
+if ! meson compile -C build; then
+    die "Build failed"
+fi
 
 # --- install the binary ----------------------------------------------------------
 

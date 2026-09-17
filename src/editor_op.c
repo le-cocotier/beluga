@@ -230,8 +230,10 @@ void editorRunLoop(void)
         // Runs every ~50ms tick regardless of what select() woke up for, so
         // a scheduled completion request fires shortly after its debounce
         // deadline passes even if the user has stopped typing entirely.
-        if (E.constantes.LSP)
+        if (E.constantes.LSP) {
             lspCompletionDebounceTick();
+            lspSyncDebounceTick();
+        }
 
         // A keypress handled above may have requested the exit; drawing one
         // more frame here would just repaint the UI we're about to leave.

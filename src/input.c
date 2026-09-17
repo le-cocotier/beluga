@@ -1,11 +1,11 @@
 #include "../include/input.h"
-#include "../include/define.h"
-#include "../include/editor_op.h"
-#include "../include/output.h"
 #include "../include/buffer.h"
 #include "../include/builtins.h"
 #include "../include/completion.h"
 #include "../include/data.h"
+#include "../include/define.h"
+#include "../include/editor_op.h"
+#include "../include/output.h"
 #include "../include/split_screen.h"
 #include <ctype.h>
 #include <dirent.h>
@@ -15,14 +15,39 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "../include/buffer_switcher.h"
+#include "../include/file_finder.h"
+#include "../include/list_popup.h"
+#include "../include/lsp_ui.h"
+#include "../include/pty_session.h"
+#include "../include/syntax_highlighter.h"
 #include "../include/terminal.h"
 #include "../include/utf8.h"
-#include "../include/lsp_ui.h"
-#include "../include/buffer_switcher.h"
-#include "../include/list_popup.h"
-#include "../include/syntax_highlighter.h"
-#include "../include/pty_session.h"
 #include "include/cJSON.h"
+
+/**
+ * @brief The id of the "*" (global) prefix, looked up by name and cached.
+ * @details A keybind registered under "*" matches regardless of
+ * E.prefix_state (see executeKeyBind()) — it's how e.g. a single CTRL-g
+ * binding resets to no-prefix from inside any other prefix. Looked up by
+ * name rather than hardcoded: init.c registers "*" as a built-in prefix,
+ * but doesn't guarantee it a particular id (unlike "no-prefix", which
+ * several other files do hardcode as id 0), so this has to ask
+ * find_prefix() instead of assuming an index.
+ *
+ * find_prefix() itself is unconditionally registered by initEditor()
+ * before any config loads, so the "name not found" fallback it has (it
+ * returns E.prefix[0], i.e. "no-prefix") is unreachable here in practice
+ * — noted because that fallback would otherwise be a real problem: it'd
+ * make this return "no-prefix"'s own id, and every "no-prefix" keybind
+ * would then match unconditionally, the same as an actual "*" one does.
+ */
+static int starPrefixId(void) {
+  static int id = -2; // -2: not yet looked up: distinct from -1 (find_prefix's own not-found)
+  if (id == -2)
+    id = find_prefix("*").prefix_id;
+  return id;
+}
 
 /**
  * @file input.c
@@ -59,8 +84,7 @@ extern EditorConfig E;
  * @note Caller is responsible for bFreeing the returned string
  * @note Uses static buffer internally; may return stale pointers across calls
  */
-Utf8Char *fileCompletion(Utf8Char *path)
-{
+Utf8Char *fileCompletion(Utf8Char *path) {
   DIR *dir;
   struct dirent *entry;
   Utf8Char directory[PATH_MAX] = {0};
@@ -76,14 +100,11 @@ Utf8Char *fileCompletion(Utf8Char *path)
   char *full_path_str = NULL;
   struct stat st;
 
-  if (*(last_slash + 1)->character == '\0')
-  {
+  if (*(last_slash + 1)->character == '\0') {
     // path is a directory
     utf8Printf(directory, PATH_MAX, "%u", path);
     END_OF_STRING(directory[utf8StringLen(directory) - 2])
-  }
-  else
-  {
+  } else {
     utf8NCpy(directory, path, (last_slash - path));
     predict_len = utf8Printf(predict, PATH_MAX, "%u", last_slash + 1);
   }
@@ -98,19 +119,16 @@ Utf8Char *fileCompletion(Utf8Char *path)
   readdir(dir);
   readdir(dir);
 
-  while ((entry = readdir(dir)) != NULL)
-  {
+  while ((entry = readdir(dir)) != NULL) {
     entry_name = entry->d_name;
     entry_name_utf8 = stringToUtf8(entry_name);
-    if ((predict_len == 0) || (utf8StringNCmp(entry_name_utf8, predict, predict_len) == 0))
-    {
+    if ((predict_len == 0) ||
+        (utf8StringNCmp(entry_name_utf8, predict, predict_len) == 0)) {
       utf8Printf(full_path, PATH_MAX, "%u/%u", directory, entry_name_utf8);
       free(entry_name_utf8);
 
-
       full_path_str = utf8ToString(full_path);
-      if (stat(full_path_str, &st) == 0 && S_ISDIR(st.st_mode))
-      {
+      if (stat(full_path_str, &st) == 0 && S_ISDIR(st.st_mode)) {
         full_path[utf8StringLen(full_path) - 1].character[0] = '/';
         full_path[utf8StringLen(full_path) - 1].length = 1;
       }
@@ -145,76 +163,59 @@ Utf8Char *fileCompletion(Utf8Char *path)
  * @note Caller is responsible for bFreeing the returned string
  * @note Uses editorReadKey() for input and editorRefreshScreen() for display
  */
-Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode)
-{
+Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode) {
   Utf8Char *buf = calloc(PATH_MAX, sizeof(Utf8Char));
   int buf_len = 0;
   Utf8Char *c = NULL;
   Utf8Char *full_path = NULL;
-  if (placeHolder != NULL)
-  {
-    buf_len = utf8Printf(buf, PATH_MAX, "%u", placeHolder); // zero not counted by snprintf
+  if (placeHolder != NULL) {
+    buf_len = utf8Printf(buf, PATH_MAX, "%u",
+                         placeHolder); // zero not counted by snprintf
   }
   // Publish the in-progress input so the which-key panel can filter its
   // candidates on it live. Borrowed, not owned — cleared on every exit path
   // below, before `buf` is returned to the caller or freed.
   E.prompt_input = buf;
-  while (1)
-  {
+  while (1) {
     editorSetStatusMessage(prompt, buf);
     editorRefreshScreen();
     c = editorReadKey();
-    if (*c->character == DEL_KEY || *c->character == BACKSPACE)
-    {
-      if (buf_len != 0)
-      {
+    if (*c->character == DEL_KEY || *c->character == BACKSPACE) {
+      if (buf_len != 0) {
         --buf_len;
         END_OF_STRING(buf[buf_len]);
       }
-    }
-    else if (*c->character == ESCAPE)
-    {
+    } else if (*c->character == ESCAPE) {
       editorSetStatusMessage("Aborted");
       free(c);
       E.prompt_input = NULL;
       return NULL;
-    }
-    else if (*c->character == '\r')
-    {
-      if (buf_len != 0)
-      {
+    } else if (*c->character == '\r') {
+      if (buf_len != 0) {
         editorSetStatusMessage("");
         free(c);
         E.prompt_input = NULL;
         return buf;
       }
-    }
-    else if (bPathMode && *c->character == '\t')
-    {
+    } else if (bPathMode && *c->character == '\t') {
       // Completion of first path
       Utf8Char path[PATH_MAX];
       char *pwd; // getenv is allocating memory
-      if (*buf[0].character != '/')
-      {
+      if (*buf[0].character != '/') {
         pwd = getenv("PWD");
         appDebug("%s\n", pwd);
         // Replace path by pwd + last word
         utf8Printf(path, PATH_MAX, "%s/%u", pwd, buf);
-      }
-      else
-      {
+      } else {
         // already absolute path
         utf8Printf(path, PATH_MAX, "%u", buf);
       }
       // TODO: upgrade this
       full_path = fileCompletion(path);
-      if (full_path)
-      {
+      if (full_path) {
         buf_len = utf8Printf(buf, PATH_MAX, "%u", full_path);
       }
-    }
-    else if (*c->character)
-    {
+    } else if (*c->character) {
       (buf + buf_len)->length = c->length;
       memcpy((buf + buf_len)->character, c->character, c->length);
       buf_len++;
@@ -232,16 +233,12 @@ Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode)
  * @note Updates global editor state E (prefix_state)
  * @note Uses Lisp interpreter to evaluate bound commands
  */
-int executeKeyBind(char *key_sequence)
-{
+int executeKeyBind(char *key_sequence) {
   int i;
   int previous_state = 0;
-  for (i = 0; i < E.number_of_keybinds; ++i)
-  {
-    if (!strcmp(key_sequence, E.key_binds[i].key_sequence))
-    {
-      if (E.prefix_state != E.key_binds[i].prefix_id)
-      {
+  for (i = 0; i < E.number_of_keybinds; ++i) {
+    if (!strcmp(key_sequence, E.key_binds[i].key_sequence)) {
+      if ((E.key_binds[i].prefix_id != starPrefixId()) && (E.prefix_state != E.key_binds[i].prefix_id)) {
         continue;
       }
       previous_state = E.prefix_state;
@@ -252,7 +249,8 @@ int executeKeyBind(char *key_sequence)
       // meant to stay active across keystrokes that don't themselves
       // change the prefix (e.g. arrow-key navigation in a sidebar),
       // unlike a one-shot "user"-style CTRL-x <key> prefix.
-      if (E.prefix_state == previous_state && !E.prefix[E.key_binds[i].prefix_id].sticky)
+      if (E.prefix_state == previous_state &&
+          !E.prefix[E.key_binds[i].prefix_id].sticky)
         E.prefix_state = 0;
       return 1;
     }
@@ -260,13 +258,11 @@ int executeKeyBind(char *key_sequence)
   return 0;
 }
 
-void ptyForwardKey(struct buffer_t *buf, Utf8Char *key)
-{
+void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
   unsigned char seq[8];
   int len;
 
-  switch (key->character[0])
-  {
+  switch (key->character[0]) {
   case ARROW_UP:
     memcpy(seq, "\x1b[A", 3);
     len = 3;
@@ -321,145 +317,151 @@ void ptyForwardKey(struct buffer_t *buf, Utf8Char *key)
  * @note Calls editorReadKey() to get input and editorInsertChar() for unbound
  * keys
  */
-void editorProcessKeypress()
-{
-    Utf8Char *c = editorReadKey();
+void editorProcessKeypress() {
+  Utf8Char *c = editorReadKey();
 
-        // Modal: while the buffer switcher is open, it owns every key —
-        // checked before anything else so it can't be shadowed by a
-        // keybind or by LSP completion.
-        if (bufferSwitcherHandleKey(c)) {
-            free(c);
-            return;
+  // Modal: while the buffer switcher is open, it owns every key —
+  // checked before anything else so it can't be shadowed by a
+  // keybind or by LSP completion.
+  if (bufferSwitcherHandleKey(c)) {
+    free(c);
+    return;
+  }
+
+  // Same reasoning as the buffer switcher above — the generic list
+  // popup is modal too, so it gets first refusal on every key.
+  if (listPopupHandleKey(c)) {
+    free(c);
+    return;
+  }
+
+  // ...and the fuzzy file finder, likewise modal — it needs every
+  // printable key to build its query, so it can't sit behind keybind
+  // dispatch.
+  if (fileFinderHandleKey(c)) {
+    free(c);
+    return;
+  }
+
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
+
+  if (E.constantes.LSP && buf->b_lsp_open) {
+
+    if (E.lsp_client && E.lsp_completion.visible) {
+      if (*c->character == '\r') {
+        CompletionItem *item =
+            &E.lsp_completion.items[E.lsp_completion.selected];
+
+        int file_col = active->cursor_x + active->x_offset;
+        Row *row = &buf->row[active->cursor_y + active->y_offset];
+
+        // is_word_char() treats '#' as part of a "word" so the syntax
+        // highlighter can match whole keywords like "#include" — but
+        // clangd's completion items for preprocessor directives never
+        // include the '#' in insertText (the '#' is already typed and
+        // out of band from its point of view). Walking through it here
+        // would over-count already_typed by one and silently drop the
+        // first character of every such completion, so stop the scan
+        // right after any '#' instead of consuming it.
+        int word_start = file_col;
+        while (word_start > 0 &&
+               is_word_char(&row->characters[word_start - 1]) &&
+               row->characters[word_start - 1].character[0] != '#')
+          word_start--;
+
+        int already_typed = file_col - word_start;
+        const char *suffix = item->insertText + already_typed;
+        for (int i = 0; suffix[i]; i++) {
+          Utf8Char ch = {.character = {suffix[i], 0, 0, 0}, .length = 1};
+          bufferInsertChar(&ch);
         }
 
-        // Same reasoning as the buffer switcher above — the generic list
-        // popup is modal too, so it gets first refusal on every key.
-        if (listPopupHandleKey(c)) {
-            free(c);
-            return;
-        }
-
-        EditorPane *active = splitScreenGetActivePane();
-        struct buffer_t *buf = bufferFindById(active->buffer_id);
-
-        if (E.constantes.LSP && buf->b_lsp_open)
-        {
-
-            if (E.lsp_client && E.lsp_completion.visible) {
-                if (*c->character == '\r') {
-                    CompletionItem *item = &E.lsp_completion.items[E.lsp_completion.selected];
-
-                    int file_col = active->cursor_x + active->x_offset;
-                    Row *row = &buf->row[active->cursor_y + active->y_offset];
-
-                    // is_word_char() treats '#' as part of a "word" so the syntax
-                    // highlighter can match whole keywords like "#include" — but
-                    // clangd's completion items for preprocessor directives never
-                    // include the '#' in insertText (the '#' is already typed and
-                    // out of band from its point of view). Walking through it here
-                    // would over-count already_typed by one and silently drop the
-                    // first character of every such completion, so stop the scan
-                    // right after any '#' instead of consuming it.
-                    int word_start = file_col;
-                    while (word_start > 0 && is_word_char(&row->characters[word_start - 1])
-                           && row->characters[word_start - 1].character[0] != '#')
-                        word_start--;
-
-                    int already_typed = file_col - word_start;
-                    const char *suffix = item->insertText + already_typed;
-                    for (int i = 0; suffix[i]; i++)
-                    {
-                        Utf8Char ch = { .character = { suffix[i], 0, 0, 0 }, .length = 1 };
-                        bufferInsertChar(&ch);
-                    }
-
-                    E.lsp_completion.visible = 0;
-                    free(c);
-                    return;
-                }
-
-                if (lspUiHandleKey(&E.lsp_completion, c)) {
-                    free(c);
-                    return;
-                }
-            }
-        }
-
-        E.dirty = 0;
-        if (E.buffers != NULL)
-        {
-            int first_buffer_id = E.buffers->buffer_id;
-            struct buffer_t* b = E.buffers;
-            do
-            {
-                E.dirty += b->dirty;
-                b = b->next;
-            } while (b->buffer_id != first_buffer_id);
-        }
-
-        if (executeKeyBind(keyToString(c)))
-        {
-            free(c);
-            return;
-        }
-
-        if (buf->type == TERMINAL_BUFF)
-        {
-            ptyForwardKey(buf, c);
-            free(c);
-            return;
-        }
-
-        int is_printable = utf8IsPrintable(c);
-        int is_word = is_word_char(c);
-
-        if (is_printable)
-        {
-            bufferInsertChar(c);
-            E.quit_times_buffer = E.constantes.QUIT_TIMES;
-        }
-
-        int should_trigger_completion = E.constantes.LSP && buf->b_lsp_open &&
-                                         is_printable && is_word;
-
-        // Word-char keystrokes aren't the only thing worth asking the
-        // server about — member-access completion (by far the most common
-        // trigger in most languages: "obj." in Python, "->"/"::" in C++)
-        // fires on punctuation instead. Check the server's own advertised
-        // trigger strings against the text ending at the cursor now that
-        // this keystroke has actually been inserted.
-        if (!should_trigger_completion && E.constantes.LSP && buf->b_lsp_open &&
-            is_printable && E.lsp_client && buf->numrows > 0 && buf->y < buf->numrows)
-        {
-            Row *row = &buf->row[buf->y];
-            for (int i = 0; i < E.lsp_client->num_trigger_chars && !should_trigger_completion; i++)
-            {
-                const char *trig = E.lsp_client->trigger_chars[i];
-                int trig_len = (int) strlen(trig);
-                if (trig_len == 0 || trig_len > buf->x) continue;
-
-                int match = 1;
-                for (int k = 0; k < trig_len; k++)
-                {
-                    if (row->characters[buf->x - trig_len + k].character[0] != (unsigned char) trig[k])
-                    { match = 0; break; }
-                }
-                if (match) should_trigger_completion = 1;
-            }
-        }
-
+        E.lsp_completion.visible = 0;
         free(c);
-        c = NULL;
+        return;
+      }
 
-        // Debounced: this only (re)starts an idle timer. The actual
-        // didChange+completion round-trip fires from lspCompletionDebounceTick()
-        // once typing pauses, instead of on every single keystroke.
-        if (E.constantes.LSP && E.lsp_client)
-        {
-            if (should_trigger_completion && E.lsp_client->state == LSP_READY)
-                lspScheduleCompletion();
-            else
-                lspCancelScheduledCompletion();
+      if (lspUiHandleKey(&E.lsp_completion, c)) {
+        free(c);
+        return;
+      }
+    }
+  }
+
+  E.dirty = 0;
+  if (E.buffers != NULL) {
+    int first_buffer_id = E.buffers->buffer_id;
+    struct buffer_t *b = E.buffers;
+    do {
+      E.dirty += b->dirty;
+      b = b->next;
+    } while (b->buffer_id != first_buffer_id);
+  }
+
+  if (executeKeyBind(keyToString(c))) {
+    free(c);
+    return;
+  }
+
+  if (buf->type == TERMINAL_BUFF) {
+    ptyForwardKey(buf, c);
+    free(c);
+    return;
+  }
+
+  int is_printable = utf8IsPrintable(c);
+  int is_word = is_word_char(c);
+
+  if (is_printable) {
+    bufferInsertChar(c);
+    E.quit_times_buffer = E.constantes.QUIT_TIMES;
+  }
+
+  int should_trigger_completion =
+      E.constantes.LSP && buf->b_lsp_open && is_printable && is_word;
+
+  // Word-char keystrokes aren't the only thing worth asking the
+  // server about — member-access completion (by far the most common
+  // trigger in most languages: "obj." in Python, "->"/"::" in C++)
+  // fires on punctuation instead. Check the server's own advertised
+  // trigger strings against the text ending at the cursor now that
+  // this keystroke has actually been inserted.
+  if (!should_trigger_completion && E.constantes.LSP && buf->b_lsp_open &&
+      is_printable && E.lsp_client && buf->numrows > 0 &&
+      buf->y < buf->numrows) {
+    Row *row = &buf->row[buf->y];
+    for (int i = 0;
+         i < E.lsp_client->num_trigger_chars && !should_trigger_completion;
+         i++) {
+      const char *trig = E.lsp_client->trigger_chars[i];
+      int trig_len = (int)strlen(trig);
+      if (trig_len == 0 || trig_len > buf->x)
+        continue;
+
+      int match = 1;
+      for (int k = 0; k < trig_len; k++) {
+        if (row->characters[buf->x - trig_len + k].character[0] !=
+            (unsigned char)trig[k]) {
+          match = 0;
+          break;
         }
+      }
+      if (match)
+        should_trigger_completion = 1;
+    }
+  }
+
+  free(c);
+  c = NULL;
+
+  // Debounced: this only (re)starts an idle timer. The actual
+  // didChange+completion round-trip fires from lspCompletionDebounceTick()
+  // once typing pauses, instead of on every single keystroke.
+  if (E.constantes.LSP && E.lsp_client) {
+    if (should_trigger_completion && E.lsp_client->state == LSP_READY)
+      lspScheduleCompletion();
+    else
+      lspCancelScheduledCompletion();
+  }
 }

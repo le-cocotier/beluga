@@ -143,6 +143,7 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
                     lspDidOpen(lsp, b);
                     b->b_lsp_open = 1;
                 }
+                b->lsp_synced_dirty = b->dirty;
             }
             b = b->next;
         } while (b->buffer_id != first_buffer_id);
@@ -1170,6 +1171,7 @@ static void lsp_fire_completion_now(void)
         return;
 
     lspDidChange(E.lsp_client, buf);
+    buf->lsp_synced_dirty = buf->dirty;
     lspRequestCompletion(E.lsp_client, buf, buf->y, buf->x,
                           active->cursor_x + active->origin_x + editorGutterWidth(buf),
                           active->cursor_y + active->origin_y);
@@ -1201,6 +1203,53 @@ void lspCompletionDebounceTick(void)
 
     E.lsp_client->completion_debounce_pending = 0;
     lsp_fire_completion_now();
+}
+
+/**
+ * @brief Call once per editorRunLoop iteration, alongside
+ * lspCompletionDebounceTick(). A no-op unless the active buffer's `dirty`
+ * counter has moved past what was last sent to the server.
+ * @details Exists because completion is armed only by word-char/trigger-char
+ * keystrokes (see should_trigger_completion in input.c) — deleting text,
+ * undo/redo, paste, and kill-region never go through that path, so without
+ * this they'd never resync the document at all, and the server would keep
+ * reporting diagnostics against stale content (e.g. an "unused include"
+ * hint for a #include line that's already been deleted) until some
+ * unrelated keystroke elsewhere happened to trigger completion. Debounced
+ * the same way completion is, just against buf->dirty instead of an
+ * explicit schedule call, so it needs no call site of its own anywhere a
+ * buffer might be edited.
+ */
+void lspSyncDebounceTick(void)
+{
+    if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+        return;
+
+    EditorPane *active = splitScreenGetActivePane();
+    struct buffer_t *buf = bufferFindById(active->buffer_id);
+    if (!buf || buf->type != FILE_BUFF || !buf->b_lsp_open)
+        return;
+
+    if (buf->dirty == buf->lsp_synced_dirty) {
+        E.lsp_client->sync_debounce_pending = 0;
+        return;
+    }
+
+    long now = monotonic_ms();
+    if (!E.lsp_client->sync_debounce_pending ||
+        E.lsp_client->sync_debounce_buffer_id != buf->buffer_id) {
+        E.lsp_client->sync_debounce_pending = 1;
+        E.lsp_client->sync_debounce_buffer_id = buf->buffer_id;
+        E.lsp_client->sync_debounce_deadline_ms = now + LSP_SYNC_DEBOUNCE_MS;
+        return;
+    }
+
+    if (now < E.lsp_client->sync_debounce_deadline_ms)
+        return;
+
+    lspDidChange(E.lsp_client, buf);
+    buf->lsp_synced_dirty = buf->dirty;
+    E.lsp_client->sync_debounce_pending = 0;
 }
 
 /**

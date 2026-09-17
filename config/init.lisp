@@ -23,11 +23,12 @@
 ;; away, at load time, not when the key is actually pressed).
 (add-prefix "user")
 (add-prefix "term")
+(add-prefix "project")
 
 ;; PACKAGES
 
 ;; First git clone it
-;; (add-package "smart_delimiters")
+(add-package "smart_delimiters")
 (add-package "outline")
 (add-package "explorer")
 
@@ -37,6 +38,9 @@
 (add-package "theme-dark")
 ;; (add-package "theme-light")
 
+;; Add the pseudo-package personal-config which is just modifications that won't be erased by update
+(add-package "personal-config")
+
 ;; Per-language packages: each registers its own
 ;; (lsp-server "ext" "language-id" "command" "arg1" ...) — which spawns
 ;; that language server the first time a matching file is opened — plus
@@ -44,13 +48,14 @@
 ;; "git clone it first" convention as smart_delimiters above. Calling
 ;; (lsp-server ...) directly here also works fine for a language with no
 ;; package of its own yet.
-(add-package "c")
+;; (add-package "c")
 ;; (add-package "python")   ; needs pyright-langserver on PATH
 ;; (add-package "rust")     ; needs rust-analyzer on PATH
 ;; (add-package "php")      ; needs intelephense on PATH — no PHP install required
 ;; (add-package "latex")    ; digestif ships with TeX Live; texlab is a one-line swap
 ;; (add-package "yaml")     ; needs yaml-language-server on PATH
 ;; (add-package "nodejs")   ; needs typescript-language-server + typescript@5
+;; (add-package "lisp")     ; no server needed — highlighting + comment toggle only
 ;;
 ;; Note on CTRL-d: every language package binds it under "no-prefix", and
 ;; the FIRST binding registered wins, so only one comment toggle is ever
@@ -128,12 +133,62 @@
       #t
       #f))
 
-(define editor-move-to-end-of-word (lambda () (
+;; Move the cursor forward to just past the end of a word:
+;;   - sitting on a word character  -> end of that word;
+;;   - sitting on anything else     -> skip the non-word run (across line
+;;     breaks) and stop at the end of the next word.
+;; Both loops step one column at a time. (editor-read-char) is #f at end
+;; of line and word-char-p is #f for #f, so each loop stops there; the
+;; skip loop only crosses onto the next line while one exists, so this
+;; still terminates at the very end of the buffer.
+
+(define (editor--consume-word)
   (if (word-char-p (editor-read-char))
-	((move-cursor "right")
-	(editor-move-to-end-of-word))
-    ))
-                                     ))
+      (begin (move-cursor "right") (editor--consume-word))
+      #f))
+
+(define (editor--skip-to-word)
+  (let ((ch (editor-read-char)))
+    (if ch
+        (if (word-char-p ch)
+            #f
+            (begin (move-cursor "right") (editor--skip-to-word)))
+        ;; end of line — cross to the next one if there is one
+        (if (< (cursor-row) (- (buffer-line-count) 1))
+            (begin (move-cursor "right") (editor--skip-to-word))
+            #f))))
+
+(define editor-move-to-end-of-word
+  (lambda ()
+    (begin
+      (editor--skip-to-word)
+      (editor--consume-word))))
+
+;; Do the same but backward
+(define (editor--consume-word-backward)
+    (if (word-char-p (editor-read-char))
+        (begin (move-cursor "left") (editor--consume-word-backward)) #f
+    )
+)
+
+(define (editor--skip-to-word-backward)
+    (let ((ch (editor-read-char)))
+        (if ch
+            (if (word-char-p ch)
+                #f
+                (begin (move-cursor "left") (editor--skip-to-word-backward)))
+            (if (< (cursor-row) (- (buffer-line-count) 1))
+                 (begin (move-cursor "left") (editor--skip-to-word-backward)) #f
+            )
+        )    
+    )
+)
+
+(define editor-move-to-begin-of-word
+  (lambda ()
+    (begin
+      (editor--skip-to-word-backward)
+      (editor--consume-word-backward))))
 
 ;; Counts the run of leading spaces on `line`, starting the scan at `i`.
 (define (leading-space-count line i)
@@ -155,15 +210,36 @@
       (editor-insert-new-line)
       (insert-n-spaces indent))))
 
+;; A live-filtering buffer switcher — same primitive CTRL-O's outline and
+;; CTRL-P's file finder are each built on (editor-list-popup + #t), just
+;; over (list-buffers) instead of a file's symbols or the project's file
+;; list. Labels are the exact same "<id>: <filename>[ *]" text
+;; editor-switch-buffer-popup (buffer_switcher.c) already draws, so this
+;; looks identical to it — the only difference is being able to type to
+;; narrow instead of only arrowing through every open buffer.
+(define (editor-buffer-picker)
+  (editor-list-popup "Buffers"
+                      (list-buffers)
+                      (lambda (id) (editor-switch-to-buffer id))
+                      '()
+                      #t))
+
+;; Global
+(map-key "CTRL-g" '(editor-set-prefix "no-prefix") "*")
+
+;; no-prefix
 (map-key "CTRL-x" '(editor-set-prefix "user") "no-prefix")
 (map-key "ALT-x" execute-command "no-prefix")
-(map-key "CTRL-g" '(editor-set-prefix "no-prefix") "user")
-(map-key "CTRL-c" editor-quit "user")
-(map-key "CTRL-s" editor-save "user")
 (map-key "ARROW-UP" '(move-cursor "up") "no-prefix")
 (map-key "ARROW-DOWN" '(move-cursor "down") "no-prefix")
 (map-key "ARROW-RIGHT" '(move-cursor "right") "no-prefix")
 (map-key "ARROW-LEFT" '(move-cursor "left") "no-prefix")
+;; Alt/Option + Right — jump to the end of the next word. Recognised from
+;; ESC[1;3C, ESC-ESC[C and ESC-f, so it works whether the terminal sends
+;; Option+Right as a CSI-modifier arrow or (Terminal.app / iTerm default)
+;; as readline's M-f.
+(map-key "ALT-ARROW-RIGHT" editor-move-to-end-of-word "no-prefix")
+(map-key "ALT-ARROW-LEFT" editor-move-to-begin-of-word "no-prefix")
 (map-key "ENTER" enter-and-tab "no-prefix")
 (map-key "CTRL-a" move-cursor-beg-line "no-prefix")
 (map-key "CTRL-e" move-cursor-end-line "no-prefix")
@@ -171,67 +247,54 @@
 (map-key "DEL" editor-delete-next-char "no-prefix")
 (map-key "PAGE-UP" move-cursor-page-up "no-prefix")
 (map-key "PAGE-DOWN" move-cursor-page-down "no-prefix")
-(map-key "f" editor-open-file "user")
-(map-key "c" editor-open-config "user")
 (map-key "TAB" editor-insert-tab "no-prefix")
 (map-key "CTRL-s" buffer-find "no-prefix")
 (map-key "CTRL-r" buffer-find-reverse "no-prefix")
+;; Fuzzy project-file picker: type to narrow every file in the project
+;; (git ls-files / find), ENTER opens the highlight. CTRL-p / CTRL-n also
+;; move the selection while it's open.
+(map-key "CTRL-p" find-file "no-prefix")
+(map-key "CTRL-y" editor-paste "no-prefix")
+(map-key "CTRL-k" editor-cut-end-line "no-prefix")
+(map-key "CTRL-l" editor-copy-end-line "no-prefix")
+(map-key "CTRL-SPACE" editor-set-mark "no-prefix")
+(map-key "CTRL-w" editor-kill-region "no-prefix")
+
+;; user
+(map-key "p" '(editor-set-prefix "project") "user")
+(map-key "CTRL-c" editor-quit "user")
+(map-key "CTRL-s" editor-save "user")
+(map-key "f" editor-open-file "user")
+(map-key "c" editor-open-config "user")
 (map-key "ARROW-RIGHT" editor-switch-next-buffer "user")
-(map-key "b" editor-switch-buffer-popup "user")
+(map-key "b" editor-buffer-picker "user")
 (map-key "\"" editor-split-screen-vertical "user")
-;; Splits the ACTIVE pane, so both of these compose without a limit —
-;; split, move to the new pane with CTRL-x o, split again. The new pane
-;; starts on the same buffer; CTRL-x ARROW-RIGHT or CTRL-x b changes it.
-;; CTRL-x * collapses everything back to one pane.
 (map-key "%" editor-split-screen-horizontal "user")
 (map-key "o" editor-switch-next-pane "user")
 (map-key "*" editor-unify-panes "user")
-(map-key "CTRL-y" editor-paste "no-prefix")
-(map-key "CTRL-k" editor-cut-end-line "no-prefix")
-(map-key "CTRL-w" editor-copy-end-line "no-prefix")
 (map-key "a" editor-move-cursor-beg-buffer "user")
 (map-key "z" editor-move-cursor-end-buffer "user")
 (map-key "t" editor-open-terminal "user")
-(map-key "ESCAPE" '(editor-set-prefix "no-prefix") "term")
-
-;; Undo/redo
+(map-key "w" editor-copy-region "user")
 (map-key "u" editor-undo "user")
 (map-key "U" editor-redo "user")
-
-;; Selection (mark & region) — Emacs-style: set the mark, move the cursor
-;; to extend the region, then kill or copy it. Bare CTRL-w/CTRL-k above
-;; keep their existing cut/copy-to-end-of-line meaning unchanged; these are
-;; additive, not a replacement.
-(map-key "m" editor-set-mark "user")
-(map-key "w" editor-copy-region "user")
-(map-key "CTRL-w" editor-kill-region "user")
-
-;; LSP: go to definition, hover info, rename symbol, format buffer
-;; (also runs automatically before every save — see the "before-save" hook).
-(map-key "d" lsp-definition "user")
-(map-key "h" lsp-hover "user")
-(map-key "r" lsp-rename "user")
-(map-key "CTRL-f" lsp-format-buffer "user")
-
-;; Project-wide search. CTRL-x s prompts for a literal string, greps the
-;; whole project (git grep inside a repo, so .gitignore is honored) and
-;; lists the hits in a "*search*" buffer, grouped by file.
-;;
-;; That buffer activates the "search" prefix whenever it has focus — the
-;; prefix itself is registered in C, so these bindings are all that's
-;; needed here. It's sticky, so the arrows below keep working as you walk
-;; the list instead of dropping out after one press. Split the screen
-;; first (CTRL-x ") and ENTER opens each hit in the other pane, keeping
-;; the results in view.
 (map-key "s" project-search "user")
+
+;; project
+(map-key "d" lsp-definition "project")
+(map-key "h" lsp-hover "project")
+(map-key "r" lsp-rename "project")
+(map-key "z" lsp-format-buffer "project")
+
+;; term
+(map-key "ESCAPE" '(editor-set-prefix "no-prefix") "term")
+
+;; search
 (map-key "ENTER" project-search-goto "search")
 (map-key "ARROW-UP" '(move-cursor "up") "search")
 (map-key "ARROW-DOWN" '(move-cursor "down") "search")
 (map-key "PAGE-UP" move-cursor-page-up "search")
 (map-key "PAGE-DOWN" move-cursor-page-down "search")
-(map-key "CTRL-g" '(editor-set-prefix "no-prefix") "search")
-;; A sticky prefix swallows anything it doesn't bind, so without this
-;; CTRL-x is dead inside the results buffer — no save, no quit, no second
-;; search — until you first press CTRL-g. Re-bind it here so the normal
-;; command prefix keeps working from the result list.
 (map-key "CTRL-x" '(editor-set-prefix "user") "search")
+
+

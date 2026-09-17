@@ -13,6 +13,7 @@
 #include "../include/editor_op.h"
 #include "../include/lsp_ui.h"
 #include "../include/buffer_switcher.h"
+#include "../include/file_finder.h"
 #include "../include/list_popup.h"
 #include "../include/which_key.h"
 #include "../include/row_op.h"
@@ -214,6 +215,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   // Draw all pane
   for (int y = 0; y < pane->height; y++) {
     file_row = y + pane->y_offset;
+    int is_cursor_line = (pane->is_active && file_row == buf->y);
 
     // Set cursor at start of pane row
     pos_len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
@@ -260,7 +262,6 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         // near-white background (250,251,252) made the cursor's own line
         // number — the one meant to stand out — the least visible thing
         // on screen.
-        int is_cursor_line = (pane->is_active && file_row == buf->y);
         char *lineno_color = is_cursor_line ? E.theme.COLOR_DEFAULT : E.theme.COLOR_COMMENT;
         char num_buf[24];
         int num_len = snprintf(num_buf, sizeof(num_buf), "%*d ",
@@ -309,7 +310,10 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         abAppend(ab, highlighted, byte_len_to_print);
         free(highlighted);
       } else {
-
+        if (is_cursor_line)
+            abAppend(ab, E.theme.LINE_CURSOR_BACKGROUND, (int) strlen(E.theme.LINE_CURSOR_BACKGROUND));
+        else
+            abAppend(ab, E.theme.BACKGROUND_COLOR, (int) strlen(E.theme.BACKGROUND_COLOR));
         // Extension-based lookup against whatever packages have actually
         // registered via (syntax-define-language ...), rather than a
         // hardcoded "does the filename end in c or h" check — the old
@@ -339,9 +343,17 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
           free(highlighted);
         } else {
 
-          // Render basic line
+          // Render basic line, starting at the horizontal scroll offset.
+          // Clamp the offset to this row's length first: x_offset tracks
+          // the (possibly much longer) line the cursor sits on, so a
+          // shorter row drawn in the same pane can have size < x_offset,
+          // and &characters[x_offset] would then read past the row. size
+          // itself is the terminator cell, which renders as empty.
+          int row_off = pane->x_offset < buf->row[file_row].size
+                            ? pane->x_offset
+                            : buf->row[file_row].size;
           char *line = (char *)utf8ToNString(
-              &buf->row[file_row].characters[pane->x_offset], content_width);
+              &buf->row[file_row].characters[row_off], content_width);
           int line_len = (int) strlen(line);
 
           if (has_selection) {
@@ -351,7 +363,6 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
             line = wrapped;
             line_len = wrapped_len;
           }
-
           abAppend(ab, line, line_len);
           free(line);
           line = NULL;
@@ -363,8 +374,12 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
       // (a whole line selected, including its line break).
       if (has_selection && sel_extends)
         abAppend(ab, "\x1b[7m", 4);
-      for (int i = buf->row[file_row].size - pane->x_offset; i < content_width;
-           i++) {
+      // Start from how many columns the content actually filled — clamped
+      // at 0, since a row shorter than x_offset contributed nothing and
+      // (size - x_offset) would otherwise go negative and over-pad.
+      int filled = buf->row[file_row].size - pane->x_offset;
+      if (filled < 0) filled = 0;
+      for (int i = filled; i < content_width; i++) {
         abAppend(ab, " ", 1);
       }
       if (has_selection && sel_extends)
@@ -412,7 +427,7 @@ static void editorDrawAllPanes(struct abuf *ab) {
         int len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
                            p->origin_y + y + 1, p->origin_x + p->width + 1);
         abAppend(ab, pos_buf, len);
-        abAppend(ab, "\x1b[1m|\x1b[0m", 9);
+        abAppend(ab, "\x1b[1m│\x1b[0m", 9);
       }
     }
 
@@ -700,6 +715,7 @@ void editorRefreshScreen() {
   }
   bufferSwitcherDraw(&ab);
   listPopupDraw(&ab);
+  fileFinderDraw(&ab);
   whichKeyDraw(&ab);
 
   // ── Position cursor (account for gutter width) ────────────────────────────

@@ -5,25 +5,21 @@
  * interactions. \version 0.1 \date 21 septembre 2024
  */
 
-#include "include/define.h"
-#include "include/utf8.h"
 #include <stdlib.h>
-
 #include <libgen.h>
-
-#include "include/buffer.h"
-#include "include/split_screen.h"
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 
+#include "include/define.h"
+#include "include/utf8.h"
 #include "include/data.h"
 #include "include/init.h"
-#include "include/input.h"
 #include "include/editor_op.h"
 #include "include/terminal.h"
-#include "include/completion.h"
 #include "include/builtins.h"
-#include <signal.h>
+#include "include/buffer.h"
+#include "include/split_screen.h"
 
 EditorConfig E;
 int buffer_id = 0;
@@ -37,7 +33,6 @@ int main(int argc, char *argv[]) {
     // Get HOME with NULL check
     const char *home = getenv("HOME");
     Utf8Char* splash_screen = calloc(PATH_MAX, sizeof(Utf8Char));
-    Buffer *buf = NULL;
     EditorPane *active = NULL;
    
     if (!home) {

@@ -42,6 +42,15 @@
 // not one per character.
 #define LSP_COMPLETION_DEBOUNCE_MS 120
 
+// Idle time after ANY edit (not just the word-char/trigger-char keystrokes
+// that arm completion) before the buffer's full text is resynced to the
+// server via didChange. This is what keeps diagnostics current after e.g.
+// deleting a line with backspace/DEL/kill-region/undo — none of those go
+// through lspScheduleCompletion, so without a separate debounce here the
+// server's document (and therefore its diagnostics) would only ever catch
+// up on the next completion-triggering keystroke, if any.
+#define LSP_SYNC_DEBOUNCE_MS 250
+
 #define GUTTER_WIDTH 2
 
 // Minimum digits in the line-number gutter. Keeps the text column steady
@@ -59,12 +68,14 @@
 #define BEG_LINE     0x87   // HOME
 #define END_LINE     0x88   // END
 #define ALT_X        0x89   // Alt/Option-x — "execute command" (M-x style)
+#define ALT_ARROW_LEFT   0x8A   // Alt/Option + Left  — "ALT-ARROW-LEFT"  to map-key
+#define ALT_ARROW_RIGHT  0x8B   // Alt/Option + Right — "ALT-ARROW-RIGHT" to map-key
 
 #define BACKSPACE    127    // 0x7F (DEL byte many terminals send for Backspace)
 
 #define ABUF_INIT {NULL, 0, 0}
 
-#define BELUGA_VERSION "3.1"
+#define BELUGA_VERSION "3.2"
 
 #ifdef __APPLE__
 #define CLIPBOARD_COPY_CMD  "pbcopy"

@@ -64,6 +64,7 @@ int bufferSaveAll(void);
 
 void bufferFind(struct buffer_t *buf);
 void bufferFindReverse(struct buffer_t* buf);
+int bufferFindByFilename(Utf8Char *filename);
 void bufferInsertNewLine();
 void bufferInsertChar(Utf8Char * character);
 void bufferDelChar();
