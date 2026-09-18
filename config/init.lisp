@@ -304,7 +304,7 @@
 
 ;; memory (debug builds only — CTRL-x m to open, r refresh, s sort, w export, CTRL-x to leave)
 (if (app-debug?)
-  (progn
+  (begin
     (map-key "ARROW-UP" '(move-cursor "up") "memory")
     (map-key "ARROW-DOWN" '(move-cursor "down") "memory")
     (map-key "PAGE-UP" move-cursor-page-up "memory")
