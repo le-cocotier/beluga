@@ -45,6 +45,7 @@ src_files = files(
   'src/list_popup.c',
   'src/cJSON.c',
   'src/utils.c',
+  'src/gutils.c',
   'src/pty_session.c',
   'src/term_render.c',
   'src/ansi_parser.c',
