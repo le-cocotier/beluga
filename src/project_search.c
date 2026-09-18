@@ -17,6 +17,7 @@
  */
 
 #include "../include/project_search.h"
+#include "../include/galloc.h"
 
 #include "../include/buffer.h"
 #include "../include/builtins.h"
@@ -73,15 +74,15 @@ static int s_truncated = 0;
 
 static void clearHits(void) {
   for (int i = 0; i < s_hit_count; i++) {
-    free(s_hits[i].abs_path);
-    free(s_hits[i].rel_path);
-    free(s_hits[i].text);
+    gfree(s_hits[i].abs_path);
+    gfree(s_hits[i].rel_path);
+    gfree(s_hits[i].text);
   }
-  free(s_hits);
+  gfree(s_hits);
   s_hits = NULL;
   s_hit_count = 0;
 
-  free(s_row_hit);
+  gfree(s_row_hit);
   s_row_hit = NULL;
   s_row_count = 0;
 }
@@ -109,7 +110,7 @@ static int rootIsGitRepo(const char *root) {
   if (!out)
     return 0;
   int yes = (strncmp(out, "true", 4) == 0);
-  free(out);
+  gfree(out);
   return yes;
 }
 
@@ -187,7 +188,7 @@ static char *cleanText(const char *src) {
   while (*src == ' ' || *src == '\t')
     src++;
 
-  char *out = malloc(SEARCH_MAX_TEXT + 1);
+  char *out = galloc(SEARCH_MAX_TEXT + 1);
   if (!out)
     return NULL;
 
@@ -236,7 +237,7 @@ static int parseResults(char *output, const char *root) {
       rel = abs + root_len + 1;
 
     SearchHit *grown =
-        realloc(s_hits, (size_t)(s_hit_count + 1) * sizeof(SearchHit));
+        grealloc(s_hits, (size_t)(s_hit_count + 1) * sizeof(SearchHit));
     if (!grown)
       break;
     s_hits = grown;
@@ -248,9 +249,9 @@ static int parseResults(char *output, const char *root) {
     hit->text = cleanText(text);
 
     if (!hit->abs_path || !hit->rel_path || !hit->text) {
-      free(hit->abs_path);
-      free(hit->rel_path);
-      free(hit->text);
+      gfree(hit->abs_path);
+      gfree(hit->rel_path);
+      gfree(hit->text);
       break;
     }
     s_hit_count++;
@@ -266,7 +267,7 @@ static int parseResults(char *output, const char *root) {
  * any) that row jumps to.
  */
 static void addRow(Buffer *buf, const char *text, int hit_index) {
-  int *grown = realloc(s_row_hit, (size_t)(s_row_count + 1) * sizeof(int));
+  int *grown = grealloc(s_row_hit, (size_t)(s_row_count + 1) * sizeof(int));
   if (!grown)
     return;
   s_row_hit = grown;
@@ -276,15 +277,15 @@ static void addRow(Buffer *buf, const char *text, int hit_index) {
   if (!u)
     return;
   bufferInsertRow(buf, buf->numrows, u, utf8StringLen(u) - 1);
-  free(u);
+  gfree(u);
 }
 
 static void clearBufferRows(Buffer *buf) {
   for (int i = 0; i < buf->numrows; i++) {
-    free(buf->row[i].characters);
-    free(buf->row[i].attrs);
+    gfree(buf->row[i].characters);
+    gfree(buf->row[i].attrs);
   }
-  free(buf->row);
+  gfree(buf->row);
   buf->row = NULL;
   buf->numrows = 0;
   buf->x = 0;
@@ -300,7 +301,7 @@ static void clearBufferRows(Buffer *buf) {
  */
 static void renderResults(Buffer *buf, const char *pattern) {
   clearBufferRows(buf);
-  free(s_row_hit);
+  gfree(s_row_hit);
   s_row_hit = NULL;
   s_row_count = 0;
 
@@ -349,7 +350,7 @@ static Buffer *openResultsBuffer(void) {
     if (!name)
       return NULL;
     s_results_buffer_id = bufferCreate(name, READ_ONLY, EXPLORER_BUFF);
-    free(name);
+    gfree(name);
     buf = bufferFindById(s_results_buffer_id);
     if (!buf)
       return NULL;
@@ -386,7 +387,7 @@ int projectSearchRun(const char *pattern, const char *root) {
   }
 
   parseResults(output, resolved);
-  free(output);
+  gfree(output);
 
   if (s_hit_count == 0) {
     editorSetStatusMessage("No matches for \"%s\"", pattern);
@@ -421,13 +422,13 @@ void projectSearchPrompt(void) {
     return;
 
   char *pattern = (char *)utf8ToString(input);
-  free(input);
+  gfree(input);
   if (!pattern)
     return;
 
   if (*pattern)
     projectSearchRun(pattern, NULL);
-  free(pattern);
+  gfree(pattern);
 }
 
 /**
@@ -447,7 +448,7 @@ static int findOpenBufferByPath(const char *abs_path) {
       char *full = (char *)utf8ToString(b->fullname);
       if (full) {
         int same = (strcmp(full, abs_path) == 0);
-        free(full);
+        gfree(full);
         if (same)
           return b->buffer_id;
       }
@@ -508,7 +509,7 @@ void projectSearchGotoCursor(void) {
     if (!upath)
       return;
     int id = bufferCreate(upath, READ_AND_WRITE, FILE_BUFF);
-    free(upath);
+    gfree(upath);
     if (id == -1) {
       editorSetStatusMessage("Could not open %s", hit->rel_path);
       return;

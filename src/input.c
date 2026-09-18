@@ -1,4 +1,5 @@
 #include "../include/input.h"
+#include "../include/galloc.h"
 #include "../include/buffer.h"
 #include "../include/builtins.h"
 #include "../include/completion.h"
@@ -111,7 +112,7 @@ Utf8Char *fileCompletion(Utf8Char *path) {
 
   dir_path = utf8ToString(directory);
   dir = opendir(dir_path);
-  free(dir_path);
+  gfree(dir_path);
   if (!dir)
     return path;
 
@@ -125,26 +126,26 @@ Utf8Char *fileCompletion(Utf8Char *path) {
     if ((predict_len == 0) ||
         (utf8StringNCmp(entry_name_utf8, predict, predict_len) == 0)) {
       utf8Printf(full_path, PATH_MAX, "%u/%u", directory, entry_name_utf8);
-      free(entry_name_utf8);
+      gfree(entry_name_utf8);
 
       full_path_str = utf8ToString(full_path);
       if (stat(full_path_str, &st) == 0 && S_ISDIR(st.st_mode)) {
         full_path[utf8StringLen(full_path) - 1].character[0] = '/';
         full_path[utf8StringLen(full_path) - 1].length = 1;
       }
-      free(full_path_str);
+      gfree(full_path_str);
       closedir(dir);
 
       return full_path;
     }
-    free(entry_name_utf8);
+    gfree(entry_name_utf8);
   }
 
   // Cleanup when no more entries
   closedir(dir);
   dir = NULL;
-  free(entry);
-  free(full_path);
+  gfree(entry);
+  gfree(full_path);
   appDebug("[FILE COMP] no entries\n");
   return path;
 }
@@ -187,13 +188,13 @@ Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode) {
       }
     } else if (*c->character == ESCAPE) {
       editorSetStatusMessage("Aborted");
-      free(c);
+      gfree(c);
       E.prompt_input = NULL;
       return NULL;
     } else if (*c->character == '\r') {
       if (buf_len != 0) {
         editorSetStatusMessage("");
-        free(c);
+        gfree(c);
         E.prompt_input = NULL;
         return buf;
       }
@@ -220,7 +221,7 @@ Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode) {
       memcpy((buf + buf_len)->character, c->character, c->length);
       buf_len++;
     }
-    free(c);
+    gfree(c);
   }
 }
 
@@ -324,14 +325,14 @@ void editorProcessKeypress() {
   // checked before anything else so it can't be shadowed by a
   // keybind or by LSP completion.
   if (bufferSwitcherHandleKey(c)) {
-    free(c);
+    gfree(c);
     return;
   }
 
   // Same reasoning as the buffer switcher above — the generic list
   // popup is modal too, so it gets first refusal on every key.
   if (listPopupHandleKey(c)) {
-    free(c);
+    gfree(c);
     return;
   }
 
@@ -339,7 +340,7 @@ void editorProcessKeypress() {
   // printable key to build its query, so it can't sit behind keybind
   // dispatch.
   if (fileFinderHandleKey(c)) {
-    free(c);
+    gfree(c);
     return;
   }
 
@@ -378,12 +379,12 @@ void editorProcessKeypress() {
         }
 
         E.lsp_completion.visible = 0;
-        free(c);
+        gfree(c);
         return;
       }
 
       if (lspUiHandleKey(&E.lsp_completion, c)) {
-        free(c);
+        gfree(c);
         return;
       }
     }
@@ -400,13 +401,37 @@ void editorProcessKeypress() {
   }
 
   if (executeKeyBind(keyToString(c))) {
-    free(c);
+    gfree(c);
     return;
   }
 
   if (buf->type == TERMINAL_BUFF) {
     ptyForwardKey(buf, c);
-    free(c);
+    gfree(c);
+    return;
+  }
+
+  // A prefix is pending (e.g. CTRL-x's "user") and this key isn't bound
+  // under it — it's not a valid continuation of whatever command was
+  // being chorded, so it must not fall through to normal editing below.
+  // It used to: every key unbound under the active prefix landed here and
+  // got inserted as a literal character (silently, since bufferInsertChar
+  // only refuses TERMINAL_BUFF — a real, writable FILE_BUFF took it
+  // without complaint), while prefix_state stayed exactly as pending as
+  // before. A user who fat-fingers or hesitates mid-chord — or just
+  // returns after stepping away with CTRL-x half-pressed — would see every
+  // subsequent keystroke seemingly do nothing (CTRL-x CTRL-c doesn't fire
+  // "CTRL-x" isn't bound under "user") while actually typing garbage into
+  // the open file one character at a time, looking exactly like a freeze
+  // with no visible cause. A one-shot prefix (the default — see
+  // add-prefix's doc comment) is only ever good for a single follow-up
+  // key, matched or not, so consume it here the same way executeKeyBind()
+  // already does on a successful match; a sticky prefix (search, explorer)
+  // stays active, same as it already does through a match.
+  if (E.prefix_state != 0) {
+    if (!E.prefix[E.prefix_state].sticky)
+      E.prefix_state = 0;
+    gfree(c);
     return;
   }
 
@@ -452,7 +477,7 @@ void editorProcessKeypress() {
     }
   }
 
-  free(c);
+  gfree(c);
   c = NULL;
 
   // Debounced: this only (re)starts an idle timer. The actual

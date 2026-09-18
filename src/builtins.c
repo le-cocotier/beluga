@@ -7,6 +7,7 @@
  */
 
 #include "../include/builtins.h"
+#include "../include/galloc.h"
 #include "../include/project_search.h"
 #include "../include/file_finder.h"
 #include "../include/subprocess.h"
@@ -91,12 +92,12 @@ Lisp mapKey(Lisp args, LispError *e, LispContext ctx) {
   const Lisp func = lisp_car(args);
 
   memory_temp =
-      realloc(E.key_binds, ++E.number_of_keybinds * sizeof(struct keyBind_t));
+      grealloc(E.key_binds, ++E.number_of_keybinds * sizeof(struct keyBind_t));
   E.key_binds = (struct keyBind_t *)memory_temp;
   if (!E.key_binds)
     editorQuit(args, e, ctx);
   E.key_binds[E.number_of_keybinds - 1].key_sequence =
-      (char *)malloc(1024 * sizeof(char));
+      (char *)galloc(1024 * sizeof(char));
 
   strncpy(E.key_binds[E.number_of_keybinds - 1].key_sequence, key_sequence, 50);
 
@@ -159,14 +160,14 @@ Lisp moveCursor(Lisp args, LispError *e, LispContext ctx) {
 void bFree_structs(void) {
   int i, j;
   for (i = 0; i < E.number_of_keybinds; ++i) {
-    free(E.key_binds[i].key_sequence);
+    gfree(E.key_binds[i].key_sequence);
     E.key_binds[i].key_sequence = NULL;
   }
-  free(E.key_binds);
+  gfree(E.key_binds);
   E.key_binds = NULL;
   E.number_of_keybinds = 0;
 
-  free(E.hooks);
+  gfree(E.hooks);
   E.hooks = NULL;
   E.number_of_hooks = 0;
 
@@ -184,17 +185,17 @@ void bFree_structs(void) {
     for (i = 0; i < E.number_of_buffer; ++i) {
       struct buffer_t *next = b->next;
       for (j = 0; j < b->numrows; ++j) {
-        free(b->row[j].characters);
-        free(b->row[j].attrs);
+        gfree(b->row[j].characters);
+        gfree(b->row[j].attrs);
       }
-      free(b->row);
+      gfree(b->row);
       if (b->filename)
-        free(b->filename);
+        gfree(b->filename);
       if (b->path)
-        free(b->path);
+        gfree(b->path);
       if (b->fullname)
-        free(b->fullname);
-      free(b);
+        gfree(b->fullname);
+      gfree(b);
       b = next;
     }
   }
@@ -463,15 +464,15 @@ Lisp editorPromptLisp(Lisp args, LispError *e, LispContext ctx) {
                                ? stringToUtf8((unsigned char *) placeholder_str)
                                : NULL;
   Utf8Char *result = editorPrompt((char *) prompt, placeholder, (char) path_mode);
-  free(placeholder);
+  gfree(placeholder);
 
   if (!result)
     return lisp_make_bool(0); // ESC / cancelled
 
   char *result_str = (char *) utf8ToString(result);
-  free(result);
+  gfree(result);
   Lisp out = lisp_make_string2(result_str, ctx);
-  free(result_str);
+  gfree(result_str);
   return out;
 }
 
@@ -494,8 +495,8 @@ Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
     EditorPane *active = splitScreenGetActivePane();
     active->buffer_id = bufferCreate(filename, READ_AND_WRITE, FILE_BUFF);
   }
-  free(pwd);
-  free(filename);
+  gfree(pwd);
+  gfree(filename);
 
   return lisp_null();
 }
@@ -512,7 +513,7 @@ Lisp editorOpenConfig(Lisp args, LispError *e, LispContext ctx) {
   Utf8Char *path = stringToUtf8((unsigned char *) E.init_file_path);
   EditorPane *active = splitScreenGetActivePane();
   active->buffer_id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
-  free(path);
+  gfree(path);
   return lisp_null();
 }
 
@@ -539,7 +540,7 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx) {
   int b = (int) lisp_int(lisp_car(args));
 
   int is_background = (strstr(role, "background") != NULL);
-  char *ansi = malloc(24); // "\x1b[38;2;255;255;255m" + NUL fits well within this
+  char *ansi = galloc(24); // "\x1b[38;2;255;255;255m" + NUL fits well within this
   snprintf(ansi, 24, "\x1b[%d;2;%d;%d;%dm", is_background ? 48 : 38, r, g, b);
 
   if (!strcmp(role, "background"))           E.theme.BACKGROUND_COLOR = ansi;
@@ -552,7 +553,7 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx) {
   else if (!strcmp(role, "default"))         E.theme.COLOR_DEFAULT = ansi;
   else
   {
-    free(ansi);
+    gfree(ansi);
     editorSetStatusMessage("Unknown theme color role: %s", role);
   }
 
@@ -573,7 +574,7 @@ Lisp editorOpenFilePath(Lisp args, LispError *e, LispContext ctx) {
   Utf8Char *path = stringToUtf8((unsigned char *) path_str);
   EditorPane *active = splitScreenGetActivePane();
   active->buffer_id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
-  free(path);
+  gfree(path);
   return lisp_null();
 }
 
@@ -626,7 +627,7 @@ Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx) {
     return lisp_make_string2("", ctx);
 
   Lisp result = lisp_make_string2(out, ctx);
-  free(out);
+  gfree(out);
   return result;
 }
 
@@ -694,7 +695,7 @@ Lisp l_listBuffers(Lisp args, LispError *e, LispContext ctx) {
     snprintf(line, sizeof(line), "%d: %s%s", b->buffer_id,
              (filename && filename[0]) ? filename : "[No Name]",
              b->dirty ? " *" : "");
-    free(filename);
+    gfree(filename);
 
     Lisp pair = lisp_cons(lisp_make_string2(line, ctx), lisp_make_int(b->buffer_id), ctx);
     Lisp cell = lisp_cons(pair, lisp_null(), ctx);
@@ -737,7 +738,7 @@ Lisp editorScratchOpen(Lisp args, LispError *e, LispContext ctx) {
   const char *name = lisp_string(lisp_car(args));
   Utf8Char *uname = stringToUtf8((unsigned char *) name);
   int id = bufferCreate(uname, READ_ONLY, EXPLORER_BUFF);
-  free(uname);
+  gfree(uname);
   return lisp_make_int(id);
 }
 
@@ -760,10 +761,10 @@ Lisp editorScratchSetLines(Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
 
   for (int i = 0; i < buf->numrows; i++) {
-    free(buf->row[i].characters);
-    free(buf->row[i].attrs);
+    gfree(buf->row[i].characters);
+    gfree(buf->row[i].attrs);
   }
-  free(buf->row);
+  gfree(buf->row);
   buf->row = NULL;
   buf->numrows = 0;
   buf->x = 0;
@@ -774,7 +775,7 @@ Lisp editorScratchSetLines(Lisp args, LispError *e, LispContext ctx) {
     Utf8Char *uline = stringToUtf8((unsigned char *) line_str);
     int len = utf8StringLen(uline) - 1; // utf8StringLen() counts the terminator too
     bufferInsertRow(buf, buf->numrows, uline, len);
-    free(uline);
+    gfree(uline);
     lines = lisp_cdr(lines);
   }
   buf->dirty = 0;
@@ -817,7 +818,7 @@ Lisp editorExplorerSidebarOpen(Lisp args, LispError *e, LispContext ctx) {
   int sidebar_id = bufferFindByFilename(uname);
   if (sidebar_id == -1)
       sidebar_id = bufferCreate(uname, READ_ONLY, EXPLORER_BUFF);
-  free(uname);
+  gfree(uname);
 
   if (sidebar_id == -1)
       return lisp_make_int(-1); // bufferCreate() itself failed
@@ -845,7 +846,7 @@ Lisp editorOpenTerminal(Lisp args, LispError *e, LispContext ctx) {
   unsigned char temp_str_file[5] = "term";
   Utf8Char * filename = stringToUtf8(temp_str_file);
   int bufId = bufferFindByFilename(filename);
-  free(filename);
+  gfree(filename);
   if (bufId == -1)
       active->buffer_id = bufferCreate(NULL, READ_AND_WRITE, TERMINAL_BUFF);
   else
@@ -878,7 +879,7 @@ Lisp editorExecuteCommand(Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
 
   char *name_str = (char *)utf8ToString(name);
-  free(name);
+  gfree(name);
 
   int present = 0;
   Lisp sym = lisp_make_symbol(name_str, ctx);
@@ -893,13 +894,13 @@ Lisp editorExecuteCommand(Lisp args, LispError *e, LispContext ctx) {
 
   if (!present) {
     editorSetStatusMessage("No such command: %s", name_str);
-    free(name_str);
+    gfree(name_str);
     return lisp_null();
   }
 
   if (lisp_type(val) != LISP_FUNC && lisp_type(val) != LISP_LAMBDA) {
     editorSetStatusMessage("Not a command: %s", name_str);
-    free(name_str);
+    gfree(name_str);
     return lisp_null();
   }
 
@@ -908,7 +909,7 @@ Lisp editorExecuteCommand(Lisp args, LispError *e, LispContext ctx) {
   if (call_error != LISP_ERROR_NONE)
     editorSetStatusMessage("Error running: %s", name_str);
 
-  free(name_str);
+  gfree(name_str);
   return lisp_null();
 }
 
@@ -959,14 +960,14 @@ Lisp addPackage(Lisp args, LispError *e, LispContext ctx) {
 
   FILE *fd_package = fopen(package_dir, "r");
   if (!fd_package) {
-    free(package_dir);
+    gfree(package_dir);
     return lisp_null();
   }
 
   lisp_eval(lisp_read_file(fd_package, &E.ctx_error, E.ctx), &E.ctx_error,
             E.ctx);
   fclose(fd_package);
-  free(package_dir);
+  gfree(package_dir);
 
   return lisp_null();
 }
@@ -1121,7 +1122,7 @@ Lisp editorSetPrefix(Lisp args, LispError *e, LispContext ctx) {
  * @note Updates global editor state E (prefix array)
  */
 Lisp editorPrefix(Lisp args, LispError *e, LispContext ctx) {
-  E.prefix = (struct prefix_t *)realloc(E.prefix, (++(E.number_of_prefix) + 1) *
+  E.prefix = (struct prefix_t *)grealloc(E.prefix, (++(E.number_of_prefix) + 1) *
                                                       sizeof(struct prefix_t));
   E.prefix[E.number_of_prefix].prefix_id = E.number_of_prefix;
   strncpy(E.prefix[E.number_of_prefix].prefix_name, lisp_string(lisp_car(args)),
@@ -1161,7 +1162,7 @@ Lisp editorPaste(Lisp args, LispError *e, LispContext ctx) {
     }
   }
 
-  free(text);
+  gfree(text);
   return lisp_null();
 }
 
@@ -1189,7 +1190,7 @@ Lisp editorCutEndLine(Lisp args, LispError *e, LispContext ctx) {
 
   char *text = (char *) utf8ToNString(&row->characters[buffer->x], count);
   editorSetClipboard(text, (int) strlen(text));
-  free(text);
+  gfree(text);
 
   // Goes through bufferDeleteRegion() (the same path region-kill and LSP
   // edits use) rather than truncating row->size directly, so this is
@@ -1223,7 +1224,7 @@ Lisp editorCopyEndLine(Lisp args, LispError *e, LispContext ctx) {
 
   char *text = (char *) utf8ToNString(&row->characters[buffer->x], count);
   editorSetClipboard(text, (int) strlen(text));
-  free(text);
+  gfree(text);
 
   return lisp_null();
 }
@@ -1278,7 +1279,7 @@ Lisp editorKillRegion(Lisp args, LispError *e, LispContext ctx) {
   char *text = bufferGetRegionText(buf, sr, sc, er, ec);
   if (text) {
     editorSetClipboard(text, (int) strlen(text));
-    free(text);
+    gfree(text);
   }
   bufferDeleteRegion(buf, sr, sc, er, ec);
   buf->mark_active = 0;
@@ -1307,7 +1308,7 @@ Lisp editorCopyRegion(Lisp args, LispError *e, LispContext ctx) {
   char *text = bufferGetRegionText(buf, sr, sc, er, ec);
   if (text) {
     editorSetClipboard(text, (int) strlen(text));
-    free(text);
+    gfree(text);
   }
   buf->mark_active = 0;
   return lisp_null();
@@ -1363,7 +1364,7 @@ Lisp addHook(Lisp args, LispError *e, LispContext ctx) {
   args = lisp_cdr(args);
   Lisp callback = lisp_car(args);
 
-  void *mem = realloc(E.hooks, (E.number_of_hooks + 1) * sizeof(struct hookBind_t));
+  void *mem = grealloc(E.hooks, (E.number_of_hooks + 1) * sizeof(struct hookBind_t));
   if (!mem)
     return lisp_null();
   E.hooks = (struct hookBind_t *)mem;
@@ -1420,7 +1421,7 @@ Lisp lineTextAt(Lisp args, LispError *e, LispContext ctx) {
 
   char *text = (char *)utf8ToString(buf->row[row].characters);
   Lisp result = lisp_make_string2(text, ctx);
-  free(text);
+  gfree(text);
   return result;
 }
 
@@ -1464,7 +1465,7 @@ Lisp bufferFilenameLisp(Lisp args, LispError *e, LispContext ctx) {
 
   char *text = (char *)utf8ToString(buf->fullname);
   Lisp result = lisp_make_string2(text, ctx);
-  free(text);
+  gfree(text);
   return result;
 }
 
@@ -1551,7 +1552,7 @@ Lisp lspRegisterServer(Lisp args, LispError *e, LispContext ctx) {
   const char *lang_id = lisp_string(lisp_car(args));
   args = lisp_cdr(args);
 
-  void *mem = realloc(E.lsp_servers,
+  void *mem = grealloc(E.lsp_servers,
                        (E.number_of_lsp_servers + 1) * sizeof(struct lspServerConfig_t));
   if (!mem)
     return lisp_null();
@@ -1639,14 +1640,14 @@ Lisp lspRename(Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
 
   char *new_name = (char *) utf8ToString(name_input);
-  free(name_input);
+  gfree(name_input);
   if (new_name[0] == '\0') {
-    free(new_name);
+    gfree(new_name);
     return lisp_null();
   }
 
   lspRequestRename(E.lsp_client, buf, buf->y, buf->x, new_name);
-  free(new_name);
+  gfree(new_name);
   return lisp_null();
 }
 
@@ -1765,13 +1766,13 @@ Lisp l_syntaxDefineLanguage(Lisp args, LispError *e, LispContext ctx) {
 
   LanguageSyntax *lang = findLanguageByExtension(ext);
   if (!lang) {
-    void *mem = realloc(E.languages, (size_t)(E.number_of_languages + 1) * sizeof(LanguageSyntax));
+    void *mem = grealloc(E.languages, (size_t)(E.number_of_languages + 1) * sizeof(LanguageSyntax));
     if (!mem)
       return lisp_null();
     E.languages = (LanguageSyntax *) mem;
     lang = &E.languages[E.number_of_languages++];
   } else {
-    free(lang->words); // re-registering: drop whatever keywords/types it had
+    gfree(lang->words); // re-registering: drop whatever keywords/types it had
   }
   memset(lang, 0, sizeof(*lang));
   strncpy(lang->extension, ext, sizeof(lang->extension) - 1);
@@ -1799,7 +1800,7 @@ static void syntaxAddWord(const char *ext, const char *word, int is_type) {
 
   if (lang->num_words >= lang->words_cap) {
     int new_cap = lang->words_cap ? lang->words_cap * 2 : 32;
-    void *mem = realloc(lang->words, (size_t) new_cap * sizeof(SyntaxWord));
+    void *mem = grealloc(lang->words, (size_t) new_cap * sizeof(SyntaxWord));
     if (!mem)
       return;
     lang->words = (SyntaxWord *) mem;

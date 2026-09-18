@@ -12,6 +12,7 @@
 #include <signal.h>
 
 #include "include/define.h"
+#include "include/galloc.h"
 #include "include/utf8.h"
 #include "include/data.h"
 #include "include/init.h"
@@ -42,7 +43,7 @@ int main(int argc, char *argv[]) {
     // Allocate and build splash screen path safely
     utf8Printf(splash_screen, PATH_MAX, "%s/.beluga/assets/beluga.txt", home);
 
-    // signal(SIGPIPE, SIG_IGN);
+    signal(SIGPIPE, SIG_IGN); // writing to a dead PTY must not kill the editor
     enableRawMode();
     initEditor();
 
@@ -52,10 +53,10 @@ int main(int argc, char *argv[]) {
     if (argc >= 2) {
         Utf8Char* filename = stringToUtf8((unsigned char *)argv[1]);
         active->buffer_id = bufferCreate(filename, READ_AND_WRITE, FILE_BUFF);
-        free(filename);
+        gfree(filename);
     }
 
-    free(splash_screen);  // Now guaranteed safe
+    gfree(splash_screen);  // Now guaranteed safe
     editorSetStatusMessage("HELP: Ctrl-x Ctrl-s = save | Ctrl-x Ctrl-c = quit");
 
     while (!E.exit_requested) {

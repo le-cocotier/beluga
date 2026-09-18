@@ -4,6 +4,7 @@
  */
 
 #include "../include/split_screen.h"
+#include "../include/galloc.h"
 #include "../include/buffer.h"
 #include "../include/editor_op.h"
 #include "../include/pty_session.h"
@@ -25,7 +26,7 @@ void splitScreenInit(void) {
     E.layout.num_panes = 1;
     E.layout.active_pane = 0;
 
-    EditorPane *new_panes = realloc(E.layout.panes, sizeof(EditorPane) * 2);
+    EditorPane *new_panes = grealloc(E.layout.panes, sizeof(EditorPane) * 2);
     if (!new_panes) {
         editorSetStatusMessage("Error: realloc failed");
         return;
@@ -138,7 +139,7 @@ int splitScreenSplitActive(SplitMode direction) {
         return -1;
     }
 
-    EditorPane *grown = realloc(E.layout.panes,
+    EditorPane *grown = grealloc(E.layout.panes,
                                 sizeof(EditorPane) * (size_t)(E.layout.num_panes + 1));
     if (!grown) {
         editorSetStatusMessage("Error: realloc failed");
@@ -284,7 +285,7 @@ int splitScreenWithSidebar(int sidebar_buffer_id, int main_buffer_id, int sideba
         return -1;
     }
 
-    E.layout.panes = realloc(E.layout.panes, sizeof(EditorPane) * 2);
+    E.layout.panes = grealloc(E.layout.panes, sizeof(EditorPane) * 2);
     E.layout.mode = SPLIT_VERTICAL;
     E.layout.num_panes = 2;
     E.layout.active_pane = 0;
@@ -447,12 +448,12 @@ EditorPane *splitScreenGetActivePane(void) {
 
 void freeScreenLayout(ScreenLayout *layout) {
     if (layout) {
-        free(layout->panes);
+        gfree(layout->panes);
         layout->panes = NULL;
     }
 }
 
 void freePane(EditorPane *pane)
 {
-    free(pane);
+    gfree(pane);
 }

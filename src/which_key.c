@@ -6,6 +6,7 @@
  */
 
 #include "../include/which_key.h"
+#include "../include/galloc.h"
 
 #include "../include/append_buffer.h"
 #include "../include/buffer.h"
@@ -119,8 +120,8 @@ static const char *symbolNameForValue(Lisp value, Lisp alist) {
 static void freeStrings(char ***arr, int *count) {
     if (*arr) {
         for (int i = 0; i < *count; i++)
-            free((*arr)[i]);
-        free(*arr);
+            gfree((*arr)[i]);
+        gfree(*arr);
     }
     *arr = NULL;
     *count = 0;
@@ -197,7 +198,7 @@ void whichKeyBuildCommandList(void) {
 
         if (g_command_count >= cap) {
             cap *= 2;
-            char **grown = realloc(g_commands, (size_t) cap * sizeof(char *));
+            char **grown = grealloc(g_commands, (size_t) cap * sizeof(char *));
             if (!grown)
                 break;
             g_commands = grown;
@@ -353,7 +354,7 @@ static void drawCommandHelp(struct abuf *ab) {
 
     char **matches = calloc((size_t) g_command_count, sizeof(char *));
     if (!matches) {
-        free(typed);
+        gfree(typed);
         return;
     }
     int n = 0;
@@ -370,8 +371,8 @@ static void drawCommandHelp(struct abuf *ab) {
     if (n > 0)
         drawPanel(ab, title, matches, n);
 
-    free(matches);
-    free(typed);
+    gfree(matches);
+    gfree(typed);
 }
 
 /**
@@ -385,8 +386,8 @@ static void drawPrefixHelp(struct abuf *ab) {
     char **entries = calloc((size_t) E.number_of_keybinds, sizeof(char *));
     char *storage = calloc((size_t) E.number_of_keybinds, WK_ENTRY_MAX);
     if (!entries || !storage) {
-        free(entries);
-        free(storage);
+        gfree(entries);
+        gfree(storage);
         return;
     }
 
@@ -407,8 +408,8 @@ static void drawPrefixHelp(struct abuf *ab) {
         drawPanel(ab, title, entries, n);
     }
 
-    free(entries);
-    free(storage);
+    gfree(entries);
+    gfree(storage);
 }
 
 void whichKeyDraw(struct abuf *ab) {

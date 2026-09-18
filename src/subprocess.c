@@ -12,6 +12,7 @@
  */
 
 #include "../include/subprocess.h"
+#include "../include/galloc.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -69,7 +70,7 @@ char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes)
                                             // so this can't clobber anything
 
     size_t cap = 256, len = 0;
-    char* out = malloc(cap);
+    char* out = galloc(cap);
     if (!out)
     {
         close(pipefd[0]);
@@ -125,10 +126,10 @@ char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes)
         if (len + (size_t) n + 1 > cap)
         {
             while (len + (size_t) n + 1 > cap) cap *= 2;
-            char* grown = realloc(out, cap);
+            char* grown = grealloc(out, cap);
             if (!grown)
             {
-                free(out);
+                gfree(out);
                 close(pipefd[0]);
                 killAndReap(pid);
                 return NULL;
@@ -150,7 +151,7 @@ char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes)
     while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
         out[--len] = '\0';
 
-    if (len == 0) { free(out); return NULL; }
+    if (len == 0) { gfree(out); return NULL; }
     return out;
 }
 

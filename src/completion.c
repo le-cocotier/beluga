@@ -4,6 +4,7 @@
  */
 
 #include "../include/completion.h"
+#include "../include/galloc.h"
 
 #include <signal.h>
 #include <stdlib.h>
@@ -98,7 +99,7 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
 
     char *msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
-    free(msg);
+    gfree(msg);
     cJSON_Delete(root);
 
     lsp->state = LSP_READY;
@@ -197,7 +198,7 @@ static void lsp_feed(LspClient *lsp, const char *data, size_t len)
     {
         size_t new_cap = lsp->recv_cap ? lsp->recv_cap * 2 : 4096;
         while (new_cap < needed) new_cap *= 2;
-        char *grown = realloc(lsp->recv_buf, new_cap);
+        char *grown = grealloc(lsp->recv_buf, new_cap);
         if (!grown) return; // best-effort: drop data rather than crash
         lsp->recv_buf = grown;
         lsp->recv_cap = new_cap;
@@ -226,14 +227,14 @@ static void lsp_feed(LspClient *lsp, const char *data, size_t len)
             break; // body not fully arrived yet
 
         // Full message available — extract and dispatch
-        char *body = malloc(content_length + 1);
+        char *body = galloc(content_length + 1);
         if (body)
         {
             memcpy(body, lsp->recv_buf + body_start, content_length);
             body[content_length] = '\0';
             appDebug("[LSP ←] %s\n", body);
             lspHandleMessage(lsp, body);
-            free(body);
+            gfree(body);
         }
 
         // Shift any remaining buffered bytes down to the front
@@ -290,7 +291,7 @@ static int lsp_find_buffer_id_by_uri(const char *uri)
             char buf_uri[PATH_MAX + 8];
             char *fullname_str = (char*) utf8ToString(b->fullname);
             snprintf(buf_uri, sizeof(buf_uri), "file://%s", fullname_str);
-            free(fullname_str);
+            gfree(fullname_str);
 
             if (strcmp(buf_uri, uri) == 0)
                 return b->buffer_id;
@@ -321,7 +322,7 @@ static void lspJumpToUri(const char *uri, int line, int character)
     {
         Utf8Char *path = stringToUtf8((unsigned char *) uri + 7);
         buffer_id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
-        free(path);
+        gfree(path);
         if (buffer_id < 0)
         {
             editorSetStatusMessage("Couldn't open %s", uri + 7);
@@ -485,7 +486,7 @@ static void applyTextEditsToUri(const char *uri, cJSON *edits_array)
     {
         Utf8Char *path = stringToUtf8((unsigned char *) uri + 7);
         buffer_id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
-        free(path);
+        gfree(path);
     }
     struct buffer_t *buf = bufferFindById(buffer_id);
     if (buf)
@@ -495,8 +496,8 @@ static void applyTextEditsToUri(const char *uri, cJSON *edits_array)
                                 edits[i].end_line, edits[i].end_col, edits[i].new_text);
     }
 
-    for (int i = 0; i < n; i++) free(edits[i].new_text);
-    free(edits);
+    for (int i = 0; i < n; i++) gfree(edits[i].new_text);
+    gfree(edits);
 }
 
 static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
@@ -591,8 +592,8 @@ static void lsp_on_formatting_response(LspClient *lsp, const char *result_json)
             for (int i = 0; i < n; i++)
                 bufferApplyTextEdit(g_format_target_buf, edits[i].start_line, edits[i].start_col,
                                     edits[i].end_line, edits[i].end_col, edits[i].new_text);
-            for (int i = 0; i < n; i++) free(edits[i].new_text);
-            free(edits);
+            for (int i = 0; i < n; i++) gfree(edits[i].new_text);
+            gfree(edits);
         }
     }
     g_format_target_buf = NULL;
@@ -752,7 +753,7 @@ int lspStart(LspClient *client, const char *root_dir, char *const server_argv[])
         lsp_send(client, msg);
         lsp_track_pending(client, init_id, lsp_on_initialize_response);
 
-        free(msg);
+        gfree(msg);
         cJSON_Delete(req);
 
         return 0;
@@ -786,7 +787,7 @@ static int lspBufferUri(const struct buffer_t *buf, char *uri, size_t uri_size)
         return 0;
 
     snprintf(uri, uri_size, "file://%s", full);
-    free(full);
+    gfree(full);
     return 1;
 }
 
@@ -835,8 +836,8 @@ void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
     char* msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
 
-    free(text);
-    free(msg);
+    gfree(text);
+    gfree(msg);
     cJSON_Delete(root);
 }
 
@@ -873,8 +874,8 @@ void lspDidChange(LspClient* lsp, struct buffer_t* buf)
     char* msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
 
-    free(text);
-    free(msg);
+    gfree(text);
+    gfree(msg);
     cJSON_Delete(root);
 }
 
@@ -900,7 +901,7 @@ void lspDidClose(LspClient* lsp, struct buffer_t* buf)
     char* msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
 
-    free(msg);
+    gfree(msg);
     cJSON_Delete(root);
 }
 
@@ -950,7 +951,7 @@ void lspRequestCompletion(LspClient *lsp, struct buffer_t *buf,
     lsp->completion_latest_request_id = req_id;
 
     cJSON_Delete(req);
-    free(msg);
+    gfree(msg);
 }
 
 void lspRequestDefinition(LspClient *lsp, struct buffer_t *buf,
@@ -986,7 +987,7 @@ void lspRequestDefinition(LspClient *lsp, struct buffer_t *buf,
     lsp_send(lsp, msg);
     lsp_track_pending(lsp, req_id, lsp_on_definition_response);
 
-    free(msg);
+    gfree(msg);
     cJSON_Delete(req);
 }
 
@@ -1022,7 +1023,7 @@ void lspRequestHover(LspClient *lsp, struct buffer_t *buf, int line, int col)
     lsp_send(lsp, msg);
     lsp_track_pending(lsp, req_id, lsp_on_hover_response);
 
-    free(msg);
+    gfree(msg);
     cJSON_Delete(req);
 }
 
@@ -1061,7 +1062,7 @@ void lspRequestRename(LspClient *lsp, struct buffer_t *buf, int line, int col,
     lsp_track_pending(lsp, req_id, lsp_on_rename_response);
     lspAwaitResponse(lsp, req_id, 3000);
 
-    free(msg);
+    gfree(msg);
     cJSON_Delete(req);
 }
 
@@ -1114,7 +1115,7 @@ void lspRequestFormatting(LspClient *lsp, struct buffer_t *buf)
         editorSetStatusMessage("Formatting timed out");
     }
 
-    free(msg);
+    gfree(msg);
     cJSON_Delete(req);
 }
 
@@ -1307,7 +1308,7 @@ void lspShutdown(LspClient *client)
 
         char *msg = cJSON_PrintUnformatted(root);
         lsp_send(client, msg);
-        free(msg);
+        gfree(msg);
         cJSON_Delete(root);
 
         client->state = LSP_SHUTTING_DOWN;
@@ -1326,7 +1327,7 @@ void lspShutdown(LspClient *client)
 
         msg = cJSON_PrintUnformatted(root);
         lsp_send(client, msg);
-        free(msg);
+        gfree(msg);
         cJSON_Delete(root);
     }
 
@@ -1335,7 +1336,7 @@ void lspShutdown(LspClient *client)
     if (client->write_to_server_fd > 0) { close(client->write_to_server_fd); client->write_to_server_fd = -1; }
     if (client->read_from_server_fd > 0) { close(client->read_from_server_fd); client->read_from_server_fd = -1; }
 
-    // free(client->recv_buf);
+    // gfree(client->recv_buf);
     client->recv_buf = NULL;
 
     if (client->pid > 0)
@@ -1359,5 +1360,5 @@ void lspCleanup(LspClient *client)
     if (!client)
         return;
     lspShutdown(client);
-    free(client);
+    gfree(client);
 }

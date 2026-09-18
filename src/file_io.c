@@ -7,6 +7,7 @@
  */
 
 #include "../include/file_io.h"
+#include "../include/galloc.h"
 #include "../include/editor_op.h"
 #include "../include/input.h"
 #include "../include/buffer.h"
@@ -52,13 +53,13 @@ void editorCloseFile(void) {
   active->x_offset = 0;
   active->y_offset = 0;
   for (int i = 0; i < buf->numrows; ++i) {
-    free(buf->row[i].characters);
+    gfree(buf->row[i].characters);
   }
   buf->numrows = 0;
-  free(buf->row);
+  gfree(buf->row);
   buf->row = NULL;
   buf->dirty = 0;
-  free(buf->filename);
+  gfree(buf->filename);
   buf->filename = NULL;
   END_OF_STRING(E.status_msg[0]);
   E.status_msg_time = 0;
@@ -136,7 +137,7 @@ static Utf8Char* expandTabsForLine(const Utf8Char* line, int len, int* out_len)
     }
   }
 
-  Utf8Char* out = malloc((size_t) expanded_len * sizeof(Utf8Char));
+  Utf8Char* out = galloc((size_t) expanded_len * sizeof(Utf8Char));
   if (!out) return NULL;
 
   int j = 0;
@@ -191,7 +192,7 @@ void editorOpen(struct buffer_t* buffer) {
     if (expanded)
     {
       bufferInsertRow(buffer, buffer->numrows, expanded, expanded_len);
-      free(expanded);
+      gfree(expanded);
     }
     else
     {
@@ -201,7 +202,7 @@ void editorOpen(struct buffer_t* buffer) {
     pEndLine++;
     pFileContent = pEndLine;
   }
-  free(file_content);
+  gfree(file_content);
 
   buffer->dirty = 0;
 }
@@ -253,11 +254,11 @@ void editorSave() {
       if (fwrite(string_line, 1, strlen(string_line), fd) != strlen(string_line)) {
         fclose(fd);
         editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
-        free(string_line);
-        free(string_path);
+        gfree(string_line);
+        gfree(string_path);
         return;
       }
-      free(string_line);
+      gfree(string_line);
       string_line = NULL;
       fwrite("\n", 1, 1, fd);
     }
@@ -265,7 +266,7 @@ void editorSave() {
     fclose(fd);
     runHooks("after-save", lisp_cons(lisp_make_string2(string_path, E.ctx), lisp_null(), E.ctx));
     bufferRefreshGitInfo(buffer);
-    free(string_path);
+    gfree(string_path);
   }
   editorSetStatusMessage("File saved");
 }

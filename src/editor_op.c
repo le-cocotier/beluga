@@ -1,30 +1,24 @@
 #include "../include/editor_op.h"
+#include "../include/galloc.h"
 
 #include <stdarg.h>
 #include <stdlib.h>
 
-#include "../include/row_op.h"
-#include "../include/completion.h"
+#include "../include/ansi_parser.h"
 #include "../include/buffer.h"
+#include "../include/completion.h"
 #include "../include/data.h"
+#include "../include/input.h"
+#include "../include/output.h"
+#include "../include/pty_session.h"
+#include "../include/row_op.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
-#include "../include/output.h"
-#include "../include/input.h"
 #include "../include/utf8.h"
-#include <sys/select.h>
-#include <signal.h>
 #include <errno.h>
-#include "../include/pty_session.h"
-#include "../include/ansi_parser.h"
-
-static volatile sig_atomic_t g_winch_received = 0;
-
-static void handleWinch(int sig) { (void) sig; g_winch_received = 1; }
-
+#include <sys/select.h>
 
 extern EditorConfig E;
-
 
 /**
  * @brief Sets a temporary status message for display
@@ -35,13 +29,12 @@ extern EditorConfig E;
  * @note Updates global editor state E (status_msg, status_msg_time)
  * @see editorDrawMessageBar()
  */
-void editorSetStatusMessage(const char* fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    utf8VaPrintf(E.status_msg, PATH_MAX, fmt, ap);
-    va_end(ap);
-    E.status_msg_time = time(NULL);
+void editorSetStatusMessage(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  utf8VaPrintf(E.status_msg, PATH_MAX, fmt, ap);
+  va_end(ap);
+  E.status_msg_time = time(NULL);
 }
 
 /**
@@ -50,210 +43,210 @@ void editorSetStatusMessage(const char* fmt, ...)
  * key direction. Handles line wrapping and boundary conditions. Prevents cursor
  * from exceeding line lengths.
  * @param key The arrow key code (ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT)
- * @return 1 if cursor movement was valid, 0 if cursor was constrained to line boundary
+ * @return 1 if cursor movement was valid, 0 if cursor was constrained to line
+ * boundary
  * @note Updates global editor state E
  */
 int editorMoveCursor(int key) {
-    // TODO: Rebuid for utf8
-    EditorPane *active = splitScreenGetActivePane();
-    struct buffer_t *buf = bufferFindById(active->buffer_id);
-    Row *row = &buf->row[buf->y];
-    switch (key) {
-    case ARROW_RIGHT:
-        if (row && buf->x < row->size) {
-            buf->x++;
-        } else if (row && buf->y < buf->numrows - 1) {
-            buf->y++;
-            buf->x = 0;
-        }
-        break;
-    case ARROW_DOWN:
-        if (buf->y < buf->numrows - 1) {
-
-            buf->y++;
-            buf->x = buf->row[buf->y].size < buf->x ? buf->row[buf->y].size : buf->x;
-        }
-        break;
-    case ARROW_UP:
-        if (buf->y != 0) {
-            --buf->y;
-            buf->x = buf->row[buf->y].size < buf->x ? buf->row[buf->y].size : buf->x;
-        }
-        break;
-    case ARROW_LEFT:
-        if (buf->x != 0) {
-            --buf->x;
-        } else if (buf->y > 0) {
-            --buf->y;
-            buf->x = buf->row[buf->y].size;
-        }
-        break;
-    default:
-        break;
+  // TODO: Rebuid for utf8
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = bufferFindById(active->buffer_id);
+  Row *row = &buf->row[buf->y];
+  switch (key) {
+  case ARROW_RIGHT:
+    if (row && buf->x < row->size) {
+      buf->x++;
+    } else if (row && buf->y < buf->numrows - 1) {
+      buf->y++;
+      buf->x = 0;
     }
-    return 1;
+    break;
+  case ARROW_DOWN:
+    if (buf->y < buf->numrows - 1) {
+
+      buf->y++;
+      buf->x = buf->row[buf->y].size < buf->x ? buf->row[buf->y].size : buf->x;
+    }
+    break;
+  case ARROW_UP:
+    if (buf->y != 0) {
+      --buf->y;
+      buf->x = buf->row[buf->y].size < buf->x ? buf->row[buf->y].size : buf->x;
+    }
+    break;
+  case ARROW_LEFT:
+    if (buf->x != 0) {
+      --buf->x;
+    } else if (buf->y > 0) {
+      --buf->y;
+      buf->x = buf->row[buf->y].size;
+    }
+    break;
+  default:
+    break;
+  }
+  return 1;
 }
 
 // TODO: Rebuild pasting functionality
 
 char *editorGetClipboard(void) {
-    FILE *pipe = popen(CLIPBOARD_PASTE_CMD, "r");
-    if (!pipe) return NULL;
+  FILE *pipe = popen(CLIPBOARD_PASTE_CMD, "r");
+  if (!pipe)
+    return NULL;
 
-    size_t cap = 4096;
-    size_t len = 0;
-    char *buf = malloc(cap);
-    if (!buf) {
+  size_t cap = 4096;
+  size_t len = 0;
+  char *buf = galloc(cap);
+  if (!buf) {
+    pclose(pipe);
+    return NULL;
+  }
+
+  int c;
+  while ((c = fgetc(pipe)) != EOF) {
+    if (len + 1 >= cap) {
+      cap *= 2;
+      char *new_buf = grealloc(buf, cap);
+      if (!new_buf) {
+        gfree(buf);
         pclose(pipe);
         return NULL;
+      }
+      buf = new_buf;
     }
-
-    int c;
-    while ((c = fgetc(pipe)) != EOF) {
-        if (len + 1 >= cap) {
-            cap *= 2;
-            char *new_buf = realloc(buf, cap);
-            if (!new_buf) {
-                free(buf);
-                pclose(pipe);
-                return NULL;
-            }
-            buf = new_buf;
-        }
-        buf[len++] = (char)c;
-    }
-    buf[len] = '\0';
-    pclose(pipe);
-    return buf;
+    buf[len++] = (char)c;
+  }
+  buf[len] = '\0';
+  pclose(pipe);
+  return buf;
 }
 
 void editorSetClipboard(const char *text, int len) {
-    FILE *pipe = popen(CLIPBOARD_COPY_CMD, "w");
-    if (!pipe) return;
-    fwrite(text, 1, len, pipe);
-    pclose(pipe);
+  FILE *pipe = popen(CLIPBOARD_COPY_CMD, "w");
+  if (!pipe)
+    return;
+  fwrite(text, 1, len, pipe);
+  pclose(pipe);
 }
 
+void editorRunLoop(void) {
+  // Polled every tick instead of driven by SIGWINCH: nothing ever actually
+  // installed a WINCH handler (editorInstallSignalHandlers(), which used
+  // to live here, was never called from main()), so resizing silently did
+  // nothing at all. The 50ms select() timeout below already bounds how
+  // often this loop comes back around, so comparing the terminal's actual
+  // size against what was last seen catches a resize within one tick —
+  // dynamically, and without depending on signal delivery/interruption
+  // semantics that vary across terminals and platforms.
+  int last_rows = 0, last_cols = 0;
+  getWindowSize(&last_rows, &last_cols);
 
+  while (!E.exit_requested) {
+    int rows, cols;
+    if (getWindowSize(&rows, &cols) == 0 &&
+        (rows != last_rows || cols != last_cols)) {
+      last_rows = rows;
+      last_cols = cols;
+      E.screenrows = rows - 2;
+      E.screencols = cols;
+      // Every pane's terminal, not just the active one: a terminal
+      // sitting in the other half of a split is just as affected by
+      // the window changing size, and used to keep the size it was
+      // spawned with for the rest of the session.
+      splitScreenSyncTerminalSizes();
+    }
 
-void editorInstallSignalHandlers(void)
-{
-    signal(SIGPIPE, SIG_IGN); // writing to a dead PTY must not kill the editor
-    signal(SIGWINCH, handleWinch);
-}
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(STDIN_FILENO, &readfds);
+    int maxfd = STDIN_FILENO;
 
-void editorRunLoop(void)
-{
-    while (!E.exit_requested)
-    {
-        if (g_winch_received)
-        {
-            g_winch_received = 0;
-            getWindowSize(&E.screenrows, &E.screencols);
-            E.screenrows -= 2;
-            // Every pane's terminal, not just the active one: a terminal
-            // sitting in the other half of a split is just as affected by
-            // the window changing size, and used to keep the size it was
-            // spawned with for the rest of the session.
-            splitScreenSyncTerminalSizes();
+    if (E.buffers != NULL) {
+      int first_buffer_id = E.buffers->buffer_id;
+      struct buffer_t *b = E.buffers;
+      do {
+        if (b->type == TERMINAL_BUFF && b->pty_master_fd >= 0) {
+          FD_SET(b->pty_master_fd, &readfds);
+          if (b->pty_master_fd > maxfd)
+            maxfd = b->pty_master_fd;
         }
+        b = b->next;
+      } while (b->buffer_id != first_buffer_id);
+    }
 
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(STDIN_FILENO, &readfds);
-        int maxfd = STDIN_FILENO;
+    if (E.constantes.LSP && E.lsp_client &&
+        E.lsp_client->read_from_server_fd >= 0) {
+      FD_SET(E.lsp_client->read_from_server_fd, &readfds);
+      if (E.lsp_client->read_from_server_fd > maxfd)
+        maxfd = E.lsp_client->read_from_server_fd;
+    }
 
-        if (E.buffers != NULL)
-        {
-            int first_buffer_id = E.buffers->buffer_id;
-            struct buffer_t* b = E.buffers;
-            do
-            {
-                if (b->type == TERMINAL_BUFF && b->pty_master_fd >= 0)
-                {
-                    FD_SET(b->pty_master_fd, &readfds);
-                    if (b->pty_master_fd > maxfd) maxfd = b->pty_master_fd;
-                }
-                b = b->next;
-            } while (b->buffer_id != first_buffer_id);
-        }
+    struct timeval tv = {.tv_sec = 0, .tv_usec = 50000}; // 50ms tick
+    int ready = select(maxfd + 1, &readfds, NULL, NULL, &tv);
 
-        if (E.constantes.LSP && E.lsp_client && E.lsp_client->read_from_server_fd >= 0)
-        {
-            FD_SET(E.lsp_client->read_from_server_fd, &readfds);
-            if (E.lsp_client->read_from_server_fd > maxfd) maxfd = E.lsp_client->read_from_server_fd;
-        }
+    if (ready < 0) {
+      if (errno == EINTR)
+        continue; // interrupted by a signal — just retry
+      die("select");
+    }
 
-        struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 }; // 50ms tick
-        int ready = select(maxfd + 1, &readfds, NULL, NULL, &tv);
-
-
-        if (ready < 0)
-        {
-            if (errno == EINTR) continue; // interrupted by a signal — just retry
-            die("select");
-        }
-
-        if (ready > 0)
-        {
-            if (E.buffers != NULL)
-            {
-                int first_buffer_id = E.buffers->buffer_id;
-                struct buffer_t* b = E.buffers;
-                do
-                {
-                    if (b->type == TERMINAL_BUFF && b->pty_master_fd >= 0 && FD_ISSET(b->pty_master_fd, &readfds))
-                    {
-                        unsigned char chunk[4096];
-                        ssize_t n;
-                        while ((n = read(b->pty_master_fd, chunk, sizeof(chunk))) > 0)
-                        {
-                            ansiParserFeed(b, chunk, (size_t) n);
-                            b->x = b->term_state.cursor_x;
-                            b->y = b->term_state.cursor_y;
-                        }
-
-                        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
-                            ptySessionIsAlive(b); // reap if the shell exited
-                    }
-                    b = b->next;
-                } while (b->buffer_id != first_buffer_id);
+    if (ready > 0) {
+      if (E.buffers != NULL) {
+        int first_buffer_id = E.buffers->buffer_id;
+        struct buffer_t *b = E.buffers;
+        do {
+          if (b->type == TERMINAL_BUFF && b->pty_master_fd >= 0 &&
+              FD_ISSET(b->pty_master_fd, &readfds)) {
+            unsigned char chunk[4096];
+            ssize_t n;
+            while ((n = read(b->pty_master_fd, chunk, sizeof(chunk))) > 0) {
+              ansiParserFeed(b, chunk, (size_t)n);
+              b->x = b->term_state.cursor_x;
+              b->y = b->term_state.cursor_y;
             }
 
-            if (E.constantes.LSP  && E.lsp_client && (E.lsp_client->read_from_server_fd >= 0) && FD_ISSET(E.lsp_client->read_from_server_fd, &readfds))
-                lspPoll(E.lsp_client);
-
-            if (FD_ISSET(STDIN_FILENO, &readfds))
-                editorProcessKeypress();
-        }
-
-        // Runs every ~50ms tick regardless of what select() woke up for, so
-        // a scheduled completion request fires shortly after its debounce
-        // deadline passes even if the user has stopped typing entirely.
-        if (E.constantes.LSP) {
-            lspCompletionDebounceTick();
-            lspSyncDebounceTick();
-        }
-
-        // A keypress handled above may have requested the exit; drawing one
-        // more frame here would just repaint the UI we're about to leave.
-        if (E.exit_requested)
-            break;
-
-        editorRefreshScreen();
-    }
-
-    // Clean shutdown: close any live shells before exiting
-    if (E.buffers != NULL)
-    {
-        int first_buffer_id = E.buffers->buffer_id;
-        struct buffer_t* b = E.buffers;
-        do
-        {
-            if (b->type == TERMINAL_BUFF)
-                ptySessionClose(b);
-            b = b->next;
+            if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
+              ptySessionIsAlive(b); // reap if the shell exited
+          }
+          b = b->next;
         } while (b->buffer_id != first_buffer_id);
+      }
+
+      if (E.constantes.LSP && E.lsp_client &&
+          (E.lsp_client->read_from_server_fd >= 0) &&
+          FD_ISSET(E.lsp_client->read_from_server_fd, &readfds))
+        lspPoll(E.lsp_client);
+
+      if (FD_ISSET(STDIN_FILENO, &readfds))
+        editorProcessKeypress();
     }
-    terminalRestore();
+
+    // Runs every ~50ms tick regardless of what select() woke up for, so
+    // a scheduled completion request fires shortly after its debounce
+    // deadline passes even if the user has stopped typing entirely.
+    if (E.constantes.LSP) {
+      lspCompletionDebounceTick();
+      lspSyncDebounceTick();
+    }
+
+    // A keypress handled above may have requested the exit; drawing one
+    // more frame here would just repaint the UI we're about to leave.
+    if (E.exit_requested)
+      break;
+
+    editorRefreshScreen();
+  }
+
+  // Clean shutdown: close any live shells before exiting
+  if (E.buffers != NULL) {
+    int first_buffer_id = E.buffers->buffer_id;
+    struct buffer_t *b = E.buffers;
+    do {
+      if (b->type == TERMINAL_BUFF)
+        ptySessionClose(b);
+      b = b->next;
+    } while (b->buffer_id != first_buffer_id);
+  }
+  terminalRestore();
 }

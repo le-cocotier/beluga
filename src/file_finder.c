@@ -16,6 +16,7 @@
  */
 
 #include "../include/file_finder.h"
+#include "../include/galloc.h"
 #include "../include/buffer.h"
 #include "../include/define.h"
 #include "../include/editor_op.h"
@@ -57,7 +58,7 @@ static int rootIsGitRepo(const char *root) {
   if (!out)
     return 0;
   int yes = (strncmp(out, "true", 4) == 0);
-  free(out);
+  gfree(out);
   return yes;
 }
 
@@ -100,7 +101,7 @@ static void ownPaths(char *output) {
   FileFinder *ff = &E.file_finder;
 
   int cap = 256;
-  ff->paths = malloc((size_t)cap * sizeof(char *));
+  ff->paths = galloc((size_t)cap * sizeof(char *));
   ff->path_count = 0;
   if (!ff->paths)
     return;
@@ -116,7 +117,7 @@ static void ownPaths(char *output) {
 
     if (ff->path_count == cap) {
       cap *= 2;
-      char **grown = realloc(ff->paths, (size_t)cap * sizeof(char *));
+      char **grown = grealloc(ff->paths, (size_t)cap * sizeof(char *));
       if (!grown)
         break;
       ff->paths = grown;
@@ -196,10 +197,10 @@ static void rebuildMatches(void) {
 
   if (!ff->match)
     ff->match =
-        malloc((size_t)(ff->path_count > 0 ? ff->path_count : 1) * sizeof(int));
+        galloc((size_t)(ff->path_count > 0 ? ff->path_count : 1) * sizeof(int));
   if (!s_score_scratch)
     s_score_scratch =
-        malloc((size_t)(ff->path_count > 0 ? ff->path_count : 1) * sizeof(int));
+        galloc((size_t)(ff->path_count > 0 ? ff->path_count : 1) * sizeof(int));
   if (!ff->match || !s_score_scratch) {
     ff->match_count = 0;
     return;
@@ -230,10 +231,10 @@ static void rebuildMatches(void) {
 void fileFinderClose(void) {
   FileFinder *ff = &E.file_finder;
   for (int i = 0; i < ff->path_count; i++)
-    free(ff->paths[i]);
-  free(ff->paths);
-  free(ff->match);
-  free(s_score_scratch);
+    gfree(ff->paths[i]);
+  gfree(ff->paths);
+  gfree(ff->match);
+  gfree(s_score_scratch);
   ff->paths = NULL;
   ff->match = NULL;
   s_score_scratch = NULL;
@@ -259,7 +260,7 @@ void fileFinderOpen(void) {
     return;
   }
   ownPaths(output);
-  free(output);
+  gfree(output);
 
   if (E.file_finder.path_count == 0) {
     editorSetStatusMessage("find-file: no files found under %s", root);
@@ -299,7 +300,7 @@ static int findOpenBuffer(const char *rel_path) {
       char *full = (char *)utf8ToString(b->fullname);
       if (full) {
         int same = (strcmp(full, want) == 0);
-        free(full);
+        gfree(full);
         if (same)
           return b->buffer_id;
       }
@@ -326,7 +327,7 @@ static void openSelected(void) {
     if (!path)
       return;
     int id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
-    free(path);
+    gfree(path);
     if (id == -1) {
       editorSetStatusMessage("find-file: could not open %s", rel);
       return;

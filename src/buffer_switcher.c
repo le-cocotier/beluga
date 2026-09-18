@@ -8,6 +8,7 @@
  */
 
 #include "../include/buffer_switcher.h"
+#include "../include/galloc.h"
 #include "../include/buffer.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
@@ -28,7 +29,7 @@ static void formatBufferLine(struct buffer_t *b, char *out, size_t out_cap) {
     snprintf(out, out_cap, "%d: %s%s", b->buffer_id,
              (filename && filename[0]) ? filename : "[No Name]",
              b->dirty ? " *" : "");
-    free(filename);
+    gfree(filename);
 }
 
 void bufferSwitcherOpen(void) {

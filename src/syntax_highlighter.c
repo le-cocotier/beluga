@@ -1,4 +1,5 @@
 #include "../include/syntax_highlighter.h"
+#include "../include/galloc.h"
 #include "../include/data.h"
 #include "../include/utf8.h"
 #include <stdio.h>
@@ -240,7 +241,7 @@ static void ensureCommentStateFresh(Buffer *buf, const LanguageSyntax *lang)
     if (buf->comment_state_valid && buf->comment_state_numrows == buf->numrows)
         return;
 
-    unsigned char *fresh = buf->numrows > 0 ? malloc((size_t) buf->numrows) : NULL;
+    unsigned char *fresh = buf->numrows > 0 ? galloc((size_t) buf->numrows) : NULL;
     if (buf->numrows > 0 && !fresh)
         return; // best-effort: leave the previous (stale) cache in place rather than crash
 
@@ -251,7 +252,7 @@ static void ensureCommentStateFresh(Buffer *buf, const LanguageSyntax *lang)
         scanRowForCommentState(&buf->row[r], &in_comment, lang);
     }
 
-    free(buf->comment_state);
+    gfree(buf->comment_state);
     buf->comment_state = fresh;
     buf->comment_state_numrows = buf->numrows;
     buf->comment_state_valid = 1;
@@ -298,7 +299,7 @@ void syntaxHighlighterSeed(int in_comment)
  * @param length Out-param: length in bytes of the returned string (including terminator)
  * @param lang The calling buffer's registered language (must be non-NULL —
  * callers only get here once syntaxLanguageFor() has already found one)
- * @return Newly allocated string, caller must free(); NULL on allocation failure
+ * @return Newly allocated string, caller must gfree(); NULL on allocation failure
  */
 char *highlight_line(const Row *row, int *length, int x_offset, int width,
                      const LanguageSyntax *lang)
@@ -307,7 +308,7 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
     // + a reset code (~10 bytes). Generous margin, plus a flat buffer for
     // leading/trailing codes.
     int buf_size = (row->size + 1) * 48 + 256;
-    char *result = malloc(buf_size);
+    char *result = galloc(buf_size);
     if (!result)
     {
         *length = 0;

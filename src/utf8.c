@@ -3,6 +3,7 @@
  */
 
 #include "../include/utf8.h"
+#include "../include/galloc.h"
 #include "../include/terminal.h"
 #include "../include/data.h"
 #include "../include/utils.h"
@@ -424,7 +425,7 @@ Utf8Char* utf8ReadFile(Utf8Char* file_name)
         // File doesn't exist (or isn't readable): not fatal, the caller
         // treats this as "open a new file" and starts with an empty buffer.
         appDebug("error opening file");
-        free(char_file_name);
+        gfree(char_file_name);
         return NULL;
     }
 
@@ -437,7 +438,7 @@ Utf8Char* utf8ReadFile(Utf8Char* file_name)
             temp = (Utf8Char*) recalloc(file_data, file_length * sizeof(Utf8Char), (file_length + 1) * sizeof(Utf8Char));
             if (temp == NULL)
             {
-                free(file_data);
+                gfree(file_data);
                 exit(1);
             } else
             {
@@ -448,19 +449,19 @@ Utf8Char* utf8ReadFile(Utf8Char* file_name)
         }
 
         line_cap = 0;  // Reset for next iteration
-        free(line);
+        gfree(line);
         line = NULL;
     }
-    free(line);
+    gfree(line);
     line = NULL;
     fclose(file);
-    free(char_file_name);
+    gfree(char_file_name);
 
     temp = recalloc(file_data, file_length * sizeof(Utf8Char), (file_length + 1) * sizeof(Utf8Char));
     ++file_length;
     if (temp == NULL)
     {
-        free(file_data);
+        gfree(file_data);
         exit(1);
     } else
     {
@@ -581,7 +582,7 @@ int utf8Printf(Utf8Char * dest, size_t capacity, const char * format, ...) {
                     if ((size_t) written_len > remaining)
                         written_len = (int) remaining;
                     utf8NCpy(dest, string, written_len);
-                    free(string);
+                    gfree(string);
                     string = NULL;
                     break;
                 case 'd':
@@ -590,7 +591,7 @@ int utf8Printf(Utf8Char * dest, size_t capacity, const char * format, ...) {
                     if ((size_t) written_len > remaining)
                         written_len = (int) remaining;
                     utf8NCpy(dest, string, written_len);
-                    free(string);
+                    gfree(string);
                     string = NULL;
                     break;
                 case 'u':
@@ -650,7 +651,7 @@ int utf8VaPrintf(Utf8Char * dest, size_t capacity, const char * format, va_list 
                     if ((size_t) written_len > remaining)
                         written_len = (int) remaining;
                     utf8NCpy(dest, string, written_len);
-                    free(string);
+                    gfree(string);
                     string = NULL;
                     break;
                 case 'd':
@@ -659,7 +660,7 @@ int utf8VaPrintf(Utf8Char * dest, size_t capacity, const char * format, va_list 
                     if ((size_t) written_len > remaining)
                         written_len = (int) remaining;
                     utf8NCpy(dest, string, written_len);
-                    free(string);
+                    gfree(string);
                     string = NULL;
                     break;
                 case 'u':

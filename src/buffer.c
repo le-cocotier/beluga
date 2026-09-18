@@ -4,6 +4,7 @@
  */
 
 #include "../include/buffer.h"
+#include "../include/galloc.h"
 #include "../include/data.h"
 #include "../include/editor_op.h"
 #include "../include/file_io.h"
@@ -64,7 +65,7 @@ static void undoListPush(UndoList *list, UndoEntry entry) {
   }
   if (list->count >= list->capacity) {
     int new_cap = list->capacity ? list->capacity * 2 : 64;
-    UndoEntry *grown = realloc(list->entries, sizeof(UndoEntry) * new_cap);
+    UndoEntry *grown = grealloc(list->entries, sizeof(UndoEntry) * new_cap);
     if (!grown)
       return; // best-effort: drop the entry rather than crash
     list->entries = grown;
@@ -142,7 +143,7 @@ static void rowJoinNext(struct buffer_t *buf, int row) {
   Row *dest = &buf->row[row];
   for (int i = 0; i < next->size; ++i)
     bufferRowInsertChar(buf, dest, dest->size, &next->characters[i]);
-  free(next->characters);
+  gfree(next->characters);
   next->characters = NULL;
   memmove(&buf->row[row + 1], &buf->row[row + 2],
           sizeof(Row) * (buf->numrows - row - 2));
@@ -285,12 +286,12 @@ void bufferRegionBounds(struct buffer_t *buf, int *start_row, int *start_col,
 
 /**
  * @brief Extracts the text in [start_row:start_col, end_row:end_col) as a
- * plain '\n'-joined, NUL-terminated C string. Caller must free() it.
+ * plain '\n'-joined, NUL-terminated C string. Caller must gfree() it.
  */
 char *bufferGetRegionText(struct buffer_t *buf, int start_row, int start_col,
                           int end_row, int end_col) {
   size_t cap = 256, len = 0;
-  char *text = malloc(cap);
+  char *text = galloc(cap);
   if (!text)
     return NULL;
 
@@ -305,9 +306,9 @@ char *bufferGetRegionText(struct buffer_t *buf, int start_row, int start_col,
       Utf8Char *ch = &r->characters[c];
       if (len + (size_t)ch->length + 2 > cap) {
         cap *= 2;
-        char *grown = realloc(text, cap);
+        char *grown = grealloc(text, cap);
         if (!grown) {
-          free(text);
+          gfree(text);
           return NULL;
         }
         text = grown;
@@ -318,9 +319,9 @@ char *bufferGetRegionText(struct buffer_t *buf, int start_row, int start_col,
     if (row != end_row) {
       if (len + 2 > cap) {
         cap *= 2;
-        char *grown = realloc(text, cap);
+        char *grown = grealloc(text, cap);
         if (!grown) {
-          free(text);
+          gfree(text);
           return NULL;
         }
         text = grown;
@@ -507,7 +508,7 @@ static int gitParseHunkHeader(const char *line, int *old_start, int *old_lines,
  * when the answer can actually have changed.
  */
 void bufferRefreshGitInfo(struct buffer_t *buf) {
-  free(buf->git_lines);
+  gfree(buf->git_lines);
   buf->git_lines = NULL;
   buf->git_lines_count = 0;
   buf->git_available = 0;
@@ -529,21 +530,21 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
            "git -C %s rev-parse --abbrev-ref HEAD 2>/dev/null", qdir);
   char *branch = gitRunCommand(cmd);
   if (!branch) {
-    free(dir_str);
-    free(file_str);
+    gfree(dir_str);
+    gfree(file_str);
     return; // not a git repo (or git isn't installed) — leave everything c
             // eared
   }
   strncpy(buf->git_branch, branch, sizeof(buf->git_branch) - 1);
   buf->git_branch[sizeof(buf->git_branch) - 1] = '\0';
   buf->git_available = 1;
-  free(branch);
+  gfree(branch);
 
   snprintf(cmd, sizeof(cmd), "git -C %s status --porcelain -- %s 2>/dev/null",
            qdir, qfile);
   char *status = gitRunCommand(cmd);
   buf->git_dirty = status != NULL;
-  free(status);
+  gfree(status);
 
   if (buf->numrows > 0) {
     buf->git_lines = calloc(buf->numrows, sizeof(GitLineStatus));
@@ -580,9 +581,9 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
       line = strtok(NULL, "\n");
     }
   }
-  free(diff);
-  free(dir_str);
-  free(file_str);
+  gfree(diff);
+  gfree(dir_str);
+  gfree(file_str);
 }
 
 /***********************************************************************************************************************
@@ -715,14 +716,14 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   if (type != FILE_BUFF) {
     const int existing_id = bufferFindByFilename(filename);
     if (existing_id != -1) {
-      free(filename);
+      gfree(filename);
       return bufferSwitch(existing_id);
     }
   }
 
   if (E.number_of_buffer >= 64) {
     editorSetStatusMessage("Error: maximum buffers reached (64)");
-    free(filename);
+    gfree(filename);
     return -1;
   }
 
@@ -737,11 +738,11 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
 
   new_buf->filename = calloc(utf8StringLen(filename), sizeof(Utf8Char));
   if (!new_buf->filename) {
-    free(filename);
+    gfree(filename);
     return -1;
   }
   utf8Cpy(new_buf->filename, filename);
-  free(filename); // done with the local copy either way
+  gfree(filename); // done with the local copy either way
 
   E.number_of_buffer++;
 
@@ -753,7 +754,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
       // File doesn't exist yet, or path invalid — fall back to the raw path
       snprintf(fullname, sizeof(fullname), "%s", path_str);
     }
-    free(path_str);
+    gfree(path_str);
 
     new_buf->fullname = stringToUtf8((unsigned char *)fullname);
     new_buf->path = stringToUtf8((unsigned char *)dirname(fullname));
@@ -786,7 +787,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
         lisp_cons(lisp_make_int(new_buf->buffer_id), lisp_null(), E.ctx),
         E.ctx);
     runHooks("buffer-opened", hook_args);
-    free(fullname_str);
+    gfree(fullname_str);
   } else if (type == TERMINAL_BUFF) // no real filesystem path — don't touch r
                                     // alpath/dirname
   {
@@ -826,7 +827,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   string_filename = (char *)utf8ToString(new_buf->filename);
   editorSetStatusMessage("Opened: %s (buffer %d)", string_filename,
                          new_buf->buffer_id);
-  free(string_filename);
+  gfree(string_filename);
   if (E.buffers != NULL) {
     // Splice new_buf in right after E.buffers. The node that used to
     // be there (old_next) needs its ->prev fixed up too, or walking
@@ -921,12 +922,12 @@ int bufferClose(int buffer_id) {
   }
 
   // Free buffer resources
-  free(buf->filename);
+  gfree(buf->filename);
   buf->filename = NULL;
-  free(buf->undo_stack.entries);
-  free(buf->redo_stack.entries);
-  free(buf->git_lines);
-  free(buf->comment_state);
+  gfree(buf->undo_stack.entries);
+  gfree(buf->redo_stack.entries);
+  gfree(buf->git_lines);
+  gfree(buf->comment_state);
   buf->buffer_id = -1;
 
   buf->next->prev = buf->prev;
@@ -995,12 +996,12 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
       editorPrompt("Start LSP server for this project? (y/n): %u", NULL, 0);
   if (!answer || answer->length != 1 ||
       (answer->character[0] != 'y' && answer->character[0] != 'Y')) {
-    free(answer);
+    gfree(answer);
     E.lsp_client->state =
         LSP_SHUTDOWN; // declined — don't ask again this session
     return;
   }
-  free(answer);
+  gfree(answer);
 
   Utf8Char *default_root = buf->path ? buf->path : buf->fullname;
   Utf8Char *root = editorPrompt("Project root: %u", default_root,
@@ -1011,7 +1012,7 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   }
 
   char *root_str = (char *)utf8ToString(root);
-  free(root);
+  gfree(root);
 
   strncpy(E.lsp_client->language_id, cfg->language_id,
           sizeof(E.lsp_client->language_id) - 1);
@@ -1023,7 +1024,7 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   if (lspStart(E.lsp_client, root_str, cfg->argv) != 0)
     editorSetStatusMessage("Failed to start LSP server");
 
-  free(root_str);
+  gfree(root_str);
 }
 
 int lspServerConfigMatchesRunning(const struct lspServerConfig_t *cfg) {
@@ -1205,9 +1206,9 @@ void bufferFind(struct buffer_t *buf) {
     return;
 
   char *query_str = (char *)utf8ToString(query);
-  free(query);
+  gfree(query);
   if (query_str[0] == '\0') {
-    free(query_str);
+    gfree(query_str);
     return;
   }
 
@@ -1227,12 +1228,12 @@ void bufferFind(struct buffer_t *buf) {
     if (match) {
       buf->y = i;
       buf->x = bufferByteOffsetToCharIndex(row, (int)(match - row_str));
-      free(row_str);
+      gfree(row_str);
       break;
     }
-    free(row_str);
+    gfree(row_str);
   }
-  free(query_str);
+  gfree(query_str);
 }
 
 /**
@@ -1249,9 +1250,9 @@ void bufferFindReverse(struct buffer_t *buf) {
     return;
 
   char *query_str = (char *)utf8ToString(query);
-  free(query);
+  gfree(query);
   if (query_str[0] == '\0') {
-    free(query_str);
+    gfree(query_str);
     return;
   }
 
@@ -1268,12 +1269,12 @@ void bufferFindReverse(struct buffer_t *buf) {
     if (match) {
       buf->y = i;
       buf->x = bufferByteOffsetToCharIndex(row, (int)(match - row_str));
-      free(row_str);
+      gfree(row_str);
       break;
     }
-    free(row_str);
+    gfree(row_str);
   }
-  free(query_str);
+  gfree(query_str);
 }
 
 void bufferInsertRow(struct buffer_t *buffer, int at, Utf8Char *string,
@@ -1310,8 +1311,8 @@ void bufferInsertRow(struct buffer_t *buffer, int at, Utf8Char *string,
 }
 
 void bufferFreeRow(Row *row) {
-  free(row->characters);
-  free(row->attrs);
+  gfree(row->characters);
+  gfree(row->attrs);
 }
 
 /**
@@ -1478,7 +1479,7 @@ char *bufferToText(struct buffer_t *buf) {
     total += 1; // '\n'
   }
 
-  char *text = malloc(total + 1);
+  char *text = galloc(total + 1);
   if (!text)
     return NULL;
 

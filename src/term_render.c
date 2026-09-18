@@ -1,5 +1,6 @@
 // src/term_render.c
 #include "../include/term_render.h"
+#include "../include/galloc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,7 +37,7 @@ char* termRenderRow(const Row* row, int* length, int x_offset, int width)
     if (visible < 0) visible = 0;
 
     int buf_size = (visible + 1) * 32 + 64;
-    char* result = malloc(buf_size);
+    char* result = galloc(buf_size);
     if (!result) { *length = 0; return NULL; }
 
     int pos = 0;

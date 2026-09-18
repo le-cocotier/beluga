@@ -6,6 +6,7 @@
  */
 
 #include "../include/output.h"
+#include "../include/galloc.h"
 #include "../include/append_buffer.h"
 #include "../include/buffer.h"
 #include "../include/data.h"
@@ -117,20 +118,20 @@ static int rowSelectionRange(const struct buffer_t *buf, int file_row,
  * row string (which may itself contain syntax-highlighting ANSI SGR codes)
  * in reverse video, to show a selection. Escape sequences are copied
  * through untouched and don't count as columns, so this composes safely
- * with highlight_line()'s own color codes. Caller must free() the result.
+ * with highlight_line()'s own color codes. Caller must gfree() the result.
  * @param vis_to -1 means "to the end of the rendered content".
  */
 static char *applySelectionHighlight(const char *rendered, int rendered_len,
                                      int vis_from, int vis_to, int *out_len) {
   size_t cap = (size_t) rendered_len + 32;
-  char *out = malloc(cap);
+  char *out = galloc(cap);
   size_t out_pos = 0;
   int col = 0;
   int reversed = 0;
   int i = 0;
 
   while (i < rendered_len) {
-    if (out_pos + 16 > cap) { cap *= 2; out = realloc(out, cap); }
+    if (out_pos + 16 > cap) { cap *= 2; out = grealloc(out, cap); }
 
     if ((unsigned char) rendered[i] == 0x1b) {
       int start = i;
@@ -167,7 +168,7 @@ static char *applySelectionHighlight(const char *rendered, int rendered_len,
     col++;
   }
   if (reversed) {
-    if (out_pos + 5 > cap) { cap += 5; out = realloc(out, cap); }
+    if (out_pos + 5 > cap) { cap += 5; out = grealloc(out, cap); }
     memcpy(out + out_pos, "\x1b[27m", 5);
     out_pos += 5;
   }
@@ -308,7 +309,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         highlighted = termRenderRow(&buf->row[file_row], &byte_len_to_print,
                                     pane->x_offset, content_width);
         abAppend(ab, highlighted, byte_len_to_print);
-        free(highlighted);
+        gfree(highlighted);
       } else {
         if (is_cursor_line)
             abAppend(ab, E.theme.LINE_CURSOR_BACKGROUND, (int) strlen(E.theme.LINE_CURSOR_BACKGROUND));
@@ -333,14 +334,14 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
             int wrapped_len = 0;
             char *wrapped = applySelectionHighlight(highlighted, byte_len_to_print,
                                                     vis_from, vis_to, &wrapped_len);
-            free(highlighted);
+            gfree(highlighted);
             highlighted = wrapped;
             byte_len_to_print = wrapped_len;
           }
 
           // Print only up to pane width
           abAppend(ab, highlighted, byte_len_to_print);
-          free(highlighted);
+          gfree(highlighted);
         } else {
 
           // Render basic line, starting at the horizontal scroll offset.
@@ -359,12 +360,12 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
           if (has_selection) {
             int wrapped_len = 0;
             char *wrapped = applySelectionHighlight(line, line_len, vis_from, vis_to, &wrapped_len);
-            free(line);
+            gfree(line);
             line = wrapped;
             line_len = wrapped_len;
           }
           abAppend(ab, line, line_len);
-          free(line);
+          gfree(line);
           line = NULL;
         }
       }
@@ -427,7 +428,17 @@ static void editorDrawAllPanes(struct abuf *ab) {
         int len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
                            p->origin_y + y + 1, p->origin_x + p->width + 1);
         abAppend(ab, pos_buf, len);
-        abAppend(ab, "\x1b[1m│\x1b[0m", 9);
+        // "│" is U+2502, a 3-byte UTF-8 sequence — sizeof(literal)-1 here
+        // instead of a hand-counted length avoids a repeat of the bug this
+        // line used to have: a hardcoded length of 9 (right for the plain-
+        // ASCII "-" rule below, wrong for this one) silently truncated the
+        // trailing "\x1b[0m" reset down to a dangling, unterminated "\x1b[",
+        // corrupting the escape sequence stream from the very next divider
+        // row onward — invisible while every split rendered at whatever
+        // size the terminal started at, and only actually reachable once
+        // resizing (which redraws the dividers at their new positions) was
+        // wired up for real.
+        abAppend(ab, "\x1b[1m│\x1b[0m", sizeof("\x1b[1m│\x1b[0m") - 1);
       }
     }
 
@@ -437,7 +448,7 @@ static void editorDrawAllPanes(struct abuf *ab) {
                          p->origin_y + p->height + 1, p->origin_x + 1);
       abAppend(ab, pos_buf, len);
       for (int x = 0; x < p->width; x++)
-        abAppend(ab, "\x1b[1m-\x1b[0m", 9);
+        abAppend(ab, "\x1b[1m-\x1b[0m", sizeof("\x1b[1m-\x1b[0m") - 1);
     }
   }
 }
@@ -570,7 +581,7 @@ void editorDrawStatusBar(struct abuf *ab) {
           snprintf(&buf_status[offset], sizeof(buf_status) - offset, "%c%d:%s%c ",
                    marker, b->buffer_id,
                    b->filename ? string_filename : "[No Name]", dirty_marker);
-      free(string_filename);
+      gfree(string_filename);
       b = b->next;
     } while (b->buffer_id != first_buffer_id);
   }
@@ -611,7 +622,7 @@ void editorDrawMessageBar(struct abuf *ab) {
   if (msg_len && time(NULL) - E.status_msg_time < 5) {
     abAppend(ab, status, msg_len);
   }
-  free(status);
+  gfree(status);
 }
 
 /**
@@ -649,7 +660,7 @@ static int screenFrameChanged(const char *buf, int len) {
 
 static void screenFrameCache(const char *buf, int len) {
   if (len > g_prev_frame_cap) {
-    char *grown = realloc(g_prev_frame, (size_t) len);
+    char *grown = grealloc(g_prev_frame, (size_t) len);
     if (!grown) return; // best-effort: next frame just always looks "changed"
     g_prev_frame = grown;
     g_prev_frame_cap = len;

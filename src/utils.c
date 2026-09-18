@@ -1,5 +1,6 @@
 
 #include "../include/utils.h"
+#include "../include/galloc.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,7 +13,7 @@
  */
 void* recalloc(void* ptr, size_t old_size, size_t new_size)
 {
-    void* new_ptr = realloc(ptr, new_size);
+    void* new_ptr = grealloc(ptr, new_size);
     if (new_ptr == NULL)
         return NULL;
 

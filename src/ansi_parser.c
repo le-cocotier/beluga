@@ -4,6 +4,7 @@
 */
 
 #include "../include/ansi_parser.h"
+#include "../include/galloc.h"
 #include "../include/buffer.h"
 #include "../include/utf8.h"
 #include <string.h>
@@ -15,7 +16,7 @@
  */
 static void ensureAttrs(Row* row)
 {
-    TermCellAttr* new_attrs = realloc(row->attrs, (row->size + 1) * sizeof(TermCellAttr));
+    TermCellAttr* new_attrs = grealloc(row->attrs, (row->size + 1) * sizeof(TermCellAttr));
     if (!new_attrs) return; // best-effort: skip attr tracking rather than crash
     row->attrs = new_attrs;
 }

@@ -1,13 +1,14 @@
 #include "../include/init.h"
+#include "../include/galloc.h"
 #include "../include/builtins.h"
-#include "../include/project_search.h"
-#include "../include/file_finder.h"
 #include "../include/color.h"
-#include "../include/data.h"
-#include "../include/terminal.h"
-#include "../include/split_screen.h"
-#include "../include/define.h"
 #include "../include/completion.h"
+#include "../include/data.h"
+#include "../include/define.h"
+#include "../include/file_finder.h"
+#include "../include/project_search.h"
+#include "../include/split_screen.h"
+#include "../include/terminal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,11 +31,9 @@ extern EditorConfig E;
  *
  **********************************************************************************************************************/
 
-
 void registerBuiltin(char *key_sequence, LispCFunc f) {
   lisp_env_define(E.ctx.p->env, lisp_make_symbol(key_sequence, E.ctx),
                   lisp_make_func(f), E.ctx);
-
 }
 
 void initBuiltins() {
@@ -62,7 +61,8 @@ void initBuiltins() {
   registerBuiltin("editor-insert-tab", l_editorInserTab);
   registerBuiltin("editor-switch-next-buffer", editorSwitchNextBuffer);
   registerBuiltin("editor-split-screen-vertical", l_editorSplitScreenVertical);
-  registerBuiltin("editor-split-screen-horizontal", l_editorSplitScreenHorizontal);
+  registerBuiltin("editor-split-screen-horizontal",
+                  l_editorSplitScreenHorizontal);
   registerBuiltin("editor-switch-next-pane", editorSwitchNextPane);
   registerBuiltin("editor-unify-panes", editorUnifiedPanes);
   registerBuiltin("editor-paste", editorPaste);
@@ -71,10 +71,10 @@ void initBuiltins() {
   registerBuiltin("editor-move-cursor-end-buffer", editorMoveEndBuffer);
   registerBuiltin("editor-auto-complete", editorAutoComplete);
   // registerBuiltin("lsp-complete",    lspComplete);
-  registerBuiltin("lsp-definition",  lspDefinition);
-  registerBuiltin("lsp-hover",  lspHover);
-  registerBuiltin("lsp-rename",  lspRename);
-  registerBuiltin("lsp-format-buffer",  lspFormatBuffer);
+  registerBuiltin("lsp-definition", lspDefinition);
+  registerBuiltin("lsp-hover", lspHover);
+  registerBuiltin("lsp-rename", lspRename);
+  registerBuiltin("lsp-format-buffer", lspFormatBuffer);
   registerBuiltin("editor-open-terminal", editorOpenTerminal);
   registerBuiltin("editor-undo", editorUndo);
   registerBuiltin("editor-redo", editorRedo);
@@ -158,7 +158,8 @@ void initConfig() {
  */
 static int readBoolConst(const char *name, int fallback) {
   int present = 0;
-  Lisp val = lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(name, E.ctx), &present);
+  Lisp val =
+      lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(name, E.ctx), &present);
   if (!present)
     return fallback;
   return lisp_is_true(val);
@@ -179,7 +180,8 @@ static int readBoolConst(const char *name, int fallback) {
  * (LSP, TAB-LENGTH, ...) that only exist once init.lisp has been evaluated.
  */
 void initStartupConstants() {
-  E.constantes.LSP = lisp_bool(lisp_eval(lisp_read("LSP", &E.ctx_error, E.ctx), &E.ctx_error, E.ctx));
+  E.constantes.LSP = lisp_bool(
+      lisp_eval(lisp_read("LSP", &E.ctx_error, E.ctx), &E.ctx_error, E.ctx));
   E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
   E.constantes.WHICH_KEY = readBoolConst("WHICH-KEY", 1);
   appDebug("LSP ON : %d", E.constantes.LSP);
@@ -201,17 +203,16 @@ void initStartupConstants() {
  *   - E.panes.layout (via SplitScreenInit)
  */
 void initEditor() {
-    const char *home = getenv("HOME");
-    EditorPane *active = NULL;
+  const char *home = getenv("HOME");
+  EditorPane *active = NULL;
 
   if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
     E.screencols = 80;
     E.screenrows = 24;
-//    die("getWindowSize");
+    //    die("getWindowSize");
   }
   appDebug("%d %d", E.screenrows, E.screencols);
   E.screenrows -= 2;
-
 
   // Init graphics variables
   splitScreenInit();
@@ -260,7 +261,7 @@ void initEditor() {
   // "no-prefix" rather than looking it up by name each time. Put any new
   // built-in prefix (like "*" below) after the existing ones instead of
   // renumbering these.
-  E.prefix = (struct prefix_t *)malloc(sizeof(struct prefix_t) * 3);
+  E.prefix = (struct prefix_t *)galloc(sizeof(struct prefix_t) * 3);
   E.prefix[0].prefix_id = 0;
   E.prefix[0].sticky = 0;
   sprintf(E.prefix[0].prefix_name, "no-prefix");
@@ -308,7 +309,7 @@ void initEditor() {
 
   initConfig();
   initStartupConstants();
-  E.lsp_client = (LspClient *)malloc(sizeof(LspClient));
+  E.lsp_client = (LspClient *)galloc(sizeof(LspClient));
   E.lsp_client->state = LSP_NOT_STARTED;
   // Both left as garbage otherwise until lspStart() actually runs, but
   // editorRunLoop's select() reads read_from_server_fd unconditionally
@@ -328,41 +329,38 @@ void initEditor() {
   E.quit_times_buffer = E.constantes.QUIT_TIMES;
 }
 
-void deInitEditor()
-{
-    // free EditorPane
-    free(E.layout.panes);
+void deInitEditor() {
+  // free EditorPane
+  gfree(E.layout.panes);
 
-    // free status_msg
-    free(E.status_msg);
+  // free status_msg
+  gfree(E.status_msg);
 
-    // free init_file_path
-    free(E.init_file_path);
+  // free init_file_path
+  gfree(E.init_file_path);
 
-    // free prefix
-    free(E.prefix);
+  // free prefix
+  gfree(E.prefix);
 
-    // free the project-search result list
-    projectSearchFree();
+  // free the project-search result list
+  projectSearchFree();
 
-    // free the fuzzy file finder's path snapshot
-    fileFinderClose();
+  // free the fuzzy file finder's path snapshot
+  fileFinderClose();
 
-    // free syntax-highlighter language registrations (each has its own
-    // separately-allocated word list)
-    for (int i = 0; i < E.number_of_languages; i++)
-        free(E.languages[i].words);
-    free(E.languages);
+  // free syntax-highlighter language registrations (each has its own
+  // separately-allocated word list)
+  for (int i = 0; i < E.number_of_languages; i++)
+    gfree(E.languages[i].words);
+  gfree(E.languages);
 
-    // free lsp_client
-    if (E.lsp_client)
-    {
-        lspCleanup(E.lsp_client);
-    }
+  // free lsp_client
+  if (E.lsp_client) {
+    lspCleanup(E.lsp_client);
+  }
 
+  // free config
+  fclose(E.ctx.p->err_port);
 
-    // free config
-    fclose(E.ctx.p->err_port);
-
-    lisp_shutdown(E.ctx);
+  lisp_shutdown(E.ctx);
 }
