@@ -143,4 +143,18 @@ Lisp editorGotoLine(Lisp args, LispError *e, LispContext ctx);
 // list_popup.h for the underlying C API this wraps.
 Lisp editorListPopup(Lisp args, LispError *e, LispContext ctx);
 
+// (app-debug?) — #t when the running binary was built with APP_DEBUG
+// (install.sh --debug), #f otherwise. Always registered, so config/init.lisp
+// can gate debug-only setup (e.g. the memory inspector below) without
+// referencing a builtin that might not exist in this build.
+Lisp l_appDebugP(Lisp args, LispError *e, LispContext ctx);
+
+#ifdef APP_DEBUG
+// (memory-inspector) — opens/refreshes the "*memory*" buffer listing every
+// block gutils is currently tracking. See memory_inspector.h.
+Lisp l_memoryInspectorOpen(Lisp args, LispError *e, LispContext ctx);
+// (memory-inspector-refresh) — re-renders the snapshot in place.
+Lisp l_memoryInspectorRefresh(Lisp args, LispError *e, LispContext ctx);
+#endif
+
 #endif

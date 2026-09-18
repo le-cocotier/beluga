@@ -55,13 +55,17 @@
 ;; (add-package "latex")    ; digestif ships with TeX Live; texlab is a one-line swap
 ;; (add-package "yaml")     ; needs yaml-language-server on PATH
 ;; (add-package "nodejs")   ; needs typescript-language-server + typescript@5
+;; (add-package "angular")  ; needs @angular/language-server — Angular's .ts
+;;                          ; AND .html template, one shared server. Loads
+;;                          ; instead of "nodejs", not alongside it — both
+;;                          ; register "ts" and only the first one wins it.
 ;; (add-package "lisp")     ; no server needed — highlighting + comment toggle only
 ;;
 ;; Note on CTRL-d: every language package binds it under "no-prefix", and
 ;; the FIRST binding registered wins, so only one comment toggle is ever
 ;; reachable. c/python/rust each hardcode one comment prefix; latex/yaml/
-;; nodejs instead dispatch on the file's extension and handle all of these
-;; languages. Move whichever of those three you enable up above the
+;; nodejs/angular instead dispatch on the file's extension and handle all
+;; of these languages. Move whichever of those you enable up above the
 ;; c/python/rust add-package lines if you want CTRL-d to do the right
 ;; thing in every file type.
 
@@ -279,6 +283,7 @@
 (map-key "u" editor-undo "user")
 (map-key "U" editor-redo "user")
 (map-key "s" project-search "user")
+(if (app-debug?) (map-key "m" memory-inspector "user"))
 
 ;; project
 (map-key "d" lsp-definition "project")
@@ -297,4 +302,13 @@
 (map-key "PAGE-DOWN" move-cursor-page-down "search")
 (map-key "CTRL-x" '(editor-set-prefix "user") "search")
 
+;; memory (debug builds only — CTRL-x m to open, r to refresh, CTRL-x to leave)
+(if (app-debug?)
+  (progn
+    (map-key "ARROW-UP" '(move-cursor "up") "memory")
+    (map-key "ARROW-DOWN" '(move-cursor "down") "memory")
+    (map-key "PAGE-UP" move-cursor-page-up "memory")
+    (map-key "PAGE-DOWN" move-cursor-page-down "memory")
+    (map-key "r" memory-inspector-refresh "memory")
+    (map-key "CTRL-x" '(editor-set-prefix "user") "memory")))
 

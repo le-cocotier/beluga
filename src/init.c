@@ -111,6 +111,11 @@ void initBuiltins() {
   registerBuiltin("syntax-define-language", l_syntaxDefineLanguage);
   registerBuiltin("syntax-add-keyword", l_syntaxAddKeyword);
   registerBuiltin("syntax-add-type", l_syntaxAddType);
+  registerBuiltin("app-debug?", l_appDebugP);
+#ifdef APP_DEBUG
+  registerBuiltin("memory-inspector", l_memoryInspectorOpen);
+  registerBuiltin("memory-inspector-refresh", l_memoryInspectorRefresh);
+#endif
 }
 
 /**
@@ -261,7 +266,7 @@ void initEditor() {
   // "no-prefix" rather than looking it up by name each time. Put any new
   // built-in prefix (like "*" below) after the existing ones instead of
   // renumbering these.
-  E.prefix = (struct prefix_t *)galloc(sizeof(struct prefix_t) * 3);
+  E.prefix = (struct prefix_t *)galloc(sizeof(struct prefix_t) * 4);
   E.prefix[0].prefix_id = 0;
   E.prefix[0].sticky = 0;
   sprintf(E.prefix[0].prefix_name, "no-prefix");
@@ -288,6 +293,17 @@ void initEditor() {
   E.prefix[2].prefix_id = 2;
   E.prefix[2].sticky = 0;
   sprintf(E.prefix[2].prefix_name, "*");
+
+  // "memory" is registered here for the same reason "search" is: the
+  // memory-inspector buffer (debug builds only, see memory_inspector.c)
+  // switches to it from C the instant it's shown. Reserved unconditionally
+  // (not #ifdef APP_DEBUG) so the prefix ids after it stay stable
+  // regardless of build type. Sticky, so arrow keys/refresh don't drop
+  // back out after one keystroke.
+  E.number_of_prefix = 3;
+  E.prefix[3].prefix_id = 3;
+  E.prefix[3].sticky = 1;
+  sprintf(E.prefix[3].prefix_name, "memory");
 
   E.prefix_state = 0;
   E.prompt_input = NULL;

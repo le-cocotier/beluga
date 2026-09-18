@@ -8,6 +8,7 @@
 
 #include "../include/builtins.h"
 #include "../include/galloc.h"
+#include "../include/memory_inspector.h"
 #include "../include/project_search.h"
 #include "../include/file_finder.h"
 #include "../include/subprocess.h"
@@ -1719,6 +1720,54 @@ Lisp l_findFile(Lisp args, LispError *e, LispContext ctx) {
   fileFinderOpen();
   return lisp_null();
 }
+
+/**
+ * @brief Lisp predicate reporting whether this binary was built with
+ * APP_DEBUG (install.sh --debug)
+ * @details (app-debug?) — always registered regardless of build type, so
+ * config/init.lisp can gate debug-only setup (e.g. the memory inspector)
+ * on it with a plain (if (app-debug?) ...) instead of referencing a
+ * builtin that might not exist in a release build.
+ * @param args Lisp arguments (unused)
+ * @return #t under APP_DEBUG, #f otherwise
+ */
+Lisp l_appDebugP(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+#ifdef APP_DEBUG
+  return lisp_true();
+#else
+  return lisp_false();
+#endif
+}
+
+#ifdef APP_DEBUG
+/**
+ * @brief Lisp function to open the memory inspector
+ * @details (memory-inspector) — shows a "*memory*" buffer listing every
+ * block currently tracked by gutils (galloc/grealloc), for spotting leaks
+ * while the editor runs. Debug builds only. See memory_inspector.c.
+ * @param args Lisp arguments (unused)
+ * @return lisp_null()
+ */
+Lisp l_memoryInspectorOpen(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  memoryInspectorOpen();
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to refresh the memory inspector in place
+ * @details (memory-inspector-refresh) — bound to "r" under the "memory"
+ * prefix, so the snapshot can be updated without losing scroll position.
+ * @param args Lisp arguments (unused)
+ * @return lisp_null()
+ */
+Lisp l_memoryInspectorRefresh(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  memoryInspectorRefresh();
+  return lisp_null();
+}
+#endif
 
 /**
  * @brief Finds the LanguageSyntax entry for `ext`, or NULL if none has
