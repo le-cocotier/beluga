@@ -79,8 +79,10 @@ static void renderSnapshot(Buffer *buf) {
   addRow(buf, "");
 
   for (struct dataBlock_t *p = gBlocks(); p; p = p->lastBlock) {
-    char row[64];
-    snprintf(row, sizeof(row), "%-14p %10zu bytes", p->address, p->size);
+    char row[160];
+    snprintf(row, sizeof(row), "%-14p %8zu bytes  %s:%d (%s)", p->address,
+             p->size, p->file ? p->file : "?", p->line,
+             p->func ? p->func : "?");
     addRow(buf, row);
   }
 

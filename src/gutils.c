@@ -7,7 +7,7 @@ static struct dataBlock_t * blocks = NULL;
 static int blockAmount = 0;
 
 
-void * galloc(size_t size){
+void * galloc_impl(size_t size, const char * file, int line, const char * func){
   struct dataBlock_t * new_block = malloc(sizeof(struct dataBlock_t));
   void * data = malloc(size);
   if (!new_block || !data) { // Allocation failed
@@ -21,6 +21,9 @@ void * galloc(size_t size){
   new_block->size = size;
   new_block->lastBlock = NULL;
   new_block->nextBlock = NULL;
+  new_block->file = file;
+  new_block->line = line;
+  new_block->func = func;
 
   if (!blocks) // First allocation
     blocks = new_block;
@@ -33,13 +36,16 @@ void * galloc(size_t size){
   return data;
 }
 
-void * grealloc(void * address, size_t size){
+void * grealloc_impl(void * address, size_t size, const char * file, int line, const char * func){
   struct dataBlock_t * data_block = NULL;
   struct dataBlock_t * pBlock = blocks;
   void * new_data;
 
-  if (!address) // realloc(NULL, size) == malloc(size); track it like any other allocation
-    return galloc(size);
+  // realloc(NULL, size) == malloc(size); track it like any other
+  // allocation. Calls galloc_impl directly (not the galloc() macro) so the
+  // block is attributed to the original caller's site, not this line.
+  if (!address)
+    return galloc_impl(size, file, line, func);
 
   // Looking for an already allocated block
   while (pBlock){
@@ -60,6 +66,9 @@ void * grealloc(void * address, size_t size){
     return NULL;
   data_block->address = new_data;
   data_block->size = size;
+  data_block->file = file;
+  data_block->line = line;
+  data_block->func = func;
 
   return new_data;
 }
@@ -95,7 +104,8 @@ void gShowMemory() {
     int i;
     struct dataBlock_t * pBlock = blocks;
     for (i = 0; i < blockAmount; ++i){
-        printf("%p | %lu \r\n", pBlock->address, pBlock->size);
+        printf("%p | %lu | %s:%d (%s) \r\n", pBlock->address, pBlock->size,
+               pBlock->file, pBlock->line, pBlock->func);
         printf("------------------------\r\n");
         pBlock = pBlock->lastBlock;
     }
