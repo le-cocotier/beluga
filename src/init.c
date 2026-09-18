@@ -115,6 +115,8 @@ void initBuiltins() {
 #ifdef APP_DEBUG
   registerBuiltin("memory-inspector", l_memoryInspectorOpen);
   registerBuiltin("memory-inspector-refresh", l_memoryInspectorRefresh);
+  registerBuiltin("memory-inspector-sort", l_memoryInspectorCycleSort);
+  registerBuiltin("memory-inspector-export", l_memoryInspectorExport);
 #endif
 }
 

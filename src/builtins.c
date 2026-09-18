@@ -1767,6 +1767,34 @@ Lisp l_memoryInspectorRefresh(Lisp args, LispError *e, LispContext ctx) {
   memoryInspectorRefresh();
   return lisp_null();
 }
+
+/**
+ * @brief Lisp function to cycle the memory inspector's sort order
+ * @details (memory-inspector-sort) — bound to "s" under the "memory"
+ * prefix. Cycles recency -> size (largest first) -> file:line/func
+ * location -> back to recency, re-rendering after each change.
+ * @param args Lisp arguments (unused)
+ * @return lisp_null()
+ */
+Lisp l_memoryInspectorCycleSort(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  memoryInspectorCycleSort();
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to export the memory inspector's snapshot
+ * @details (memory-inspector-export) — bound to "w" under the "memory"
+ * prefix. Prompts for a file path (ESC cancels) and writes the currently
+ * sorted snapshot to it as plain text.
+ * @param args Lisp arguments (unused)
+ * @return lisp_null()
+ */
+Lisp l_memoryInspectorExport(Lisp args, LispError *e, LispContext ctx) {
+  (void) args; (void) e; (void) ctx;
+  memoryInspectorExport();
+  return lisp_null();
+}
 #endif
 
 /**

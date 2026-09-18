@@ -15,4 +15,13 @@ void memoryInspectorOpen(void);
 // changing pane focus. No-op if the buffer isn't open.
 void memoryInspectorRefresh(void);
 
+// Cycles the display sort order (recency -> size, largest first ->
+// file:line/func location -> back to recency) and re-renders. The
+// underlying gutils list itself is never reordered.
+void memoryInspectorCycleSort(void);
+
+// Prompts for a file path (ESC cancels) and writes the current sorted
+// snapshot to it as plain text.
+void memoryInspectorExport(void);
+
 #endif

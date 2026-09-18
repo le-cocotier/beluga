@@ -155,6 +155,10 @@ Lisp l_appDebugP(Lisp args, LispError *e, LispContext ctx);
 Lisp l_memoryInspectorOpen(Lisp args, LispError *e, LispContext ctx);
 // (memory-inspector-refresh) — re-renders the snapshot in place.
 Lisp l_memoryInspectorRefresh(Lisp args, LispError *e, LispContext ctx);
+// (memory-inspector-sort) — cycles the display sort order and re-renders.
+Lisp l_memoryInspectorCycleSort(Lisp args, LispError *e, LispContext ctx);
+// (memory-inspector-export) — prompts for a path, writes the snapshot to it.
+Lisp l_memoryInspectorExport(Lisp args, LispError *e, LispContext ctx);
 #endif
 
 #endif

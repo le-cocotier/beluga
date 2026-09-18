@@ -302,7 +302,7 @@
 (map-key "PAGE-DOWN" move-cursor-page-down "search")
 (map-key "CTRL-x" '(editor-set-prefix "user") "search")
 
-;; memory (debug builds only — CTRL-x m to open, r to refresh, CTRL-x to leave)
+;; memory (debug builds only — CTRL-x m to open, r refresh, s sort, w export, CTRL-x to leave)
 (if (app-debug?)
   (progn
     (map-key "ARROW-UP" '(move-cursor "up") "memory")
@@ -310,5 +310,7 @@
     (map-key "PAGE-UP" move-cursor-page-up "memory")
     (map-key "PAGE-DOWN" move-cursor-page-down "memory")
     (map-key "r" memory-inspector-refresh "memory")
+    (map-key "s" memory-inspector-sort "memory")
+    (map-key "w" memory-inspector-export "memory")
     (map-key "CTRL-x" '(editor-set-prefix "user") "memory")))
 
