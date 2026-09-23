@@ -18,7 +18,7 @@ void fileFinderClose(void);
 // Input handling — returns 1 if the key was consumed. Call before normal
 // keybind dispatch while the popup is visible (it's modal, like the
 // buffer switcher and the list popup).
-int fileFinderHandleKey(Utf8Char *key);
+int fileFinderHandleKey(const Utf8Char *key);
 
 // Call from editorRefreshScreen() — appends the popup to `ab` when visible.
 void fileFinderDraw(struct abuf *ab);

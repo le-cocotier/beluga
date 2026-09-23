@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void appendSgrFor(char* out, int* pos, int buf_size, TermCellAttr a)
+static void appendSgrFor(char* out, int* pos, const int buf_size, const TermCellAttr a)
 {
     // Only emit a code if this cell has any non-default attribute;
     // ground-state rendering can just skip the color set/reset pair.
@@ -25,30 +25,40 @@ static void appendSgrFor(char* out, int* pos, int buf_size, TermCellAttr a)
 
 char* termRenderRow(const Row* row, int* length, int x_offset, int width)
 {
+    int start;
+    int end;
+    int visible;
+    int buf_size;
+    char* result;
+    int pos;
+    TermCellAttr last_attr;
+    int i;
+    TermCellAttr attr;
     if (x_offset < 0) x_offset = 0;
     if (width < 0) width = 0;
 
-    int start = x_offset;
-    int end = x_offset + width;
+    start = x_offset;
+    end = x_offset + width;
     if (start > row->size) start = row->size;
     if (end > row->size) end = row->size;
 
-    int visible = end - start;
+    visible = end - start;
     if (visible < 0) visible = 0;
 
-    int buf_size = (visible + 1) * 32 + 64;
-    char* result = galloc(buf_size);
+    buf_size = (visible + 1) * 32 + 64;
+    result = galloc(buf_size);
     if (!result) { *length = 0; return NULL; }
 
-    int pos = 0;
-    TermCellAttr last_attr;
+    pos = 0;
     memset(&last_attr, 0xFF, sizeof(last_attr)); // force a mismatch on first cell
 
-    for (int i = start; i < end; i++)
+    for (i = start; i < end; i++)
     {
-        TermCellAttr attr = row->attrs ? row->attrs[i] : (TermCellAttr){0};
+        attr = row->attrs ? row->attrs[i] : (TermCellAttr){0};
 
-        if (memcmp(&attr, &last_attr, sizeof(TermCellAttr)) != 0)
+        if (attr.fg != last_attr.fg || attr.bg != last_attr.bg ||
+            attr.bold != last_attr.bold || attr.underline != last_attr.underline ||
+            attr.reverse != last_attr.reverse)
         {
             appendSgrFor(result, &pos, buf_size, attr);
             last_attr = attr;

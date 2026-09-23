@@ -5,7 +5,7 @@
 void abAppend(struct abuf *ab, const char *s, int len) {
   char *new = NULL;
   bool need_to_resize = false;
-  int old_size = ab->bf_size;
+  const int old_size = ab->bf_size;
   // Check for buffer length
   while (ab->bf_size < ab->len + len) {
       ab->bf_size = ab->bf_size ? ab->bf_size * 2 : 16;

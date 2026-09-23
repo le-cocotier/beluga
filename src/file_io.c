@@ -48,11 +48,12 @@ extern EditorConfig E;
 void editorCloseFile(void) {
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buf = bufferFindById(active->buffer_id);
+  int i;
   active->cursor_x = 0;
   active->cursor_y = 0;
   active->x_offset = 0;
   active->y_offset = 0;
-  for (int i = 0; i < buf->numrows; ++i) {
+  for (i = 0; i < buf->numrows; ++i) {
     gfree(buf->row[i].characters);
   }
   buf->numrows = 0;
@@ -65,17 +66,6 @@ void editorCloseFile(void) {
   E.status_msg_time = 0;
 }
 
-/**
- * @brief Opens a file for editing
- * @details Loads file content into editor rows, one line per row. If another
- * file is already open, it is closed first (without saving). File is opened in
- * a+ (read/append) mode to allow both reading and modification.
- * @param buffer Path to the file to open (relative or absolute)
- * @note Updates global editor state E
- * @note If the file doesn't exist, buffer is left empty (new file)
- * @note Newline characters are stripped from loaded lines
- * @see editorInsertRow()
- */
 /**
  * @brief Expands raw tab bytes (0x09) in one line into spaces, aligned to
  * real tab stops (every TAB_LENGTH columns), before the line ever reaches
@@ -107,26 +97,38 @@ void editorCloseFile(void) {
  * @return A newly malloc'd, tab-expanded copy of `line` if it contained
  * any tabs (caller frees it), or NULL if it didn't (caller keeps using
  * `line` as-is — the common case, worth not allocating for).
+ * @param line The line to expand tabs in
+ * @param len Length of `line`, in characters
+ * @param out_len Out-param: length of the returned copy, if one was made
  */
 static Utf8Char* expandTabsForLine(const Utf8Char* line, int len, int* out_len)
 {
   int has_tab = 0;
-  for (int i = 0; i < len; i++)
+  int i;
+  int tab_len;
+  int col;
+  int expanded_len;
+  int spaces;
+  Utf8Char* out;
+  int j;
+  Utf8Char space = { .character = { ' ', 0, 0, 0 }, .length = 1 };
+  int s;
+  for (i = 0; i < len; i++)
     if (line[i].length == 1 && line[i].character[0] == '\t') { has_tab = 1; break; }
   if (!has_tab)
     return NULL;
 
-  int tab_len = E.constantes.TAB_LENGTH > 0 ? E.constantes.TAB_LENGTH : 4;
+  tab_len = E.constantes.TAB_LENGTH > 0 ? E.constantes.TAB_LENGTH : 4;
 
   // Worst case, a tab at column 0 costs tab_len columns; one pass to find
   // the real expanded length, then a second to actually fill it, rather
   // than repeatedly grow a single buffer as we go.
-  int col = 0, expanded_len = 0;
-  for (int i = 0; i < len; i++)
+  col = 0; expanded_len = 0;
+  for (i = 0; i < len; i++)
   {
     if (line[i].length == 1 && line[i].character[0] == '\t')
     {
-      int spaces = tab_len - (col % tab_len);
+      spaces = tab_len - (col % tab_len);
       expanded_len += spaces;
       col += spaces;
     }
@@ -137,18 +139,17 @@ static Utf8Char* expandTabsForLine(const Utf8Char* line, int len, int* out_len)
     }
   }
 
-  Utf8Char* out = galloc((size_t) expanded_len * sizeof(Utf8Char));
+  out = galloc((size_t) expanded_len * sizeof(Utf8Char));
   if (!out) return NULL;
 
-  int j = 0;
+  j = 0;
   col = 0;
-  Utf8Char space = { .character = { ' ', 0, 0, 0 }, .length = 1 };
-  for (int i = 0; i < len; i++)
+  for (i = 0; i < len; i++)
   {
     if (line[i].length == 1 && line[i].character[0] == '\t')
     {
-      int spaces = tab_len - (col % tab_len);
-      for (int s = 0; s < spaces; s++) out[j++] = space;
+      spaces = tab_len - (col % tab_len);
+      for (s = 0; s < spaces; s++) out[j++] = space;
       col += spaces;
     }
     else
@@ -162,10 +163,27 @@ static Utf8Char* expandTabsForLine(const Utf8Char* line, int len, int* out_len)
   return out;
 }
 
+/**
+ * @brief Opens a file for editing
+ * @details Loads file content into editor rows, one line per row. If another
+ * file is already open, it is closed first (without saving). File is opened in
+ * a+ (read/append) mode to allow both reading and modification.
+ * @param buffer The buffer to load file_io into — buffer->fullname is the
+ * path read from (relative or absolute)
+ * @note Updates global editor state E
+ * @note If the file doesn't exist, buffer is left empty (new file)
+ * @note Newline characters are stripped from loaded lines
+ * @see editorInsertRow()
+ */
 void editorOpen(struct buffer_t* buffer) {
 
 
   Utf8Char* file_content = utf8ReadFile(buffer->fullname);
+  Utf8Char* pFileContent;
+  Utf8Char* pEndLine;
+  int line_length;
+  int expanded_len;
+  Utf8Char* expanded;
   if (file_content == NULL)
   {
     // File doesn't exist yet: start with an empty, editable buffer, same
@@ -175,9 +193,8 @@ void editorOpen(struct buffer_t* buffer) {
     return;
   }
 
-  Utf8Char* pFileContent = file_content;
-  Utf8Char* pEndLine = file_content;
-  int line_length = 0;
+  pFileContent = file_content;
+  pEndLine = file_content;
   while (*pFileContent->character != '\0')
   {
     while (*pEndLine->character != '\n' && *pEndLine->character != '\0')
@@ -187,8 +204,8 @@ void editorOpen(struct buffer_t* buffer) {
     }
     line_length = (int) (pEndLine - pFileContent);
 
-    int expanded_len = 0;
-    Utf8Char* expanded = expandTabsForLine(pFileContent, line_length, &expanded_len);
+    expanded_len = 0;
+    expanded = expandTabsForLine(pFileContent, line_length, &expanded_len);
     if (expanded)
     {
       bufferInsertRow(buffer, buffer->numrows, expanded, expanded_len);
@@ -199,6 +216,10 @@ void editorOpen(struct buffer_t* buffer) {
       bufferInsertRow(buffer, buffer->numrows, pFileContent, line_length);
     }
 
+    // Last line without a trailing newline: pEndLine is on the terminator
+    // itself, and stepping past it read beyond the array.
+    if (*pEndLine->character == '\0')
+      break;
     pEndLine++;
     pFileContent = pEndLine;
   }
@@ -224,6 +245,7 @@ void editorSave() {
   char* string_line;
   FILE *fd;
   char *string_path = NULL;
+  int i;
 
   // EXPLORER_BUFF has no real fullname (NULL) — it's generated content,
   // not a file, so there's nothing sensible to write.
@@ -248,7 +270,7 @@ void editorSave() {
 
   fd = fopen(string_path, "w");
   if (fd != NULL) {
-    for (int i = 0; i < buffer->numrows; ++i)
+    for (i = 0; i < buffer->numrows; ++i)
     {
       string_line = (char *)utf8ToString(buffer->row[i].characters);
       if (fwrite(string_line, 1, strlen(string_line), fd) != strlen(string_line)) {

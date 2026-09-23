@@ -23,7 +23,7 @@ typedef enum {
 // call at all. There is no built-in fallback language: even C's highlighting
 // comes entirely from what the "c" package registers, the same as every
 // other language.
-const LanguageSyntax *syntaxLanguageFor(Utf8Char *filename);
+const LanguageSyntax *syntaxLanguageFor(const Utf8Char *filename);
 
 // Highlights one row according to `lang`'s rules, clipped to the pane's
 // visible window like the plain-text row path. `lang` must be non-NULL —
@@ -47,9 +47,11 @@ int is_word_char(const Utf8Char *c);
 // highlighter's carry-over state from the result.
 int commentStateAtRowStart(struct buffer_t *buf, int row);
 
-// Marks the cache stale, so the next commentStateAtRowStart() call rebuilds
-// it. Call after any edit to the buffer.
-void syntaxHighlighterInvalidate(struct buffer_t *buf);
+// Marks every row after `row` stale — an edit to row N can only change
+// whether rows N+1.. start inside a comment, never N or anything above it.
+// Call after any edit to row `row`, or after inserting/removing a row at
+// `row` (pass `row - 1` there: the shifted rows from `row` on are stale).
+void syntaxHighlighterInvalidateAfter(struct buffer_t *buf, int row);
 
 // Seeds highlight_line()'s cross-call comment_section state. Call once per
 // pane, right before its first visible row, with commentStateAtRowStart()'s

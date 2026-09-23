@@ -15,9 +15,9 @@ extern EditorConfig E;
 // ─── small private ANSI helpers, same shape every popup module used to
 // keep a copy of for itself ────────────────────────────────────────────────
 
-static void ab_move(struct abuf *ab, int row, int col) {
+static void ab_move(struct abuf *ab, const int row, const int col) {
     char esc[32];
-    int n = snprintf(esc, sizeof(esc), "\x1b[%d;%dH", row, col);
+    const int n = snprintf(esc, sizeof(esc), "\x1b[%d;%dH", row, col);
     abAppend(ab, esc, n);
 }
 
@@ -40,21 +40,32 @@ static void ab_sgr(struct abuf *ab, const char *codes) {
  * macros, so this format is guaranteed rather than defensively assumed.
  */
 static void parseThemeRgb(const char *ansi, int *r, int *g, int *b) {
+    const char *p;
+    int kind;
+    int mode;
     *r = *g = *b = 0;
     if (!ansi) return;
-    const char *p = strchr(ansi, '[');
+    p = strchr(ansi, '[');
     if (!p) return;
-    int kind, mode;
     sscanf(p + 1, "%d;%d;%d;%d;%d", &kind, &mode, r, g, b);
 }
 
-static int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
+static int clamp255(const int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
 /** @brief Linear blend of `a` toward `b` by `t` percent (0-100). */
-static int blend(int a, int b, int t) { return clamp255(a + (b - a) * t / 100); }
+static int blend(const int a, const int b, const int t) { return clamp255(a + (b - a) * t / 100); }
 
 void popupStyleInit(PopupStyle *style) {
     int bg_r, bg_g, bg_b, ac_r, ac_g, ac_b, fg_r, fg_g, fg_b;
+    int sel_r;
+    int sel_g;
+    int sel_b;
+    int selfg_r;
+    int selfg_g;
+    int selfg_b;
+    int sh_r;
+    int sh_g;
+    int sh_b;
     parseThemeRgb(E.theme.BACKGROUND_COLOR, &bg_r, &bg_g, &bg_b);
     // The accent is the theme's keyword color — every theme picks one on
     // purpose as its most eye-catching hue, which is exactly what a border/
@@ -74,18 +85,18 @@ void popupStyleInit(PopupStyle *style) {
     // Selected row: background nudged 30% toward the accent (a tint, not a
     // full accent fill — legible without turning into a flat color block),
     // text pushed toward white for contrast against that tint.
-    int sel_r = blend(bg_r, ac_r, 30), sel_g = blend(bg_g, ac_g, 30), sel_b = blend(bg_b, ac_b, 30);
-    int selfg_r = blend(fg_r, 255, 60), selfg_g = blend(fg_g, 255, 60), selfg_b = blend(fg_b, 255, 60);
+    sel_r = blend(bg_r, ac_r, 30); sel_g = blend(bg_g, ac_g, 30); sel_b = blend(bg_b, ac_b, 30);
+    selfg_r = blend(fg_r, 255, 60); selfg_g = blend(fg_g, 255, 60); selfg_b = blend(fg_b, 255, 60);
     snprintf(style->row_sel, sizeof(style->row_sel), "1;48;2;%d;%d;%d;38;2;%d;%d;%d",
             sel_r, sel_g, sel_b, selfg_r, selfg_g, selfg_b);
 
     // Shadow: background darkened toward black — a flat dark patch is all
     // a terminal can offer in place of a real soft/alpha-blended shadow.
-    int sh_r = blend(bg_r, 0, 55), sh_g = blend(bg_g, 0, 55), sh_b = blend(bg_b, 0, 55);
+    sh_r = blend(bg_r, 0, 55); sh_g = blend(bg_g, 0, 55); sh_b = blend(bg_b, 0, 55);
     snprintf(style->shadow, sizeof(style->shadow), "0;48;2;%d;%d;%d", sh_r, sh_g, sh_b);
 }
 
-void popupCenter(int box_w, int box_h, int *origin_x, int *origin_y) {
+void popupCenter(const int box_w, const int box_h, int *origin_x, int *origin_y) {
     *origin_x = (E.screencols - box_w) / 2;
     *origin_y = (E.screenrows - box_h) / 2;
     if (*origin_x < 1) *origin_x = 1;
@@ -95,44 +106,48 @@ void popupCenter(int box_w, int box_h, int *origin_x, int *origin_y) {
 // ─── chrome ─────────────────────────────────────────────────────────────────
 
 void popupDrawTop(struct abuf *ab, const PopupStyle *style,
-                  int origin_x, int row, int box_w) {
+                  const int origin_x, const int row, const int box_w) {
+    int i;
     ab_move(ab, row, origin_x);
     ab_sgr(ab, style->chrome);
     abAppend(ab, "╭", 3);
-    for (int i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
+    for (i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
     abAppend(ab, "╮", 3);
     AB_RESET(ab);
 }
 
 void popupDrawBottom(struct abuf *ab, const PopupStyle *style,
-                     int origin_x, int row, int box_w) {
+                     const int origin_x, const int row, const int box_w) {
+    int i;
     ab_move(ab, row, origin_x);
     ab_sgr(ab, style->chrome);
     abAppend(ab, "╰", 3);
-    for (int i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
+    for (i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
     abAppend(ab, "╯", 3);
     AB_RESET(ab);
 }
 
 void popupDrawSeparator(struct abuf *ab, const PopupStyle *style,
-                        int origin_x, int row, int box_w) {
+                        const int origin_x, const int row, const int box_w) {
+    int i;
     ab_move(ab, row, origin_x);
     ab_sgr(ab, style->chrome);
     abAppend(ab, "├", 3);
-    for (int i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
+    for (i = 0; i < box_w - 2; i++) abAppend(ab, "─", 3);
     abAppend(ab, "┤", 3);
     AB_RESET(ab);
 }
 
 void popupDrawTitleRow(struct abuf *ab, const PopupStyle *style,
-                       int origin_x, int row, int box_w,
-                       const char *title, int content_w) {
+                       const int origin_x, const int row, int box_w,
+                       const char *title, const int content_w) {
+    char padded[128];
+    int n;
     ab_move(ab, row, origin_x);
     ab_sgr(ab, style->chrome);
     abAppend(ab, "│ ", 4);
     ab_sgr(ab, style->title);
-    char padded[128];
-    int n = snprintf(padded, sizeof(padded), "%-*.*s", content_w, content_w, title);
+    n = snprintf(padded, sizeof(padded), "%-*.*s", content_w, content_w, title);
     if (n > content_w) n = content_w;
     abAppend(ab, padded, n);
     ab_sgr(ab, style->chrome);
@@ -140,8 +155,8 @@ void popupDrawTitleRow(struct abuf *ab, const PopupStyle *style,
     AB_RESET(ab);
 }
 
-void popupRowBegin(struct abuf *ab, const PopupStyle *style, int origin_x,
-                   int row, int is_selected) {
+void popupRowBegin(struct abuf *ab, const PopupStyle *style, const int origin_x,
+                   const int row, const int is_selected) {
     ab_move(ab, row, origin_x);
     ab_sgr(ab, style->chrome);
     abAppend(ab, "│", 3);
@@ -160,7 +175,7 @@ void popupRowBegin(struct abuf *ab, const PopupStyle *style, int origin_x,
     }
 }
 
-void popupRowStyle(struct abuf *ab, const PopupStyle *style, int is_selected) {
+void popupRowStyle(struct abuf *ab, const PopupStyle *style, const int is_selected) {
     ab_sgr(ab, is_selected ? style->row_sel : style->row);
 }
 
@@ -172,34 +187,39 @@ void popupRowEnd(struct abuf *ab, const PopupStyle *style) {
 }
 
 void popupDrawShadow(struct abuf *ab, const PopupStyle *style,
-                     int origin_x, int origin_y, int box_w, int box_h) {
+                     const int origin_x, const int origin_y, const int box_w, const int box_h) {
     // Popups aren't always centered (completion opens next to the cursor,
     // which is often near a screen edge) — skip whatever part of the
     // shadow would land outside the terminal rather than writing a cell
     // past the last column/row, which some terminals wrap or otherwise
     // mishandle instead of just clipping.
-    int right_col = origin_x + box_w;
-    int bottom_row = origin_y + box_h;
+    const int right_col = origin_x + box_w;
+    const int bottom_row = origin_y + box_h;
     // +2: status bar and message bar both live below E.screenrows.
-    int max_row = E.screenrows + 2;
+    const int max_row = E.screenrows + 2;
+    int r;
+    int row;
+    int start_col;
+    int cols;
+    int c;
 
     ab_sgr(ab, style->shadow);
     if (right_col <= E.screencols) {
-        for (int r = 1; r < box_h; r++) {
-            int row = origin_y + r;
+        for (r = 1; r < box_h; r++) {
+            row = origin_y + r;
             if (row > max_row) break;
             ab_move(ab, row, right_col);
             abAppend(ab, " ", 1);
         }
     }
     if (bottom_row <= max_row) {
-        int start_col = origin_x + 1;
-        int cols = box_w;
+        start_col = origin_x + 1;
+        cols = box_w;
         if (start_col + cols - 1 > E.screencols)
             cols = E.screencols - start_col + 1;
         if (cols > 0) {
             ab_move(ab, bottom_row, start_col);
-            for (int c = 0; c < cols; c++) abAppend(ab, " ", 1);
+            for (c = 0; c < cols; c++) abAppend(ab, " ", 1);
         }
     }
     AB_RESET(ab);

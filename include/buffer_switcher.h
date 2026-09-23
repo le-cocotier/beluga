@@ -9,7 +9,7 @@ void bufferSwitcherOpen(void);
 
 // Input handling — returns 1 if the key was consumed by the popup.
 // Call this before normal keybind dispatch while the popup is visible.
-int bufferSwitcherHandleKey(Utf8Char *key);
+int bufferSwitcherHandleKey(const Utf8Char *key);
 
 // Call from editorRefreshScreen() — appends the popup to abuf when visible.
 void bufferSwitcherDraw(struct abuf *ab);

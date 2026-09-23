@@ -20,7 +20,7 @@ void listPopupOpen(const char *title, Lisp items, Lisp on_select, Lisp on_cancel
 
 // Input handling — returns 1 if the key was consumed by the popup.
 // Call this before normal keybind dispatch while the popup is visible.
-int listPopupHandleKey(Utf8Char *key);
+int listPopupHandleKey(const Utf8Char *key);
 
 // Call from editorRefreshScreen() — appends the popup to abuf when visible.
 void listPopupDraw(struct abuf *ab);

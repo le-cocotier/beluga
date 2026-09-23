@@ -26,7 +26,15 @@
  */
 Utf8Char* readUtf8Char(void)
 {
-    Utf8Char* new_char = (Utf8Char*)calloc(1, sizeof(Utf8Char));
+    Utf8Char* new_char = gcalloc(1, sizeof(Utf8Char));
+    char seq0;
+    char m1;
+    char m2;
+    char seq1;
+    char final;
+    char mod;
+    char letter;
+    int is_alt;
     read(STDIN_FILENO, &new_char->character[0], 1);
 
     if (new_char->character[0]) {
@@ -36,7 +44,6 @@ Utf8Char* readUtf8Char(void)
     // Escape sequence handling
     if (new_char->character[0] == '\x1b')
     {
-        char seq0;
 
         if (read(STDIN_FILENO, &seq0, 1) != 1) {
             new_char->length = 1;
@@ -62,7 +69,6 @@ Utf8Char* readUtf8Char(void)
                 // ESC ESC [ C  /  ESC ESC O C — a plain arrow sequence
                 // behind a Meta prefix, the form a terminal in "Option as
                 // Meta key" mode uses for Option+arrow.
-                char m1, m2;
                 if (read(STDIN_FILENO, &m1, 1) == 1 && (m1 == '[' || m1 == 'O') &&
                     read(STDIN_FILENO, &m2, 1) == 1)
                 {
@@ -94,7 +100,6 @@ Utf8Char* readUtf8Char(void)
             return new_char;
         }
 
-        char seq1;
         if (read(STDIN_FILENO, &seq1, 1) != 1) {
             new_char->character[0] = '\x1b';
             new_char->length = 1;
@@ -107,7 +112,6 @@ Utf8Char* readUtf8Char(void)
             {
                 // Extended sequence like \x1b[3~ (Delete), \x1b[5~ (PageUp),
                 // or a modified key like \x1b[1;3C (Alt+Right).
-                char final;
                 if (read(STDIN_FILENO, &final, 1) != 1) {
                     new_char->length = 1;
                     return new_char;
@@ -117,13 +121,12 @@ Utf8Char* readUtf8Char(void)
                     // CSI 1 ; <mod> <letter>. mod 3 = Alt, 9 = Meta
                     // (macOS "Option as Meta"); Shift (2) / Ctrl (5) etc.
                     // aren't bound, so those fall through to the plain key.
-                    char mod, letter;
                     if (read(STDIN_FILENO, &mod, 1) != 1 ||
                         read(STDIN_FILENO, &letter, 1) != 1) {
                         new_char->length = 1;
                         return new_char;
                     }
-                    int is_alt = (mod == '3' || mod == '9');
+                    is_alt = (mod == '3' || mod == '9');
                     switch (letter)
                     {
                         case 'C': new_char->character[0] = is_alt ? ALT_ARROW_RIGHT : ARROW_RIGHT; break;
@@ -196,118 +199,55 @@ Utf8Char* readUtf8Char(void)
 }
 
 /**
- * @fn uft8ToInt32
- * @brief utils function to help to compare characters
- * @param character
- *
- * @note It's stores as an int32 int \n
- * 0x01000000 | 0x00010000 | 0x00000100 | 0x00000000 \n
- * ------------------------------------------------- \n
- * byte 4     |   byte 3   |   byte 2   |   byte 1
- *
- * @return the int32 code of the char
+ * @brief Compares two characters: by their bytes (which, for UTF-8, orders
+ * them by codepoint), then by length.
  */
-int32_t utf8ToInt32(const Utf8Char* character)
+static int utf8CharCmp(const Utf8Char* a, const Utf8Char* b)
 {
-    int32_t code = 0;
-    code += character->character[0];
-    code += (character->character[1] << 2);
-    code += (character->character[2] << 4);
-    code += (character->character[3] << 6);
-
-    return code;
+    const int n = a->length < b->length ? a->length : b->length;
+    const int d = memcmp(a->character, b->character, (size_t) n);
+    return d ? d : a->length - b->length;
 }
 
 /**
- *
- * @fn uft8StringCmp
- * @brief compare 2 Uft8Char strings
- *
- * @param first_string
- * @param second_string
- *
- * @return 0 if equal else difference between first_string and second_string first mismatching char.
+ * @brief Compares two Utf8Char strings.
+ * @return 0 if equal, otherwise <0 / >0 like strcmp().
+ * @note Replaces a version that, on a byte-length mismatch (e.g. "é" vs
+ * "e"), stopped without advancing and returned the difference of the
+ * previous — equal — characters: "café.c" and "cafe.c" compared equal, and
+ * a mismatch on the very first character read before the start of the
+ * array.
  */
 int32_t utf8StringCmp(Utf8Char* first_string, Utf8Char* second_string)
 {
-    Utf8Char* pFirst = first_string;
-    Utf8Char* pSecond = second_string;
-    unsigned char * pFirstChar = pFirst->character;
-    unsigned char * pSecondChar = pSecond->character;
-    int i = 0;
-
-    do // if end of string
+    int d;
+    for (;; first_string++, second_string++)
     {
-        // check length
-        if (pFirst->length != pSecond->length)
-            break;
-        //test char
-        if (i < pFirst->length)
-        {
-            if (pFirstChar[i] != pSecondChar[i])
-            {
-                pFirst++;
-                pSecond++;
-                break;
-            }
-            ++i;
-        } else
-        {
-            // Resetting to go to the next char
-            i = 0;
-            pFirst++;
-            pSecond++;
-            pFirstChar = pFirst->character;
-            pSecondChar = pSecond->character;
-        }
-    } while (*pFirstChar != '\0' && *pSecondChar != '\0');
-    return utf8ToInt32(pFirst - 1) - utf8ToInt32(pSecond - 1);
+        d = utf8CharCmp(first_string, second_string);
+        if (d || first_string->character[0] == '\0')
+            return d;
+    }
 }
 
+/**
+ * @brief Like utf8StringCmp(), but compares at most `n` characters.
+ */
 int32_t utf8StringNCmp(Utf8Char* first_string, Utf8Char* second_string, int n)
 {
-    Utf8Char* pFirst = first_string;
-    Utf8Char* pSecond = second_string;
-    unsigned char * pFirstChar = pFirst->character;
-    unsigned char * pSecondChar = pSecond->character;
-    int i = 0;
-
-    do // if end of string
+    int d;
+    for (; n > 0; n--, first_string++, second_string++)
     {
-        // check length
-        if (pFirst->length != pSecond->length)
-            break;
-        //test char
-        if (i < pFirst->length)
-        {
-            if (pFirstChar[i] != pSecondChar[i])
-            {
-                pFirst++;
-                pSecond++;
-                break;
-
-            }
-            ++i;
-        } else
-        {
-            // Resetting to go to the next char
-            i = 0;
-            pFirst++;
-            pSecond++;
-            pFirstChar = pFirst->character;
-            pSecondChar = pSecond->character;
-            --n;
-        }
-    } while (*pFirstChar != '\0' && *pSecondChar != '\0' && n);
-    if (n != 0)
-        return n;
-    return utf8ToInt32(pFirst - 1) - utf8ToInt32(pSecond - 1);
+        d = utf8CharCmp(first_string, second_string);
+        if (d || first_string->character[0] == '\0')
+            return d;
+    }
+    return 0;
 }
 
-int utf8StringLen(const Utf8Char* string)
+int utf8StringLen(const Utf8Char* character)
 {
     int i = 0;
-    Utf8Char* pFirst = (Utf8Char *) string;
+    const Utf8Char* pFirst = (Utf8Char *) character;
     while (*pFirst->character)
     {
         pFirst++;
@@ -324,6 +264,10 @@ int utf8StringLen(const Utf8Char* string)
  */
 int utf8CreateChar(const unsigned char* string, Utf8Char* new_char)
 {
+    // Callers may hand us galloc'd (uninitialized) storage; keep the bytes
+    // past `length` deterministic for anything that copies or compares the
+    // whole 4-byte array.
+    memset(new_char->character, 0, sizeof(new_char->character));
     new_char->character[0] = string[0];
     // Calculating the length of the character
     if (new_char->character[0] < 0x80) // only one
@@ -359,11 +303,11 @@ int utf8CreateChar(const unsigned char* string, Utf8Char* new_char)
  */
 unsigned char* utf8ToString(const Utf8Char* string)
 {
-    unsigned char* new_string = calloc(1, sizeof(unsigned char));
+    unsigned char* new_string = gcalloc(1, sizeof(unsigned char));
     int i = 0;
     while (*string->character != '\0')
     {
-        new_string = (unsigned char*) recalloc(new_string, (i+1) * sizeof(unsigned char), (i + string->length + 2) * sizeof(unsigned char));
+        new_string = (unsigned char*) grealloc(new_string, (i + string->length + 2) * sizeof(unsigned char));
         memcpy(new_string + i, string->character, string->length);
         i += string->length;
         string++;
@@ -376,7 +320,7 @@ unsigned char* utf8ToString(const Utf8Char* string)
 // TODO: adapt to the right size
 unsigned char* utf8ToNString(const Utf8Char* string, int n)
 {
-    unsigned char* new_string = calloc( n * 4, sizeof(unsigned char));
+    unsigned char* new_string = gcalloc( n * 4, sizeof(unsigned char));
     int i = 0;
     while (*string->character != '\0' && n--)
     {
@@ -396,11 +340,11 @@ unsigned char* utf8ToNString(const Utf8Char* string, int n)
  */
 Utf8Char* stringToUtf8(unsigned char* string)
 {
-    Utf8Char* new_string = calloc(1, sizeof(Utf8Char));
+    // +1 for the END_OF_STRING terminator written after the loop.
+    Utf8Char* new_string = gcalloc(strlen((char*)string) + 1, sizeof(Utf8Char));
     int i = 0;
     while (*string != '\0')
     {
-        new_string = (Utf8Char*) recalloc(new_string, (i + 1) * sizeof(Utf8Char), (i + 2) * sizeof(Utf8Char));
         string += utf8CreateChar(string, new_string + i);
         ++i;
     }
@@ -408,66 +352,62 @@ Utf8Char* stringToUtf8(unsigned char* string)
     return new_string;
 }
 
-Utf8Char* utf8ReadFile(Utf8Char* file_name)
+Utf8Char* utf8ReadFile(const Utf8Char* file_name)
 {
-    char * char_file_name = (char *) utf8ToString(file_name);
-    FILE* file = fopen(char_file_name, "r");
-    Utf8Char* file_data = NULL;
-    Utf8Char* temp;
-    int file_length = 0;
-    int line_len = 0;
-    int i;
-    char* line = NULL;
-    size_t line_cap = 0;
-
+    char* path = (char*) utf8ToString(file_name);
+    FILE* file = fopen(path, "rb");
+    size_t cap;
+    size_t len;
+    size_t n;
+    unsigned char* bytes;
+    unsigned char* grown;
+    Utf8Char* file_data;
+    size_t count;
+    size_t i;
+    gfree(path);
     if (file == NULL)
     {
         // File doesn't exist (or isn't readable): not fatal, the caller
         // treats this as "open a new file" and starts with an empty buffer.
         appDebug("error opening file");
-        gfree(char_file_name);
         return NULL;
     }
 
-    rewind(file);
-    while ((line_len = getline(&line, &line_cap, file)) != -1) {
-        i = 0;
-        appDebug("[read file] %s", line);
-        while (i < line_len)
+    // Slurp the whole file, then decode it in one pass into an array sized
+    // up front (a file never has more characters than bytes). This used to
+    // go line by line through getline() and grow the result by a single
+    // Utf8Char per character — 5M reallocs for a 5MB file. The 4 zeroed
+    // padding bytes let utf8CreateChar() read a multi-byte sequence
+    // truncated at EOF without running past the buffer.
+    cap = 1 << 16;
+    len = 0;
+    bytes = galloc(cap + 4);
+    if (bytes == NULL)
+        die("utf8ReadFile");
+    while ((n = fread(bytes + len, 1, cap - len, file)) > 0)
+    {
+        len += n;
+        if (len == cap)
         {
-            temp = (Utf8Char*) recalloc(file_data, file_length * sizeof(Utf8Char), (file_length + 1) * sizeof(Utf8Char));
-            if (temp == NULL)
-            {
-                gfree(file_data);
-                exit(1);
-            } else
-            {
-                file_data = temp;
-                ++file_length;
-            }
-            i += utf8CreateChar((unsigned char*) line + i, &file_data[file_length - 1]);
+            cap *= 2;
+            grown = grealloc(bytes, cap + 4);
+            if (grown == NULL)
+                die("utf8ReadFile");
+            bytes = grown;
         }
-
-        line_cap = 0;  // Reset for next iteration
-        gfree(line);
-        line = NULL;
     }
-    gfree(line);
-    line = NULL;
     fclose(file);
-    gfree(char_file_name);
+    memset(bytes + len, 0, 4);
+    appDebug("[read file] %zu bytes", len);
 
-    temp = recalloc(file_data, file_length * sizeof(Utf8Char), (file_length + 1) * sizeof(Utf8Char));
-    ++file_length;
-    if (temp == NULL)
-    {
-        gfree(file_data);
-        exit(1);
-    } else
-    {
-        file_data = temp;
-    }
-    END_OF_STRING(file_data[file_length - 1]);
+    file_data = galloc((len + 1) * sizeof(Utf8Char));
+    if (file_data == NULL)
+        die("utf8ReadFile");
+    count = 0;
+    for (i = 0; i < len; count++)
+        i += (size_t) utf8CreateChar(bytes + i, &file_data[count]);
+    gfree(bytes);
+    END_OF_STRING(file_data[count]);
 
     return file_data;
 }
@@ -480,7 +420,7 @@ Utf8Char* utf8ReadFile(Utf8Char* file_name)
 void utf8Cat(Utf8Char** dest, const Utf8Char* src)
 {
     Utf8Char* temp = NULL;
-    temp = (Utf8Char*) recalloc(*dest, utf8StringLen(*dest) * sizeof(Utf8Char), (utf8StringLen(src) + utf8StringLen(*dest) - 1) * sizeof(Utf8Char));
+    temp = (Utf8Char*) grealloc(*dest, (utf8StringLen(src) + utf8StringLen(*dest) - 1) * sizeof(Utf8Char));
     if (temp == NULL)
         return;
     *dest = temp;
@@ -490,8 +430,8 @@ void utf8Cat(Utf8Char** dest, const Utf8Char* src)
 /**
  * @brief Return a pointer to the last slash of the given string or NULL if no slash is found
  */
-Utf8Char *lastSlashUtf8(Utf8Char * string){
-    Utf8Char * last_slash = NULL;
+const Utf8Char *lastSlashUtf8(const Utf8Char * string){
+    const Utf8Char * last_slash = NULL;
     while (*string->character) { //Look at the entire string
         if (*string->character == '/')
             last_slash = string;
@@ -500,23 +440,27 @@ Utf8Char *lastSlashUtf8(Utf8Char * string){
     return last_slash;
 }
 
-int utf8FilenameExtension(const Utf8Char *filename, char *out, size_t out_size)
+int utf8FilenameExtension(const Utf8Char *filename, char *out, const size_t out_size)
 {
+    int len;
+    int dot;
+    int i;
+    size_t j;
     out[0] = '\0';
     if (!filename || out_size == 0)
         return 0;
 
-    int len = utf8StringLen(filename); // includes the terminator
+    len = utf8StringLen(filename); // includes the terminator
     if (len < 3) return 0; // need at least "x.e" -> 3 real chars + terminator
 
-    int dot = -1;
-    for (int i = 0; i < len - 1; i++)
+    dot = -1;
+    for (i = 0; i < len - 1; i++)
         if (filename[i].length == 1 && filename[i].character[0] == '.')
             dot = i;
     if (dot < 0) return 0;
 
-    size_t j = 0;
-    for (int i = dot + 1; i < len - 1 && j < out_size - 1; i++)
+    j = 0;
+    for (i = dot + 1; i < len - 1 && j < out_size - 1; i++)
     {
         if (filename[i].length != 1) return 0; // non-ASCII: no registered extension can match
         out[j++] = (char) filename[i].character[0];
@@ -525,10 +469,11 @@ int utf8FilenameExtension(const Utf8Char *filename, char *out, size_t out_size)
     return j > 0;
 }
 
-void utf8Cpy(Utf8Char * dest, Utf8Char * src) {
+void utf8Cpy(Utf8Char * dest, const Utf8Char * src) {
+    int i;
     while (*src->character != '\0') {
         dest->length = src->length;
-        for (int i = 0; i < dest->length; ++i)
+        for (i = 0; i < dest->length; ++i)
             dest->character[i] = src->character[i];
         src++;
         dest++;
@@ -536,10 +481,11 @@ void utf8Cpy(Utf8Char * dest, Utf8Char * src) {
     END_OF_STRING((*dest));
 }
 
-void utf8NCpy(Utf8Char * dest, Utf8Char * src, int n) {
+void utf8NCpy(Utf8Char * dest, const Utf8Char * src, int n) {
+    int i;
     while (*src->character != '\0' && n > 0) {
         dest->length = src->length;
-        for (int i = 0; i < dest->length; ++i)
+        for (i = 0; i < dest->length; ++i)
             dest->character[i] = src->character[i];
         src++;
         dest++;
@@ -556,7 +502,7 @@ void utf8NCpy(Utf8Char * dest, Utf8Char * src, int n) {
  * @param ... The arguments to format
  * @return The number of characters printed
  */
-int utf8Printf(Utf8Char * dest, size_t capacity, const char * format, ...) {
+int utf8Printf(Utf8Char * dest, const size_t capacity, const char * format, ...) {
     int format_len = 0;
     int written_len = 0;
     size_t used = 0;
@@ -564,6 +510,8 @@ int utf8Printf(Utf8Char * dest, size_t capacity, const char * format, ...) {
     char temp[40] = {0};
     //analyse the string for %s, %d, %u
     va_list ap;
+    size_t remaining;
+    Utf8Char* u_arg;
     va_start(ap, format);
 
     if (capacity == 0) {
@@ -572,7 +520,7 @@ int utf8Printf(Utf8Char * dest, size_t capacity, const char * format, ...) {
     }
 
     while (*format && used + 1 < capacity) {
-        size_t remaining = capacity - 1 - used;
+        remaining = capacity - 1 - used;
         if (*format == '%') {
             format++;
             switch (*format) {
@@ -596,12 +544,19 @@ int utf8Printf(Utf8Char * dest, size_t capacity, const char * format, ...) {
                     break;
                 case 'u':
                     {
-                        Utf8Char* u_arg = va_arg(ap, Utf8Char*);
+                        u_arg = va_arg(ap, Utf8Char*);
                         written_len = utf8StringLen(u_arg) - 1; // see Bug 2 for the -1
                         if ((size_t) written_len > remaining)
                             written_len = (int) remaining;
                         utf8NCpy(dest, u_arg, written_len);
                     }
+                    break;
+                default:
+                    // Unrecognized specifier (a typo'd %x, a stray %%, ...):
+                    // write nothing rather than reuse whatever written_len
+                    // was left over from the previous substitution — that
+                    // used to silently replay the last write's length here.
+                    written_len = 0;
                     break;
             }
             dest += written_len;
@@ -626,7 +581,7 @@ int utf8Printf(Utf8Char * dest, size_t capacity, const char * format, ...) {
  * @param dest The destination Utf8Char buffer
  * @param capacity The number of Utf8Char elements available at dest (including room for the terminator)
  * @param format The format string
- * @param ... The arguments to format
+ * @param ap The arguments to format, as a va_list
  * @return The number of characters printed
  */
 int utf8VaPrintf(Utf8Char * dest, size_t capacity, const char * format, va_list ap) {
@@ -635,13 +590,15 @@ int utf8VaPrintf(Utf8Char * dest, size_t capacity, const char * format, va_list 
     size_t used = 0;
     Utf8Char* string = NULL;
     char temp[40] = {0};
+    size_t remaining;
+    Utf8Char* u_arg;
     //analyse the string for %s, %d, %u
 
     if (capacity == 0)
         return 0;
 
     while (*format && used + 1 < capacity) {
-        size_t remaining = capacity - 1 - used;
+        remaining = capacity - 1 - used;
         if (*format == '%') {
             format++;
             switch (*format) {
@@ -665,12 +622,19 @@ int utf8VaPrintf(Utf8Char * dest, size_t capacity, const char * format, va_list 
                     break;
                 case 'u':
                     {
-                        Utf8Char* u_arg = va_arg(ap, Utf8Char*);
+                        u_arg = va_arg(ap, Utf8Char*);
                         written_len = utf8StringLen(u_arg) - 1;
                         if ((size_t) written_len > remaining)
                             written_len = (int) remaining;
                         utf8NCpy(dest, u_arg, written_len);
                     }
+                    break;
+                default:
+                    // Unrecognized specifier (a typo'd %x, a stray %%, ...):
+                    // write nothing rather than reuse whatever written_len
+                    // was left over from the previous substitution — that
+                    // used to silently replay the last write's length here.
+                    written_len = 0;
                     break;
             }
             dest += written_len;
@@ -697,12 +661,13 @@ int utf8VaPrintf(Utf8Char * dest, size_t capacity, const char * format, va_list 
  */
 int utf8IsPrintable(const Utf8Char* c)
 {
+    unsigned char ch;
     if (c == NULL || c->length < 1 || c->length > 4)
         return 0;
 
     if (c->length == 1)
     {
-        unsigned char ch = c->character[0];
+        ch = c->character[0];
 
         // ASCII control characters (0x00-0x1F) and DEL (0x7F) are never printable
         if (ch < 0x20 || ch == 0x7F)

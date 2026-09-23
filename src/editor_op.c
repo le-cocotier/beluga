@@ -47,11 +47,11 @@ void editorSetStatusMessage(const char *fmt, ...) {
  * boundary
  * @note Updates global editor state E
  */
-int editorMoveCursor(int key) {
+int editorMoveCursor(const int key) {
   // TODO: Rebuid for utf8
-  EditorPane *active = splitScreenGetActivePane();
+  const EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buf = bufferFindById(active->buffer_id);
-  Row *row = &buf->row[buf->y];
+  const Row *row = &buf->row[buf->y];
   switch (key) {
   case ARROW_RIGHT:
     if (row && buf->x < row->size) {
@@ -92,22 +92,26 @@ int editorMoveCursor(int key) {
 
 char *editorGetClipboard(void) {
   FILE *pipe = popen(CLIPBOARD_PASTE_CMD, "r");
+  size_t cap;
+  size_t len;
+  char *buf;
+  int c;
+  char *new_buf;
   if (!pipe)
     return NULL;
 
-  size_t cap = 4096;
-  size_t len = 0;
-  char *buf = galloc(cap);
+  cap = 4096;
+  len = 0;
+  buf = galloc(cap);
   if (!buf) {
     pclose(pipe);
     return NULL;
   }
 
-  int c;
   while ((c = fgetc(pipe)) != EOF) {
     if (len + 1 >= cap) {
       cap *= 2;
-      char *new_buf = grealloc(buf, cap);
+      new_buf = grealloc(buf, cap);
       if (!new_buf) {
         gfree(buf);
         pclose(pipe);
@@ -122,7 +126,7 @@ char *editorGetClipboard(void) {
   return buf;
 }
 
-void editorSetClipboard(const char *text, int len) {
+void editorSetClipboard(const char *text, const int len) {
   FILE *pipe = popen(CLIPBOARD_COPY_CMD, "w");
   if (!pipe)
     return;
@@ -140,10 +144,19 @@ void editorRunLoop(void) {
   // dynamically, and without depending on signal delivery/interruption
   // semantics that vary across terminals and platforms.
   int last_rows = 0, last_cols = 0;
+  int rows;
+  int cols;
+  fd_set readfds;
+  int maxfd;
+  int first_buffer_id;
+  struct buffer_t *b;
+  struct timeval tv;
+  int ready;
+  unsigned char chunk[4096];
+  ssize_t n;
   getWindowSize(&last_rows, &last_cols);
 
   while (!E.exit_requested) {
-    int rows, cols;
     if (getWindowSize(&rows, &cols) == 0 &&
         (rows != last_rows || cols != last_cols)) {
       last_rows = rows;
@@ -157,14 +170,13 @@ void editorRunLoop(void) {
       splitScreenSyncTerminalSizes();
     }
 
-    fd_set readfds;
     FD_ZERO(&readfds);
     FD_SET(STDIN_FILENO, &readfds);
-    int maxfd = STDIN_FILENO;
+    maxfd = STDIN_FILENO;
 
     if (E.buffers != NULL) {
-      int first_buffer_id = E.buffers->buffer_id;
-      struct buffer_t *b = E.buffers;
+      first_buffer_id = E.buffers->buffer_id;
+      b = E.buffers;
       do {
         if (b->type == TERMINAL_BUFF && b->pty_master_fd >= 0) {
           FD_SET(b->pty_master_fd, &readfds);
@@ -182,8 +194,8 @@ void editorRunLoop(void) {
         maxfd = E.lsp_client->read_from_server_fd;
     }
 
-    struct timeval tv = {.tv_sec = 0, .tv_usec = 50000}; // 50ms tick
-    int ready = select(maxfd + 1, &readfds, NULL, NULL, &tv);
+    tv = (struct timeval){.tv_sec = 0, .tv_usec = 50000}; // 50ms tick
+    ready = select(maxfd + 1, &readfds, NULL, NULL, &tv);
 
     if (ready < 0) {
       if (errno == EINTR)
@@ -193,13 +205,11 @@ void editorRunLoop(void) {
 
     if (ready > 0) {
       if (E.buffers != NULL) {
-        int first_buffer_id = E.buffers->buffer_id;
-        struct buffer_t *b = E.buffers;
+        first_buffer_id = E.buffers->buffer_id;
+        b = E.buffers;
         do {
           if (b->type == TERMINAL_BUFF && b->pty_master_fd >= 0 &&
               FD_ISSET(b->pty_master_fd, &readfds)) {
-            unsigned char chunk[4096];
-            ssize_t n;
             while ((n = read(b->pty_master_fd, chunk, sizeof(chunk))) > 0) {
               ansiParserFeed(b, chunk, (size_t)n);
               b->x = b->term_state.cursor_x;
@@ -240,8 +250,8 @@ void editorRunLoop(void) {
 
   // Clean shutdown: close any live shells before exiting
   if (E.buffers != NULL) {
-    int first_buffer_id = E.buffers->buffer_id;
-    struct buffer_t *b = E.buffers;
+    first_buffer_id = E.buffers->buffer_id;
+    b = E.buffers;
     do {
       if (b->type == TERMINAL_BUFF)
         ptySessionClose(b);

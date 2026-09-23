@@ -525,13 +525,15 @@ typedef struct buffer_t
     // screen — it has no way to know, from a mid-file scroll position,
     // whether row Y starts inside an unclosed "/* ... */" that opened
     // somewhere above the visible window. comment_state[Y] answers that:
-    // 1 if row Y starts inside such a comment, computed by scanning the
-    // whole buffer from the top. Invalidated (comment_state_valid = 0) on
-    // any edit and recomputed lazily, once, the next time it's read —
-    // see ensureCommentStateFresh() in syntax_highlighter.c.
+    // 1 if row Y starts inside such a comment. Only a prefix is ever kept
+    // valid: an edit to row N truncates it to rows [0, N], and a read of
+    // row Y extends it just far enough to cover Y — so typing in a big
+    // file never rescans more than the rows between the edit and the top
+    // of the screen. See ensureCommentState() in syntax_highlighter.c.
     unsigned char* comment_state;
-    int comment_state_numrows;  // rows comment_state[] currently covers
-    int comment_state_valid;
+    int comment_state_cap;       // slots allocated in comment_state[]
+    int comment_state_known;     // rows [0, known) hold a valid entry
+    int comment_state_rows_seen; // numrows as of the last tracked change
 
     // Which key prefix to activate when this buffer gets focus, for
     // buffers that come with their own keymap. Only meaningful for
@@ -549,7 +551,7 @@ typedef struct buffer_t
 } Buffer;
 
 /**
- * \struct editorConfig
+ * \struct EditorConfig
  * \brief Containing our editor state.
  */
 typedef struct editor_config_t

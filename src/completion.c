@@ -42,11 +42,11 @@ static long monotonic_ms(void)
     return (long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static void lsp_send(LspClient *lsp, const char *json)
+static void lsp_send(const LspClient *lsp, const char *json)
 {
-    int body_len = strlen(json);
+    const int body_len = (int) strlen(json);
     char header[1024];
-    int header_len = snprintf(header, sizeof(header),
+    const int header_len = snprintf(header, sizeof(header),
                               "Content-Length: %d\r\n\r\n", body_len);
 
     write(lsp->write_to_server_fd, header, header_len);
@@ -57,21 +57,30 @@ static void lsp_send(LspClient *lsp, const char *json)
 
 static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
 {
+    cJSON *init_root;
+    cJSON *result;
+    cJSON *caps;
+    cJSON *comp_provider;
+    cJSON *trig;
+    cJSON *item;
+    cJSON *root;
+    char *msg;
+    int first_buffer_id;
+    struct buffer_t* b;
     // Pull completionProvider.triggerCharacters out of the server's own
     // capabilities instead of assuming word-char completion covers
     // everything — a server that only ever completes after punctuation
     // (e.g. "." for member access) would otherwise never get asked.
     lsp->num_trigger_chars = 0;
-    cJSON *init_root = cJSON_Parse(result_json);
+    init_root = cJSON_Parse(result_json);
     if (init_root)
     {
-        cJSON *result = cJSON_GetObjectItem(init_root, "result");
-        cJSON *caps = result ? cJSON_GetObjectItem(result, "capabilities") : NULL;
-        cJSON *comp_provider = caps ? cJSON_GetObjectItem(caps, "completionProvider") : NULL;
-        cJSON *trig = comp_provider ? cJSON_GetObjectItem(comp_provider, "triggerCharacters") : NULL;
+        result = cJSON_GetObjectItem(init_root, "result");
+        caps = result ? cJSON_GetObjectItem(result, "capabilities") : NULL;
+        comp_provider = caps ? cJSON_GetObjectItem(caps, "completionProvider") : NULL;
+        trig = comp_provider ? cJSON_GetObjectItem(comp_provider, "triggerCharacters") : NULL;
         if (trig && cJSON_IsArray(trig))
         {
-            cJSON *item;
             cJSON_ArrayForEach(item, trig)
             {
                 if (lsp->num_trigger_chars >= LSP_MAX_TRIGGER_CHARS) break;
@@ -92,12 +101,12 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
         lsp->num_trigger_chars = 1;
     }
 
-    cJSON *root = cJSON_CreateObject();
+    root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "jsonrpc", "2.0");
     cJSON_AddStringToObject(root, "method", "initialized");
     cJSON_AddItemToObject(root, "params", cJSON_CreateObject());
 
-    char *msg = cJSON_PrintUnformatted(root);
+    msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
     gfree(msg);
     cJSON_Delete(root);
@@ -113,8 +122,8 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
     // a spurious diagnostic entry for a buffer the user never asked about.
     if (E.buffers != NULL)
     {
-        int first_buffer_id = E.buffers->buffer_id;
-        struct buffer_t* b = E.buffers;
+        first_buffer_id = E.buffers->buffer_id;
+        b = E.buffers;
         do
         {
             // Same match as bufferMaybeSyncLsp(): a buffer opened in this
@@ -154,7 +163,7 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
 /**
  * @brief Register a callback to be invoked when a response with this id arrives.
  */
-static void lsp_track_pending(LspClient *lsp, int id, void (*callback)(LspClient*, const char*))
+static void lsp_track_pending(LspClient *lsp, const int id, void (*callback)(LspClient*, const char*))
 {
     if (lsp->pending_count >= LSP_MAX_PENDING)
     {
@@ -169,13 +178,15 @@ static void lsp_track_pending(LspClient *lsp, int id, void (*callback)(LspClient
 /**
  * @brief Find and remove a pending entry by id; returns its callback, or NULL if not found.
  */
-static void (*lsp_pop_pending(LspClient *lsp, int id))(LspClient*, const char*)
+static void (*lsp_pop_pending(LspClient *lsp, const int id))(LspClient*, const char*)
 {
-    for (int i = 0; i < lsp->pending_count; i++)
+    int i;
+    void (*cb)(LspClient*, const char*);
+    for (i = 0; i < lsp->pending_count; i++)
     {
         if (lsp->pending[i].id == id)
         {
-            void (*cb)(LspClient*, const char*) = lsp->pending[i].callback;
+            cb = lsp->pending[i].callback;
             // swap-remove
             lsp->pending[i] = lsp->pending[lsp->pending_count - 1];
             lsp->pending_count--;
@@ -193,12 +204,23 @@ static void (*lsp_pop_pending(LspClient *lsp, int id))(LspClient*, const char*)
 static void lsp_feed(LspClient *lsp, const char *data, size_t len)
 {
     // Grow the persistent receive buffer and append
-    size_t needed = lsp->recv_len + len;
+    const size_t needed = lsp->recv_len + len;
+    size_t new_cap;
+    char *grown;
+    char *header_end;
+    int header_len;
+    char header_copy[1024];
+    int copy_len;
+    int content_length;
+    char *cl;
+    int body_start;
+    char *body;
+    size_t consumed;
     if (needed > lsp->recv_cap)
     {
-        size_t new_cap = lsp->recv_cap ? lsp->recv_cap * 2 : 4096;
+        new_cap = lsp->recv_cap ? lsp->recv_cap * 2 : 4096;
         while (new_cap < needed) new_cap *= 2;
-        char *grown = grealloc(lsp->recv_buf, new_cap);
+        grown = grealloc(lsp->recv_buf, new_cap);
         if (!grown) return; // best-effort: drop data rather than crash
         lsp->recv_buf = grown;
         lsp->recv_cap = new_cap;
@@ -209,25 +231,24 @@ static void lsp_feed(LspClient *lsp, const char *data, size_t len)
     // Try to extract as many complete messages as are currently buffered
     while (1)
     {
-        char *header_end = memmem(lsp->recv_buf, lsp->recv_len, "\r\n\r\n", 4);
+        header_end = memmem(lsp->recv_buf, lsp->recv_len, "\r\n\r\n", 4);
         if (!header_end) break; // headers not fully arrived yet
 
-        int header_len = (int)(header_end - lsp->recv_buf);
-        char header_copy[1024];
-        int copy_len = header_len < (int)sizeof(header_copy) - 1 ? header_len : (int)sizeof(header_copy) - 1;
+        header_len = (int)(header_end - lsp->recv_buf);
+        copy_len = header_len < (int)sizeof(header_copy) - 1 ? header_len : (int)sizeof(header_copy) - 1;
         memcpy(header_copy, lsp->recv_buf, copy_len);
         header_copy[copy_len] = '\0';
 
-        int content_length = 0;
-        char *cl = strstr(header_copy, "Content-Length: ");
+        content_length = 0;
+        cl = strstr(header_copy, "Content-Length: ");
         if (cl) content_length = atoi(cl + 16);
 
-        int body_start = header_len + 4;
-        if (content_length <= 0 || lsp->recv_len < (size_t)(body_start + content_length))
+        body_start = header_len + 4;
+        if (content_length <= 0 || lsp->recv_len < (size_t) body_start + (size_t) content_length)
             break; // body not fully arrived yet
 
         // Full message available — extract and dispatch
-        char *body = galloc(content_length + 1);
+        body = galloc(content_length + 1);
         if (body)
         {
             memcpy(body, lsp->recv_buf + body_start, content_length);
@@ -238,7 +259,7 @@ static void lsp_feed(LspClient *lsp, const char *data, size_t len)
         }
 
         // Shift any remaining buffered bytes down to the front
-        size_t consumed = body_start + content_length;
+        consumed = body_start + content_length;
         memmove(lsp->recv_buf, lsp->recv_buf + consumed, lsp->recv_len - consumed);
         lsp->recv_len -= consumed;
     }
@@ -255,9 +276,10 @@ static void lsp_on_completion_response(LspClient *lsp, const char *result_json)
     // a slow/out-of-order reply can never clobber a fresher, still-pending one.
     cJSON *root = cJSON_Parse(result_json);
     int id = -1;
+    cJSON *id_item;
     if (root)
     {
-        cJSON *id_item = cJSON_GetObjectItem(root, "id");
+        id_item = cJSON_GetObjectItem(root, "id");
         if (id_item && cJSON_IsNumber(id_item))
             id = id_item->valueint;
         cJSON_Delete(root);
@@ -281,15 +303,18 @@ static void lsp_on_completion_response(LspClient *lsp, const char *result_json)
  */
 static int lsp_find_buffer_id_by_uri(const char *uri)
 {
+    int first_buffer_id;
+    struct buffer_t *b;
+    char buf_uri[PATH_MAX + 8];
+    char *fullname_str;
     if (E.buffers == NULL) return -1;
-    int first_buffer_id = E.buffers->buffer_id;
-    struct buffer_t *b = E.buffers;
+    first_buffer_id = E.buffers->buffer_id;
+    b = E.buffers;
     do
     {
         if (b->type == FILE_BUFF)
         {
-            char buf_uri[PATH_MAX + 8];
-            char *fullname_str = (char*) utf8ToString(b->fullname);
+            fullname_str = (char*) utf8ToString(b->fullname);
             snprintf(buf_uri, sizeof(buf_uri), "file://%s", fullname_str);
             gfree(fullname_str);
 
@@ -312,15 +337,18 @@ static int lsp_find_buffer_id_by_uri(const char *uri)
  * plain character indices here too — correct for ASCII, an approximation
  * for the rest.
  */
-static void lspJumpToUri(const char *uri, int line, int character)
+static void lspJumpToUri(const char *uri, const int line, const int character)
 {
+    int buffer_id;
+    Utf8Char *path;
+    struct buffer_t *buf;
     if (strncmp(uri, "file://", 7) != 0)
         return; // not a local file — nothing this editor can open
 
-    int buffer_id = lsp_find_buffer_id_by_uri(uri);
+    buffer_id = lsp_find_buffer_id_by_uri(uri);
     if (buffer_id < 0)
     {
-        Utf8Char *path = stringToUtf8((unsigned char *) uri + 7);
+        path = stringToUtf8((unsigned char *) uri + 7);
         buffer_id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
         gfree(path);
         if (buffer_id < 0)
@@ -334,7 +362,7 @@ static void lspJumpToUri(const char *uri, int line, int character)
         bufferSwitch(buffer_id);
     }
 
-    struct buffer_t *buf = bufferFindById(buffer_id);
+    buf = bufferFindById(buffer_id);
     if (!buf) return;
 
     buf->y = (line < 0) ? 0 : (line >= buf->numrows ? (buf->numrows > 0 ? buf->numrows - 1 : 0) : line);
@@ -345,29 +373,38 @@ static void lspJumpToUri(const char *uri, int line, int character)
 
 static void lsp_on_definition_response(LspClient *lsp, const char *result_json)
 {
+    cJSON *root;
+    cJSON *result;
+    cJSON *loc;
+    int jumped;
+    cJSON *uri_item;
+    cJSON *range;
+    cJSON *start;
+    cJSON *line_item;
+    cJSON *char_item;
     (void) lsp;
-    cJSON *root = cJSON_Parse(result_json);
+    root = cJSON_Parse(result_json);
     if (!root) return;
 
-    cJSON *result = cJSON_GetObjectItem(root, "result");
-    cJSON *loc = NULL;
+    result = cJSON_GetObjectItem(root, "result");
+    loc = NULL;
     if (result && cJSON_IsArray(result) && cJSON_GetArraySize(result) > 0)
         loc = cJSON_GetArrayItem(result, 0);
     else if (result && cJSON_IsObject(result))
         loc = result;
 
-    int jumped = 0;
+    jumped = 0;
     if (loc)
     {
         // Location has uri/range; LocationLink (what clangd actually sends)
         // has targetUri/targetRange instead.
-        cJSON *uri_item = cJSON_GetObjectItem(loc, "uri");
-        cJSON *range = cJSON_GetObjectItem(loc, "range");
+        uri_item = cJSON_GetObjectItem(loc, "uri");
+        range = cJSON_GetObjectItem(loc, "range");
         if (!uri_item) uri_item = cJSON_GetObjectItem(loc, "targetUri");
         if (!range) range = cJSON_GetObjectItem(loc, "targetRange");
-        cJSON *start = range ? cJSON_GetObjectItem(range, "start") : NULL;
-        cJSON *line_item = start ? cJSON_GetObjectItem(start, "line") : NULL;
-        cJSON *char_item = start ? cJSON_GetObjectItem(start, "character") : NULL;
+        start = range ? cJSON_GetObjectItem(range, "start") : NULL;
+        line_item = start ? cJSON_GetObjectItem(start, "line") : NULL;
+        char_item = start ? cJSON_GetObjectItem(start, "character") : NULL;
 
         if (uri_item && cJSON_IsString(uri_item) && line_item && char_item)
         {
@@ -391,13 +428,14 @@ static void lsp_on_definition_response(LspClient *lsp, const char *result_json)
  */
 static const char *lsp_hover_contents_text(cJSON *contents)
 {
+    cJSON *value;
     if (!contents) return NULL;
     if (cJSON_IsString(contents)) return contents->valuestring;
     if (cJSON_IsArray(contents) && cJSON_GetArraySize(contents) > 0)
         return lsp_hover_contents_text(cJSON_GetArrayItem(contents, 0));
     if (cJSON_IsObject(contents))
     {
-        cJSON *value = cJSON_GetObjectItem(contents, "value");
+        value = cJSON_GetObjectItem(contents, "value");
         if (value && cJSON_IsString(value)) return value->valuestring;
     }
     return NULL;
@@ -405,18 +443,23 @@ static const char *lsp_hover_contents_text(cJSON *contents)
 
 static void lsp_on_hover_response(LspClient *lsp, const char *result_json)
 {
+    cJSON *root;
+    cJSON *result;
+    cJSON *contents;
+    const char *text;
+    char first_line[256];
+    int i;
     (void) lsp;
-    cJSON *root = cJSON_Parse(result_json);
+    root = cJSON_Parse(result_json);
     if (!root) return;
 
-    cJSON *result = cJSON_GetObjectItem(root, "result");
-    cJSON *contents = result ? cJSON_GetObjectItem(result, "contents") : NULL;
-    const char *text = lsp_hover_contents_text(contents);
+    result = cJSON_GetObjectItem(root, "result");
+    contents = result ? cJSON_GetObjectItem(result, "contents") : NULL;
+    text = lsp_hover_contents_text(contents);
 
     if (text && text[0])
     {
-        char first_line[256];
-        int i = 0;
+        i = 0;
         while (text[i] && text[i] != '\n' && i < (int) sizeof(first_line) - 1)
         {
             first_line[i] = text[i];
@@ -454,22 +497,34 @@ static int flatTextEditCmpDescending(const void *a, const void *b)
  * against — LSP TextEdits within one array are always relative to the
  * original, unedited document.
  */
-static void applyTextEditsToUri(const char *uri, cJSON *edits_array)
+static void applyTextEditsToUri(const char *uri, const cJSON *edits_array)
 {
+    int count;
+    FlatTextEdit *edits;
+    int n;
+    int i;
+    cJSON *e;
+    cJSON *range;
+    cJSON *new_text;
+    cJSON *start;
+    cJSON *end;
+    int buffer_id;
+    Utf8Char *path;
+    struct buffer_t *buf;
     if (strncmp(uri, "file://", 7) != 0) return;
-    int count = cJSON_GetArraySize(edits_array);
+    count = cJSON_GetArraySize(edits_array);
     if (count <= 0) return;
 
-    FlatTextEdit *edits = calloc((size_t) count, sizeof(FlatTextEdit));
+    edits = gcalloc((size_t) count, sizeof(FlatTextEdit));
     if (!edits) return;
-    int n = 0;
-    for (int i = 0; i < count; i++)
+    n = 0;
+    for (i = 0; i < count; i++)
     {
-        cJSON *e = cJSON_GetArrayItem(edits_array, i);
-        cJSON *range = cJSON_GetObjectItem(e, "range");
-        cJSON *new_text = cJSON_GetObjectItem(e, "newText");
-        cJSON *start = range ? cJSON_GetObjectItem(range, "start") : NULL;
-        cJSON *end = range ? cJSON_GetObjectItem(range, "end") : NULL;
+        e = cJSON_GetArrayItem(edits_array, i);
+        range = cJSON_GetObjectItem(e, "range");
+        new_text = cJSON_GetObjectItem(e, "newText");
+        start = range ? cJSON_GetObjectItem(range, "start") : NULL;
+        end = range ? cJSON_GetObjectItem(range, "end") : NULL;
         if (!start || !end || !new_text || !cJSON_IsString(new_text)) continue;
 
         edits[n].start_line = cJSON_GetObjectItem(start, "line")->valueint;
@@ -481,32 +536,41 @@ static void applyTextEditsToUri(const char *uri, cJSON *edits_array)
     }
     qsort(edits, (size_t) n, sizeof(FlatTextEdit), flatTextEditCmpDescending);
 
-    int buffer_id = lsp_find_buffer_id_by_uri(uri);
+    buffer_id = lsp_find_buffer_id_by_uri(uri);
     if (buffer_id < 0)
     {
-        Utf8Char *path = stringToUtf8((unsigned char *) uri + 7);
+        path = stringToUtf8((unsigned char *) uri + 7);
         buffer_id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
         gfree(path);
     }
-    struct buffer_t *buf = bufferFindById(buffer_id);
+    buf = bufferFindById(buffer_id);
     if (buf)
     {
-        for (int i = 0; i < n; i++)
+        for (i = 0; i < n; i++)
             bufferApplyTextEdit(buf, edits[i].start_line, edits[i].start_col,
                                 edits[i].end_line, edits[i].end_col, edits[i].new_text);
     }
 
-    for (int i = 0; i < n; i++) gfree(edits[i].new_text);
+    for (i = 0; i < n; i++) gfree(edits[i].new_text);
     gfree(edits);
 }
 
 static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
 {
+    cJSON *root;
+    cJSON *result;
+    int files_touched;
+    cJSON *changes;
+    cJSON *edits_array;
+    cJSON *document_changes;
+    cJSON *entry;
+    cJSON *text_doc;
+    cJSON *uri_item;
     (void) lsp;
-    cJSON *root = cJSON_Parse(result_json);
+    root = cJSON_Parse(result_json);
     if (!root) return;
 
-    cJSON *result = cJSON_GetObjectItem(root, "result");
+    result = cJSON_GetObjectItem(root, "result");
     if (!result)
     {
         editorSetStatusMessage("Rename failed (no response from server)");
@@ -514,12 +578,11 @@ static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
         return;
     }
 
-    int files_touched = 0;
+    files_touched = 0;
 
-    cJSON *changes = cJSON_GetObjectItem(result, "changes");
+    changes = cJSON_GetObjectItem(result, "changes");
     if (changes)
     {
-        cJSON *edits_array;
         // cJSON objects are linked lists of (string key, value) pairs —
         // iterating like this hits the URI keys directly, no key
         // enumeration API needed.
@@ -530,15 +593,14 @@ static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
         }
     }
 
-    cJSON *document_changes = cJSON_GetObjectItem(result, "documentChanges");
+    document_changes = cJSON_GetObjectItem(result, "documentChanges");
     if (document_changes && cJSON_IsArray(document_changes))
     {
-        cJSON *entry;
         cJSON_ArrayForEach(entry, document_changes)
         {
-            cJSON *text_doc = cJSON_GetObjectItem(entry, "textDocument");
-            cJSON *uri_item = text_doc ? cJSON_GetObjectItem(text_doc, "uri") : NULL;
-            cJSON *edits_array = cJSON_GetObjectItem(entry, "edits");
+            text_doc = cJSON_GetObjectItem(entry, "textDocument");
+            uri_item = text_doc ? cJSON_GetObjectItem(text_doc, "uri") : NULL;
+            edits_array = cJSON_GetObjectItem(entry, "edits");
             if (uri_item && cJSON_IsString(uri_item) && edits_array)
             {
                 applyTextEditsToUri(uri_item->valuestring, edits_array);
@@ -560,25 +622,36 @@ static struct buffer_t *g_format_target_buf = NULL;
 
 static void lsp_on_formatting_response(LspClient *lsp, const char *result_json)
 {
+    cJSON *root;
+    cJSON *result;
+    int count;
+    FlatTextEdit *edits;
+    int n;
+    int i;
+    cJSON *e;
+    cJSON *range;
+    cJSON *new_text;
+    cJSON *start;
+    cJSON *end;
     (void) lsp;
-    cJSON *root = cJSON_Parse(result_json);
+    root = cJSON_Parse(result_json);
     if (!root) return;
 
-    cJSON *result = cJSON_GetObjectItem(root, "result");
+    result = cJSON_GetObjectItem(root, "result");
     if (result && cJSON_IsArray(result) && g_format_target_buf)
     {
-        int count = cJSON_GetArraySize(result);
-        FlatTextEdit *edits = count > 0 ? calloc((size_t) count, sizeof(FlatTextEdit)) : NULL;
-        int n = 0;
+        count = cJSON_GetArraySize(result);
+        edits = count > 0 ? gcalloc((size_t) count, sizeof(FlatTextEdit)) : NULL;
+        n = 0;
         if (edits)
         {
-            for (int i = 0; i < count; i++)
+            for (i = 0; i < count; i++)
             {
-                cJSON *e = cJSON_GetArrayItem(result, i);
-                cJSON *range = cJSON_GetObjectItem(e, "range");
-                cJSON *new_text = cJSON_GetObjectItem(e, "newText");
-                cJSON *start = range ? cJSON_GetObjectItem(range, "start") : NULL;
-                cJSON *end = range ? cJSON_GetObjectItem(range, "end") : NULL;
+                e = cJSON_GetArrayItem(result, i);
+                range = cJSON_GetObjectItem(e, "range");
+                new_text = cJSON_GetObjectItem(e, "newText");
+                start = range ? cJSON_GetObjectItem(range, "start") : NULL;
+                end = range ? cJSON_GetObjectItem(range, "end") : NULL;
                 if (!start || !end || !new_text || !cJSON_IsString(new_text)) continue;
 
                 edits[n].start_line = cJSON_GetObjectItem(start, "line")->valueint;
@@ -589,10 +662,10 @@ static void lsp_on_formatting_response(LspClient *lsp, const char *result_json)
                 n++;
             }
             qsort(edits, (size_t) n, sizeof(FlatTextEdit), flatTextEditCmpDescending);
-            for (int i = 0; i < n; i++)
+            for (i = 0; i < n; i++)
                 bufferApplyTextEdit(g_format_target_buf, edits[i].start_line, edits[i].start_col,
                                     edits[i].end_line, edits[i].end_col, edits[i].new_text);
-            for (int i = 0; i < n; i++) gfree(edits[i].new_text);
+            for (i = 0; i < n; i++) gfree(edits[i].new_text);
             gfree(edits);
         }
     }
@@ -607,30 +680,36 @@ static void lsp_on_formatting_response(LspClient *lsp, const char *result_json)
 void lspHandleMessage(LspClient *lsp, const char *json)
 {
     cJSON *root = cJSON_Parse(json);
+    cJSON *id;
+    cJSON *method;
+    cJSON *params;
+    void (*callback)(LspClient*, const char*);
+    const char *method_str;
+    cJSON *uri_item;
+    int buffer_id;
     if (!root) return;
 
-    cJSON *id = cJSON_GetObjectItem(root, "id");
-    cJSON *method = cJSON_GetObjectItem(root, "method");
-    cJSON *result = cJSON_GetObjectItem(root, "result");
-    cJSON *params = cJSON_GetObjectItem(root, "params");
+    id = cJSON_GetObjectItem(root, "id");
+    method = cJSON_GetObjectItem(root, "method");
+    params = cJSON_GetObjectItem(root, "params");
 
     if (id && cJSON_IsNumber(id))
     {
         // A response to something we sent — dispatch by id, not by method
-        void (*callback)(LspClient*, const char*) = lsp_pop_pending(lsp, id->valueint);
+        callback = lsp_pop_pending(lsp, id->valueint);
         if (callback)
             callback(lsp, json); // full message — lspParseCompletion pulls "result" itself
     }
     else if (method && cJSON_IsString(method))
     {
         // A genuine server-initiated notification
-        const char *method_str = method->valuestring;
+        method_str = method->valuestring;
         if (strcmp(method_str, "textDocument/publishDiagnostics") == 0 && params)
         {
-            cJSON *uri_item = cJSON_GetObjectItem(params, "uri");
+            uri_item = cJSON_GetObjectItem(params, "uri");
             if (uri_item && cJSON_IsString(uri_item))
             {
-                int buffer_id = lsp_find_buffer_id_by_uri(uri_item->valuestring);
+                buffer_id = lsp_find_buffer_id_by_uri(uri_item->valuestring);
                 if (buffer_id >= 0)
                     lspParseDiagnostics(json, &E.lsp_diagnostics, buffer_id);
             }
@@ -641,18 +720,35 @@ void lspHandleMessage(LspClient *lsp, const char *json)
 }
 
 
-int lspStart(LspClient *client, const char *root_dir, char *const server_argv[])
+int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[])
 {
-    if (!client || !root_dir || !server_argv || !server_argv[0])
-        return -1;
-
     int stdin_pipe[2];
     int stdout_pipe[2];
+    pid_t pid;
+    int flags;
+    char root_uri[PATH_MAX + 8];
+    int init_id;
+    cJSON *req;
+    cJSON *params;
+    cJSON *caps;
+    cJSON *td_caps;
+    cJSON *comp_caps;
+    cJSON *comp_item;
+    cJSON *general;
+    cJSON *encodings;
+    char *msg;
+#ifdef APP_DEBUG
+    int dbg_fd;
+#else
+    int devnull;
+#endif
+    if (!lsp || !project_root || !server_argv || !server_argv[0])
+        return -1;
 
     if (pipe(stdin_pipe) == -1 || pipe(stdout_pipe) == -1)
         return -1;
 
-    pid_t pid = fork();
+    pid = fork();
     if (pid == 0)
     {
         close(stdin_pipe[1]);
@@ -664,14 +760,17 @@ int lspStart(LspClient *client, const char *root_dir, char *const server_argv[])
         // Only stdin/stdout carry the JSON-RPC transport; stderr would
         // otherwise stay pointed at the terminal we're drawing on, and
         // language servers log to it freely (clangd emits a line per
-        // request at its default level). While the editor is running the
-        // ~50ms full-screen redraw paints over that, but on quit — once
-        // the screen is restored and we've stopped redrawing — the
-        // server's shutdown logging lands on the user's clean prompt.
-        // Under APP_DEBUG it's left attached instead, so `beluga 2>log`
-        // captures server logs alongside appDebug() output.
-#ifndef APP_DEBUG
-        int devnull = open("/dev/null", O_WRONLY);
+        // request at its default level) — a normal build sends it to
+        // /dev/null, an APP_DEBUG one to the same ~/.beluga/debug.log
+        // appDebug() writes to (see appDebugFd() in terminal.c), so the
+        // server's own logging lands somewhere readable instead of
+        // corrupting the screen it used to be left attached to directly.
+#ifdef APP_DEBUG
+        dbg_fd = appDebugFd();
+        if (dbg_fd >= 0)
+            dup2(dbg_fd, STDERR_FILENO);
+#else
+        devnull = open("/dev/null", O_WRONLY);
         if (devnull >= 0)
         {
             dup2(devnull, STDERR_FILENO);
@@ -691,41 +790,40 @@ int lspStart(LspClient *client, const char *root_dir, char *const server_argv[])
         close(stdin_pipe[0]);
         close(stdout_pipe[1]);
 
-        client->write_to_server_fd = stdin_pipe[1];
-        client->read_from_server_fd = stdout_pipe[0];
-        client->pid = pid;
-        client->next_id = 1;
-        client->state = LSP_INITIALIZING;
-        client->pending_count = 0;
-        client->recv_buf = NULL;
-        client->recv_len = 0;
-        client->recv_cap = 0;
-        client->completion_debounce_pending = 0;
-        client->completion_debounce_deadline_ms = 0;
-        client->completion_latest_request_id = 0;
+        lsp->write_to_server_fd = stdin_pipe[1];
+        lsp->read_from_server_fd = stdout_pipe[0];
+        lsp->pid = pid;
+        lsp->next_id = 1;
+        lsp->state = LSP_INITIALIZING;
+        lsp->pending_count = 0;
+        lsp->recv_buf = NULL;
+        lsp->recv_len = 0;
+        lsp->recv_cap = 0;
+        lsp->completion_debounce_pending = 0;
+        lsp->completion_debounce_deadline_ms = 0;
+        lsp->completion_latest_request_id = 0;
 
         // Make the read side non-blocking — it'll be driven by select()
-        int flags = fcntl(client->read_from_server_fd, F_GETFL, 0);
-        fcntl(client->read_from_server_fd, F_SETFL, flags | O_NONBLOCK);
+        flags = fcntl(lsp->read_from_server_fd, F_GETFL, 0);
+        fcntl(lsp->read_from_server_fd, F_SETFL, flags | O_NONBLOCK);
 
-        char root_uri[PATH_MAX + 8];
-        snprintf(root_uri, sizeof(root_uri), "file://%s", root_dir);
+        snprintf(root_uri, sizeof(root_uri), "file://%s", project_root);
 
-        int init_id = client->next_id++;
+        init_id = lsp->next_id++;
 
-        cJSON *req = cJSON_CreateObject();
+        req = cJSON_CreateObject();
         cJSON_AddStringToObject(req, "jsonrpc", "2.0");
         cJSON_AddNumberToObject(req, "id", init_id);
         cJSON_AddStringToObject(req, "method", "initialize");
 
-        cJSON *params = cJSON_CreateObject();
+        params = cJSON_CreateObject();
         cJSON_AddNumberToObject(params, "processId", getpid());
         cJSON_AddStringToObject(params, "rootUri", root_uri);
 
-        cJSON *caps = cJSON_CreateObject();
-        cJSON *td_caps = cJSON_CreateObject();
-        cJSON *comp_caps = cJSON_CreateObject();
-        cJSON *comp_item = cJSON_CreateObject();
+        caps = cJSON_CreateObject();
+        td_caps = cJSON_CreateObject();
+        comp_caps = cJSON_CreateObject();
+        comp_item = cJSON_CreateObject();
 
         cJSON_AddBoolToObject(comp_item, "snippetSupport", 0);
         cJSON_AddBoolToObject(comp_item, "commitCharactersSupport", 0);
@@ -740,8 +838,8 @@ int lspStart(LspClient *client, const char *root_dir, char *const server_argv[])
         // (LSP 3.17+, clangd 15+ support this) — this matches your Utf8Char
         // model exactly, so a "character" position == an index into
         // row->characters[], with no UTF-16 surrogate-pair conversion needed.
-        cJSON *general = cJSON_CreateObject();
-        cJSON *encodings = cJSON_CreateArray();
+        general = cJSON_CreateObject();
+        encodings = cJSON_CreateArray();
         cJSON_AddItemToArray(encodings, cJSON_CreateString("utf-8"));
         cJSON_AddItemToObject(general, "positionEncodings", encodings);
         cJSON_AddItemToObject(caps, "general", general);
@@ -749,9 +847,9 @@ int lspStart(LspClient *client, const char *root_dir, char *const server_argv[])
         cJSON_AddItemToObject(params, "capabilities", caps);
         cJSON_AddItemToObject(req, "params", params);
 
-        char *msg = cJSON_PrintUnformatted(req);
-        lsp_send(client, msg);
-        lsp_track_pending(client, init_id, lsp_on_initialize_response);
+        msg = cJSON_PrintUnformatted(req);
+        lsp_send(lsp, msg);
+        lsp_track_pending(lsp, init_id, lsp_on_initialize_response);
 
         gfree(msg);
         cJSON_Delete(req);
@@ -779,10 +877,11 @@ int lspStart(LspClient *client, const char *root_dir, char *const server_argv[])
  */
 static int lspBufferUri(const struct buffer_t *buf, char *uri, size_t uri_size)
 {
+    char *full;
     if (!buf || !buf->fullname)
         return 0;
 
-    char *full = (char *) utf8ToString(buf->fullname);
+    full = (char *) utf8ToString(buf->fullname);
     if (!full)
         return 0;
 
@@ -793,14 +892,21 @@ static int lspBufferUri(const struct buffer_t *buf, char *uri, size_t uri_size)
 
 void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
 {
+    char uri[PATH_MAX + 8];
+    char* text;
+    struct lspServerConfig_t* file_cfg;
+    const char* language_id;
+    cJSON* root;
+    cJSON* params;
+    cJSON* textDoc;
+    char* msg;
     if (!lsp || !buf)
         return;
 
-    char uri[PATH_MAX + 8];
     if (!lspBufferUri(buf, uri, sizeof(uri)))
         return;
 
-    char* text = bufferToText(buf);
+    text = bufferToText(buf);
     if (!text) return;
 
     // The buffer's OWN registered server config, not lsp->language_id (the
@@ -815,17 +921,17 @@ void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
     // it tells .ts's type annotations from .js), that turned into TS
     // syntax reported as JS syntax errors the moment a JS file happened
     // to be opened first in the session.
-    struct lspServerConfig_t* file_cfg = lspServerConfigFor(buf->fullname);
-    const char* language_id = (file_cfg && file_cfg->language_id[0])
+    file_cfg = lspServerConfigFor(buf->fullname);
+    language_id = (file_cfg && file_cfg->language_id[0])
                                    ? file_cfg->language_id
                                    : (lsp->language_id[0] ? lsp->language_id : "c");
 
-    cJSON* root = cJSON_CreateObject();
+    root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "jsonrpc", "2.0");
     cJSON_AddStringToObject(root, "method", "textDocument/didOpen");
 
-    cJSON* params = cJSON_CreateObject();
-    cJSON* textDoc = cJSON_CreateObject();
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
     cJSON_AddStringToObject(textDoc, "uri", uri);
     cJSON_AddStringToObject(textDoc, "languageId", language_id);
     cJSON_AddNumberToObject(textDoc, "version", 1);
@@ -833,7 +939,7 @@ void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
     cJSON_AddItemToObject(params, "textDocument", textDoc);
     cJSON_AddItemToObject(root, "params", params);
 
-    char* msg = cJSON_PrintUnformatted(root);
+    msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
 
     gfree(text);
@@ -843,35 +949,42 @@ void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
 
 void lspDidChange(LspClient* lsp, struct buffer_t* buf)
 {
+    char uri[PATH_MAX + 8];
+    char* text;
+    cJSON* root;
+    cJSON* params;
+    cJSON* textDoc;
+    cJSON* changes;
+    cJSON* change;
+    char* msg;
     if (!lsp || !buf || lsp->state != LSP_READY)
         return;
 
-    char uri[PATH_MAX + 8];
     if (!lspBufferUri(buf, uri, sizeof(uri)))
         return;
 
-    char* text = bufferToText(buf);
+    text = bufferToText(buf);
     if (!text) return;
 
-    cJSON* root = cJSON_CreateObject();
+    root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "jsonrpc", "2.0");
     cJSON_AddStringToObject(root, "method", "textDocument/didChange");
 
-    cJSON* params = cJSON_CreateObject();
-    cJSON* textDoc = cJSON_CreateObject();
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
     cJSON_AddStringToObject(textDoc, "uri", uri);
     cJSON_AddNumberToObject(textDoc, "version", buf->dirty);
     cJSON_AddItemToObject(params, "textDocument", textDoc);
 
-    cJSON* changes = cJSON_CreateArray();
-    cJSON* change = cJSON_CreateObject();
+    changes = cJSON_CreateArray();
+    change = cJSON_CreateObject();
     cJSON_AddStringToObject(change, "text", text); // full-document sync
     cJSON_AddItemToArray(changes, change);
     cJSON_AddItemToObject(params, "contentChanges", changes);
 
     cJSON_AddItemToObject(root, "params", params);
 
-    char* msg = cJSON_PrintUnformatted(root);
+    msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
 
     gfree(text);
@@ -881,49 +994,59 @@ void lspDidChange(LspClient* lsp, struct buffer_t* buf)
 
 void lspDidClose(LspClient* lsp, struct buffer_t* buf)
 {
+    char uri[PATH_MAX + 8];
+    cJSON* root;
+    cJSON* params;
+    cJSON* textDoc;
+    char* msg;
     if (!lsp || !buf)
         return;
 
-    char uri[PATH_MAX + 8];
     if (!lspBufferUri(buf, uri, sizeof(uri)))
         return;
 
-    cJSON* root = cJSON_CreateObject();
+    root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "jsonrpc", "2.0");
     cJSON_AddStringToObject(root, "method", "textDocument/didClose");
 
-    cJSON* params = cJSON_CreateObject();
-    cJSON* textDoc = cJSON_CreateObject();
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
     cJSON_AddStringToObject(textDoc, "uri", uri);
     cJSON_AddItemToObject(params, "textDocument", textDoc);
     cJSON_AddItemToObject(root, "params", params);
 
-    char* msg = cJSON_PrintUnformatted(root);
+    msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
 
     gfree(msg);
     cJSON_Delete(root);
 }
 
-void lspRequestCompletion(LspClient *lsp, struct buffer_t *buf,
-                          int line, int col,
-                          int screen_x, int screen_y)
+void lspRequestCompletion(LspClient *lsp, const struct buffer_t *buf,
+                          const int line, const int col,
+                          const int screen_x, const int screen_y)
 {
+    char uri[PATH_MAX + 8];
+    int req_id;
+    cJSON* req;
+    cJSON* params;
+    cJSON* td;
+    cJSON* position;
+    char* msg;
     if (!lsp || lsp->state != LSP_READY) return;
 
     lsp->completion_cursor_x = screen_x;
     lsp->completion_cursor_y = screen_y;
 
-    char uri[PATH_MAX + 8];
     if (!lspBufferUri(buf, uri, sizeof(uri)))
         return;
 
-    int req_id = lsp->next_id++;
+    req_id = lsp->next_id++;
 
-    cJSON* req = cJSON_CreateObject();
-    cJSON* params = cJSON_CreateObject();
-    cJSON* td = cJSON_CreateObject();
-    cJSON* position = cJSON_CreateObject();
+    req = cJSON_CreateObject();
+    params = cJSON_CreateObject();
+    td = cJSON_CreateObject();
+    position = cJSON_CreateObject();
 
     cJSON_AddStringToObject(req, "jsonrpc", "2.0");
     cJSON_AddNumberToObject(req, "id", req_id);
@@ -944,7 +1067,7 @@ void lspRequestCompletion(LspClient *lsp, struct buffer_t *buf,
     cJSON_AddItemToObject(params, "textDocument", td);
     cJSON_AddItemToObject(req, "params", params);
 
-    char* msg = cJSON_PrintUnformatted(req);
+    msg = cJSON_PrintUnformatted(req);
     lsp_send(lsp, msg);
     lsp_track_pending(lsp, req_id, lsp_on_completion_response);
     lsp->completion_requested = 1;
@@ -955,35 +1078,41 @@ void lspRequestCompletion(LspClient *lsp, struct buffer_t *buf,
 }
 
 void lspRequestDefinition(LspClient *lsp, struct buffer_t *buf,
-                          int line, int col)
+                          const int line, const int col)
 {
+    char uri[PATH_MAX + 8];
+    int req_id;
+    cJSON* req;
+    cJSON* params;
+    cJSON* textDoc;
+    cJSON* position;
+    char* msg;
     if (!lsp || lsp->state != LSP_READY || !buf)
         return;
 
-    char uri[PATH_MAX + 8];
     if (!lspBufferUri(buf, uri, sizeof(uri)))
         return;
 
-    int req_id = lsp->next_id++;
+    req_id = lsp->next_id++;
 
-    cJSON* req = cJSON_CreateObject();
+    req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "jsonrpc", "2.0");
     cJSON_AddNumberToObject(req, "id", req_id);
     cJSON_AddStringToObject(req, "method", "textDocument/definition");
 
-    cJSON* params = cJSON_CreateObject();
-    cJSON* textDoc = cJSON_CreateObject();
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
     cJSON_AddStringToObject(textDoc, "uri", uri);
     cJSON_AddItemToObject(params, "textDocument", textDoc);
 
-    cJSON* position = cJSON_CreateObject();
+    position = cJSON_CreateObject();
     cJSON_AddNumberToObject(position, "line", line);
     cJSON_AddNumberToObject(position, "character", col);
     cJSON_AddItemToObject(params, "position", position);
 
     cJSON_AddItemToObject(req, "params", params);
 
-    char* msg = cJSON_PrintUnformatted(req);
+    msg = cJSON_PrintUnformatted(req);
     lsp_send(lsp, msg);
     lsp_track_pending(lsp, req_id, lsp_on_definition_response);
 
@@ -991,35 +1120,41 @@ void lspRequestDefinition(LspClient *lsp, struct buffer_t *buf,
     cJSON_Delete(req);
 }
 
-void lspRequestHover(LspClient *lsp, struct buffer_t *buf, int line, int col)
+void lspRequestHover(LspClient *lsp, struct buffer_t *buf, const int line, const int col)
 {
+    char uri[PATH_MAX + 8];
+    int req_id;
+    cJSON* req;
+    cJSON* params;
+    cJSON* textDoc;
+    cJSON* position;
+    char* msg;
     if (!lsp || lsp->state != LSP_READY || !buf)
         return;
 
-    char uri[PATH_MAX + 8];
     if (!lspBufferUri(buf, uri, sizeof(uri)))
         return;
 
-    int req_id = lsp->next_id++;
+    req_id = lsp->next_id++;
 
-    cJSON* req = cJSON_CreateObject();
+    req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "jsonrpc", "2.0");
     cJSON_AddNumberToObject(req, "id", req_id);
     cJSON_AddStringToObject(req, "method", "textDocument/hover");
 
-    cJSON* params = cJSON_CreateObject();
-    cJSON* textDoc = cJSON_CreateObject();
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
     cJSON_AddStringToObject(textDoc, "uri", uri);
     cJSON_AddItemToObject(params, "textDocument", textDoc);
 
-    cJSON* position = cJSON_CreateObject();
+    position = cJSON_CreateObject();
     cJSON_AddNumberToObject(position, "line", line);
     cJSON_AddNumberToObject(position, "character", col);
     cJSON_AddItemToObject(params, "position", position);
 
     cJSON_AddItemToObject(req, "params", params);
 
-    char* msg = cJSON_PrintUnformatted(req);
+    msg = cJSON_PrintUnformatted(req);
     lsp_send(lsp, msg);
     lsp_track_pending(lsp, req_id, lsp_on_hover_response);
 
@@ -1027,29 +1162,35 @@ void lspRequestHover(LspClient *lsp, struct buffer_t *buf, int line, int col)
     cJSON_Delete(req);
 }
 
-void lspRequestRename(LspClient *lsp, struct buffer_t *buf, int line, int col,
+void lspRequestRename(LspClient *lsp, struct buffer_t *buf, const int line, const int col,
                       const char *new_name)
 {
+    char uri[PATH_MAX + 8];
+    int req_id;
+    cJSON* req;
+    cJSON* params;
+    cJSON* textDoc;
+    cJSON* position;
+    char* msg;
     if (!lsp || lsp->state != LSP_READY || !buf)
         return;
 
-    char uri[PATH_MAX + 8];
     if (!lspBufferUri(buf, uri, sizeof(uri)))
         return;
 
-    int req_id = lsp->next_id++;
+    req_id = lsp->next_id++;
 
-    cJSON* req = cJSON_CreateObject();
+    req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "jsonrpc", "2.0");
     cJSON_AddNumberToObject(req, "id", req_id);
     cJSON_AddStringToObject(req, "method", "textDocument/rename");
 
-    cJSON* params = cJSON_CreateObject();
-    cJSON* textDoc = cJSON_CreateObject();
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
     cJSON_AddStringToObject(textDoc, "uri", uri);
     cJSON_AddItemToObject(params, "textDocument", textDoc);
 
-    cJSON* position = cJSON_CreateObject();
+    position = cJSON_CreateObject();
     cJSON_AddNumberToObject(position, "line", line);
     cJSON_AddNumberToObject(position, "character", col);
     cJSON_AddItemToObject(params, "position", position);
@@ -1057,7 +1198,7 @@ void lspRequestRename(LspClient *lsp, struct buffer_t *buf, int line, int col,
 
     cJSON_AddItemToObject(req, "params", params);
 
-    char* msg = cJSON_PrintUnformatted(req);
+    msg = cJSON_PrintUnformatted(req);
     lsp_send(lsp, msg);
     lsp_track_pending(lsp, req_id, lsp_on_rename_response);
     lspAwaitResponse(lsp, req_id, 3000);
@@ -1068,10 +1209,16 @@ void lspRequestRename(LspClient *lsp, struct buffer_t *buf, int line, int col,
 
 void lspRequestFormatting(LspClient *lsp, struct buffer_t *buf)
 {
+    char uri[PATH_MAX + 8];
+    int req_id;
+    cJSON* req;
+    cJSON* params;
+    cJSON* textDoc;
+    cJSON* options;
+    char* msg;
     if (!lsp || lsp->state != LSP_READY || !buf)
         return;
 
-    char uri[PATH_MAX + 8];
     if (!lspBufferUri(buf, uri, sizeof(uri)))
         return;
 
@@ -1082,26 +1229,26 @@ void lspRequestFormatting(LspClient *lsp, struct buffer_t *buf)
     // land at the wrong offsets in our buffer.
     lspDidChange(lsp, buf);
 
-    int req_id = lsp->next_id++;
+    req_id = lsp->next_id++;
 
-    cJSON* req = cJSON_CreateObject();
+    req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "jsonrpc", "2.0");
     cJSON_AddNumberToObject(req, "id", req_id);
     cJSON_AddStringToObject(req, "method", "textDocument/formatting");
 
-    cJSON* params = cJSON_CreateObject();
-    cJSON* textDoc = cJSON_CreateObject();
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
     cJSON_AddStringToObject(textDoc, "uri", uri);
     cJSON_AddItemToObject(params, "textDocument", textDoc);
 
-    cJSON* options = cJSON_CreateObject();
+    options = cJSON_CreateObject();
     cJSON_AddNumberToObject(options, "tabSize", E.constantes.TAB_LENGTH);
     cJSON_AddBoolToObject(options, "insertSpaces", 1);
     cJSON_AddItemToObject(params, "options", options);
 
     cJSON_AddItemToObject(req, "params", params);
 
-    char* msg = cJSON_PrintUnformatted(req);
+    msg = cJSON_PrintUnformatted(req);
     lsp_send(lsp, msg);
     g_format_target_buf = buf;
     lsp_track_pending(lsp, req_id, lsp_on_formatting_response);
@@ -1119,27 +1266,32 @@ void lspRequestFormatting(LspClient *lsp, struct buffer_t *buf)
     cJSON_Delete(req);
 }
 
-int lspAwaitResponse(LspClient *lsp, int request_id, int timeout_ms)
+int lspAwaitResponse(LspClient *lsp, const int request_id, const int timeout_ms)
 {
+    long deadline;
+    int still_pending;
+    int i;
+    fd_set fds;
+    struct timeval tv;
+    int ready;
     if (!lsp || lsp->read_from_server_fd < 0)
         return 0;
 
-    long deadline = monotonic_ms() + timeout_ms;
+    deadline = monotonic_ms() + timeout_ms;
     while (monotonic_ms() < deadline)
     {
-        int still_pending = 0;
-        for (int i = 0; i < lsp->pending_count; i++)
+        still_pending = 0;
+        for (i = 0; i < lsp->pending_count; i++)
         {
             if (lsp->pending[i].id == request_id) { still_pending = 1; break; }
         }
         if (!still_pending)
             return 1;
 
-        fd_set fds;
         FD_ZERO(&fds);
         FD_SET(lsp->read_from_server_fd, &fds);
-        struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 }; // 50ms
-        int ready = select(lsp->read_from_server_fd + 1, &fds, NULL, NULL, &tv);
+        tv = (struct timeval){ .tv_sec = 0, .tv_usec = 50000 }; // 50ms
+        ready = select(lsp->read_from_server_fd + 1, &fds, NULL, NULL, &tv);
         if (ready > 0)
             lspPoll(lsp);
     }
@@ -1163,11 +1315,13 @@ int lspAwaitResponse(LspClient *lsp, int request_id, int timeout_ms)
  */
 static void lsp_fire_completion_now(void)
 {
+    EditorPane *active;
+    struct buffer_t *buf;
     if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
         return;
 
-    EditorPane *active = splitScreenGetActivePane();
-    struct buffer_t *buf = bufferFindById(active->buffer_id);
+    active = splitScreenGetActivePane();
+    buf = bufferFindById(active->buffer_id);
     if (!buf || buf->type != FILE_BUFF || !buf->b_lsp_open)
         return;
 
@@ -1223,11 +1377,14 @@ void lspCompletionDebounceTick(void)
  */
 void lspSyncDebounceTick(void)
 {
+    EditorPane *active;
+    struct buffer_t *buf;
+    long now;
     if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
         return;
 
-    EditorPane *active = splitScreenGetActivePane();
-    struct buffer_t *buf = bufferFindById(active->buffer_id);
+    active = splitScreenGetActivePane();
+    buf = bufferFindById(active->buffer_id);
     if (!buf || buf->type != FILE_BUFF || !buf->b_lsp_open)
         return;
 
@@ -1236,7 +1393,7 @@ void lspSyncDebounceTick(void)
         return;
     }
 
-    long now = monotonic_ms();
+    now = monotonic_ms();
     if (!E.lsp_client->sync_debounce_pending ||
         E.lsp_client->sync_debounce_buffer_id != buf->buffer_id) {
         E.lsp_client->sync_debounce_pending = 1;
@@ -1258,29 +1415,36 @@ void lspSyncDebounceTick(void)
  * lsp->read_from_server_fd. Non-blocking: drains whatever's currently
  * available and feeds it to the incremental parser.
  */
-void lspPoll(LspClient *client)
+void lspPoll(LspClient *lsp)
 {
-    if (!client || client->read_from_server_fd < 0)
-        return;
-
     char chunk[4096];
     ssize_t n;
-    while ((n = read(client->read_from_server_fd, chunk, sizeof(chunk))) > 0)
-        lsp_feed(client, chunk, (size_t) n);
+    if (!lsp || lsp->read_from_server_fd < 0)
+        return;
+
+    while ((n = read(lsp->read_from_server_fd, chunk, sizeof(chunk))) > 0)
+        lsp_feed(lsp, chunk, (size_t) n);
     // n <= 0: EAGAIN (nothing more right now) or EOF/error — either way,
     // nothing further to do this cycle. EOF-triggered process-death
     // detection would need a waitpid check here, mirroring ptySessionIsAlive.
 }
 
-void lspShutdown(LspClient *client)
+void lspShutdown(LspClient *lsp)
 {
-    if (!client)
+    int first_buffer_id;
+    struct buffer_t* b;
+    cJSON *root;
+    char *msg;
+    int timeout;
+    int status;
+    pid_t result;
+    if (!lsp)
         return;
 
     if (E.buffers != NULL)
     {
-        int first_buffer_id = E.buffers->buffer_id;
-        struct buffer_t* b = E.buffers;
+        first_buffer_id = E.buffers->buffer_id;
+        b = E.buffers;
         do
         {
             if (b->b_lsp_open)
@@ -1292,33 +1456,33 @@ void lspShutdown(LspClient *client)
                 // last for a given URI is the one that actually closes
                 // it, regardless of iteration order.
                 if (bufferFindOtherLspOpen(b) == -1)
-                    lspDidClose(client, b);
+                    lspDidClose(lsp, b);
                 b->b_lsp_open = 0;
             }
             b = b->next;
         } while (b->buffer_id != first_buffer_id);
     }
 
-    if (client->state == LSP_READY)
+    if (lsp->state == LSP_READY)
     {
-        cJSON *root = cJSON_CreateObject();
+        root = cJSON_CreateObject();
         cJSON_AddStringToObject(root, "jsonrpc", "2.0");
-        cJSON_AddNumberToObject(root, "id", client->next_id++);
+        cJSON_AddNumberToObject(root, "id", lsp->next_id++);
         cJSON_AddStringToObject(root, "method", "shutdown");
 
-        char *msg = cJSON_PrintUnformatted(root);
-        lsp_send(client, msg);
+        msg = cJSON_PrintUnformatted(root);
+        lsp_send(lsp, msg);
         gfree(msg);
         cJSON_Delete(root);
 
-        client->state = LSP_SHUTTING_DOWN;
+        lsp->state = LSP_SHUTTING_DOWN;
 
-        int timeout = 1000;
-        while (client->state == LSP_SHUTTING_DOWN && timeout > 0)
+        timeout = 1000;
+        while (lsp->state == LSP_SHUTTING_DOWN && timeout > 0)
         {
             usleep(10000);
             timeout -= 10;
-            lspPoll(client);
+            lspPoll(lsp);
         }
 
         root = cJSON_CreateObject();
@@ -1326,39 +1490,38 @@ void lspShutdown(LspClient *client)
         cJSON_AddStringToObject(root, "method", "exit");
 
         msg = cJSON_PrintUnformatted(root);
-        lsp_send(client, msg);
+        lsp_send(lsp, msg);
         gfree(msg);
         cJSON_Delete(root);
     }
 
-    client->state = LSP_SHUTDOWN;
+    lsp->state = LSP_SHUTDOWN;
 
-    if (client->write_to_server_fd > 0) { close(client->write_to_server_fd); client->write_to_server_fd = -1; }
-    if (client->read_from_server_fd > 0) { close(client->read_from_server_fd); client->read_from_server_fd = -1; }
+    if (lsp->write_to_server_fd > 0) { close(lsp->write_to_server_fd); lsp->write_to_server_fd = -1; }
+    if (lsp->read_from_server_fd > 0) { close(lsp->read_from_server_fd); lsp->read_from_server_fd = -1; }
 
-    // gfree(client->recv_buf);
-    client->recv_buf = NULL;
+    // gfree(lsp->recv_buf);
+    lsp->recv_buf = NULL;
 
-    if (client->pid > 0)
+    if (lsp->pid > 0)
     {
-        kill(client->pid, SIGTERM);
+        kill(lsp->pid, SIGTERM);
         usleep(100000);
 
-        int status;
-        pid_t result = waitpid(client->pid, &status, WNOHANG);
+        result = waitpid(lsp->pid, &status, WNOHANG);
         if (result == 0)
         {
-            kill(client->pid, SIGKILL);
-            waitpid(client->pid, NULL, 0);
+            kill(lsp->pid, SIGKILL);
+            waitpid(lsp->pid, NULL, 0);
         }
-        client->pid = -1;
+        lsp->pid = -1;
     }
 }
 
-void lspCleanup(LspClient *client)
+void lspCleanup(LspClient *lsp)
 {
-    if (!client)
+    if (!lsp)
         return;
-    lspShutdown(client);
-    gfree(client);
+    lspShutdown(lsp);
+    gfree(lsp);
 }

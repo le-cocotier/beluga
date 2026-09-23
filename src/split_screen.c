@@ -22,11 +22,12 @@ extern EditorConfig E;
  *   - E.panes.layout
  */
 void splitScreenInit(void) {
+    EditorPane *new_panes;
     E.layout.mode = SPLIT_NONE;
     E.layout.num_panes = 1;
     E.layout.active_pane = 0;
 
-    EditorPane *new_panes = grealloc(E.layout.panes, sizeof(EditorPane) * 2);
+    new_panes = grealloc(E.layout.panes, sizeof(EditorPane) * 2);
     if (!new_panes) {
         editorSetStatusMessage("Error: realloc failed");
         return;
@@ -78,8 +79,9 @@ static const char *bufferFocusPrefix(const struct buffer_t *buf) {
  * see the arrow keys.
  */
 static void splitScreenApplyFocusPrefix(void) {
-    Buffer *buf = bufferFindById(E.layout.panes[E.layout.active_pane].buffer_id);
+    const Buffer *buf = bufferFindById(E.layout.panes[E.layout.active_pane].buffer_id);
     const char *name = NULL;
+    struct prefix_t prefix;
 
     if (buf && buf->type == TERMINAL_BUFF)
         name = "term";
@@ -87,7 +89,7 @@ static void splitScreenApplyFocusPrefix(void) {
         name = bufferFocusPrefix(buf);
 
     if (name) {
-        struct prefix_t prefix = find_prefix(name);
+        prefix = find_prefix(name);
         if (prefix.prefix_id != -1)
             E.prefix_state = prefix.prefix_id;
     } else {
@@ -122,13 +124,17 @@ static void splitScreenApplyFocusPrefix(void) {
  * something else in the half you just made.
  * @return 0 on success, -1 if the pane is too small to divide.
  */
-int splitScreenSplitActive(SplitMode direction) {
+int splitScreenSplitActive(const SplitMode direction) {
     // Below this a pane has no room for a gutter plus readable text, and
     // halving it repeatedly would eventually produce zero/negative sizes.
     const int MIN_WIDTH  = 20;
     const int MIN_HEIGHT = 4;
 
     EditorPane *active = &E.layout.panes[E.layout.active_pane];
+    EditorPane *grown;
+    EditorPane *fresh;
+    int left;
+    int top;
 
     if (direction == SPLIT_VERTICAL && active->width < MIN_WIDTH * 2 + 1) {
         editorSetStatusMessage("Pane too narrow to split");
@@ -139,7 +145,7 @@ int splitScreenSplitActive(SplitMode direction) {
         return -1;
     }
 
-    EditorPane *grown = grealloc(E.layout.panes,
+    grown = grealloc(E.layout.panes,
                                 sizeof(EditorPane) * (size_t)(E.layout.num_panes + 1));
     if (!grown) {
         editorSetStatusMessage("Error: realloc failed");
@@ -150,7 +156,7 @@ int splitScreenSplitActive(SplitMode direction) {
     // pointer taken above it.
     active = &E.layout.panes[E.layout.active_pane];
 
-    EditorPane *fresh = &E.layout.panes[E.layout.num_panes];
+    fresh = &E.layout.panes[E.layout.num_panes];
     *fresh = *active;              // inherit buffer and geometry, then carve
     fresh->cursor_x = 0;
     fresh->cursor_y = 0;
@@ -158,12 +164,12 @@ int splitScreenSplitActive(SplitMode direction) {
     fresh->y_offset = 0;
 
     if (direction == SPLIT_VERTICAL) {
-        int left = (active->width - 1) / 2;   // -1 for the divider column
+        left = (active->width - 1) / 2;   // -1 for the divider column
         fresh->origin_x = active->origin_x + left + 1;
         fresh->width    = active->width - left - 1;
         active->width   = left;
     } else {
-        int top = (active->height - 1) / 2;   // -1 for the divider row
+        top = (active->height - 1) / 2;   // -1 for the divider row
         fresh->origin_y = active->origin_y + top + 1;
         fresh->height   = active->height - top - 1;
         active->height  = top;
@@ -218,8 +224,10 @@ int splitScreenSplitActive(SplitMode direction) {
  */
 void splitScreenUnify(void) {
     int keep_buffer_id = E.layout.panes[0].buffer_id;
-    for (int i = 0; i < E.layout.num_panes; i++) {
-        struct buffer_t *b = bufferFindById(E.layout.panes[i].buffer_id);
+    int i;
+    struct buffer_t *b;
+    for (i = 0; i < E.layout.num_panes; i++) {
+        b = bufferFindById(E.layout.panes[i].buffer_id);
         if (b && b->type != EXPLORER_BUFF) {
             keep_buffer_id = E.layout.panes[i].buffer_id;
             break;
@@ -262,10 +270,13 @@ void splitScreenUnify(void) {
  * size for the rest of the session.
  */
 void splitScreenSyncTerminalSizes(void) {
-    ScreenLayout *layout = &E.layout;
-    for (int i = 0; i < layout->num_panes; i++) {
-        EditorPane *pane = &layout->panes[i];
-        struct buffer_t *buf = bufferFindById(pane->buffer_id);
+    const ScreenLayout *layout = &E.layout;
+    int i;
+    EditorPane *pane;
+    struct buffer_t *buf;
+    for (i = 0; i < layout->num_panes; i++) {
+        pane = &layout->panes[i];
+        buf = bufferFindById(pane->buffer_id);
         if (!buf || buf->type != TERMINAL_BUFF || buf->pty_master_fd < 0)
             continue;
         ptySessionResize(buf, pane->height, pane->width);
@@ -278,7 +289,9 @@ void splitScreenSyncTerminalSizes(void) {
  * @brief Splits the screen vertically with a fixed-width left pane
  * (e.g. an explorer sidebar) and the rest of the screen on the right.
  */
-int splitScreenWithSidebar(int sidebar_buffer_id, int main_buffer_id, int sidebar_width) {
+int splitScreenWithSidebar(const int sidebar_buffer_id, const int main_buffer_id, int sidebar_width) {
+    int pane_height;
+    struct prefix_t prefix;
     if (bufferFindById(sidebar_buffer_id) == NULL ||
         bufferFindById(main_buffer_id) == NULL) {
         editorSetStatusMessage("Error: invalid buffer IDs");
@@ -292,7 +305,7 @@ int splitScreenWithSidebar(int sidebar_buffer_id, int main_buffer_id, int sideba
 
     if (sidebar_width < 1) sidebar_width = 1;
     if (sidebar_width > E.screencols - 1) sidebar_width = E.screencols - 1;
-    int pane_height = E.screenrows;
+    pane_height = E.screenrows;
 
     // Sidebar pane
     E.layout.panes[0].buffer_id = sidebar_buffer_id;
@@ -320,7 +333,7 @@ int splitScreenWithSidebar(int sidebar_buffer_id, int main_buffer_id, int sideba
 
     // Focus starts on the sidebar — the whole point of just having opened
     // it is to pick something in it.
-    struct prefix_t prefix = find_prefix(bufferFocusPrefix(bufferFindById(sidebar_buffer_id)));
+    prefix = find_prefix(bufferFocusPrefix(bufferFindById(sidebar_buffer_id)));
     E.prefix_state = prefix.prefix_id;
 
     splitScreenSyncTerminalSizes();
@@ -361,13 +374,17 @@ void splitScreenCloseSidebar(void) {
  * @return 1 if focus moved to a different pane, 0 if it stayed put.
  */
 int splitScreenFocusOtherRealPane(void) {
+    int start;
+    int step;
+    int i;
+    struct buffer_t *b;
     if (E.layout.num_panes < 2)
         return 0;
 
-    int start = E.layout.active_pane;
-    for (int step = 1; step < E.layout.num_panes; step++) {
-        int i = (start + step) % E.layout.num_panes;
-        struct buffer_t *b = bufferFindById(E.layout.panes[i].buffer_id);
+    start = E.layout.active_pane;
+    for (step = 1; step < E.layout.num_panes; step++) {
+        i = (start + step) % E.layout.num_panes;
+        b = bufferFindById(E.layout.panes[i].buffer_id);
         if (b && b->type == EXPLORER_BUFF)
             continue;
 
@@ -411,13 +428,14 @@ int splitScreenSwitchPane(void) {
  * @param buffer_id New buffer ID for active pane
  * @return 0 on success, -1 on failure
  */
-int splitScreenSetPaneBuffer(int buffer_id) {
+int splitScreenSetPaneBuffer(const int buffer_id) {
+    EditorPane *active;
     if (bufferFindById(buffer_id) == NULL) {
         editorSetStatusMessage("Error: invalid buffer ID");
         return -1;
     }
 
-    EditorPane *active = &E.layout.panes[E.layout.active_pane];
+    active = &E.layout.panes[E.layout.active_pane];
     active->buffer_id = buffer_id;
     active->cursor_x = 0;
     active->cursor_y = 0;

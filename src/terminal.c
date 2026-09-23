@@ -8,6 +8,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "../include/buffer.h"
@@ -65,12 +66,13 @@ void terminalRestore(void)
 
 void enableRawMode()
 {
+    struct termios raw;
     if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1)
     {
         die("tcgetattr");
     }
 
-    struct termios raw = E.orig_termios;
+    raw = E.orig_termios;
     raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
     raw.c_oflag &= ~(OPOST);
     raw.c_cflag |= (CS8);
@@ -84,10 +86,11 @@ void enableRawMode()
     }
 }
 
-char* keyToString(Utf8Char* key)
+char* keyToString(const Utf8Char* key)
 {
     static char key_str[32];
-    unsigned char c = key->character[0];
+    const unsigned char c = key->character[0];
+    int n;
 
     if (c == '\r')
     {
@@ -133,7 +136,7 @@ char* keyToString(Utf8Char* key)
             {
                 /* Genuine multi-byte UTF-8 codepoint: bytes are already
                    stored raw in key->character, no re-encoding needed. */
-                int n = key->length;
+                n = (unsigned char) key->length;
                 memcpy(key_str, key->character, n);
                 key_str[n] = '\0';
             }
@@ -156,7 +159,6 @@ char* keyToString(Utf8Char* key)
 Utf8Char * editorReadKey()
 {
     Utf8Char* c;
-    int nread;
 
     c = readUtf8Char();
     return c;
@@ -215,14 +217,68 @@ int getWindowSize(int* rows, int* cols)
     return 0;
 }
 
+#ifdef APP_DEBUG
+/**
+ * @brief Opens (once) and returns the debug log file at ~/.beluga/debug.log.
+ * @details Never stderr: this process's stderr is the same raw terminal
+ * it's drawing its UI onto, so anything written there directly corrupts
+ * the screen instead of scrolling by underneath it — which is exactly
+ * what made a debug build "unusable" before this existed. Truncated
+ * ("w", not "a") on open so each run starts its own clean log instead of
+ * appending to however many past sessions came before it. Line-buffered
+ * and explicitly flushed on every appDebug() call (see below) so a crash
+ * or a hang doesn't lose whatever was written right before it — the
+ * exact moment a debug log is actually needed.
+ */
+static FILE *debugLogFile(void)
+{
+    static FILE *f = NULL;
+    static int tried = 0;
+    const char *home;
+    char path[PATH_MAX];
+    if (!tried)
+    {
+        tried = 1;
+        home = getenv("HOME");
+        if (home)
+            snprintf(path, sizeof(path), "%s/.beluga/debug.log", home);
+        else
+            snprintf(path, sizeof(path), "beluga_debug.log");
+        f = fopen(path, "w");
+        if (f)
+            setvbuf(f, NULL, _IOLBF, 0);
+    }
+    return f;
+}
+#endif
+
+int appDebugFd(void)
+{
+#ifdef APP_DEBUG
+    FILE *f = debugLogFile();
+    return f ? fileno(f) : -1;
+#else
+    return -1;
+#endif
+}
+
 void appDebug(const char* fmt, ...)
 {
 #ifdef APP_DEBUG
+    FILE *f = debugLogFile();
+    struct timespec ts;
     va_list ap;
-    char message[1024];
+    if (!f)
+        return;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    fprintf(f, "[%6ld.%03ld] ", (long) ts.tv_sec, ts.tv_nsec / 1000000);
+
     va_start(ap, fmt);
-    vsnprintf(message, 1024, fmt, ap);
+    vfprintf(f, fmt, ap);
     va_end(ap);
-    fprintf(stderr, "%s\r\n", message);
+    fputc('\n', f);
+    fflush(f);
 #endif
+    (void) fmt;
 }

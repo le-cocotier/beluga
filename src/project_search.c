@@ -73,7 +73,8 @@ static int s_truncated = 0;
 // ─── Result storage ─────────────────────────────────────────────────────────
 
 static void clearHits(void) {
-  for (int i = 0; i < s_hit_count; i++) {
+  int i;
+  for (i = 0; i < s_hit_count; i++) {
     gfree(s_hits[i].abs_path);
     gfree(s_hits[i].rel_path);
     gfree(s_hits[i].text);
@@ -100,16 +101,18 @@ void projectSearchFree(void) { clearHits(); }
  */
 static int rootIsGitRepo(const char *root) {
   char qroot[PATH_MAX + 4];
+  char cmd[PATH_MAX + 96];
+  char *out;
+  int yes;
   shellQuote(root, qroot, sizeof(qroot));
 
-  char cmd[PATH_MAX + 96];
   snprintf(cmd, sizeof(cmd),
            "git -C %s rev-parse --is-inside-work-tree 2>/dev/null", qroot);
 
-  char *out = runCommandCapture(cmd, 1000, 64);
+  out = runCommandCapture(cmd, 1000, 64);
   if (!out)
     return 0;
-  int yes = (strncmp(out, "true", 4) == 0);
+  yes = (strncmp(out, "true", 4) == 0);
   gfree(out);
   return yes;
 }
@@ -123,10 +126,10 @@ static int rootIsGitRepo(const char *root) {
 static char *runSearch(const char *pattern, const char *root) {
   char qpat[SEARCH_MAX_PATTERN * 4 + 8];
   char qroot[PATH_MAX + 4];
+  char cmd[PATH_MAX * 2 + SEARCH_MAX_PATTERN * 4 + 256];
   shellQuote(pattern, qpat, sizeof(qpat));
   shellQuote(root, qroot, sizeof(qroot));
 
-  char cmd[PATH_MAX * 2 + SEARCH_MAX_PATTERN * 4 + 256];
   if (rootIsGitRepo(root)) {
     snprintf(cmd, sizeof(cmd),
              "git -C %s grep -I -n --no-color -F -e %s 2>/dev/null", qroot,
@@ -153,12 +156,15 @@ static char *runSearch(const char *pattern, const char *root) {
  */
 static int parseGrepLine(char *line, char **out_path, int *out_line,
                          char **out_text) {
-  for (char *colon = strchr(line, ':'); colon; colon = strchr(colon + 1, ':')) {
-    char *p = colon + 1;
+  char *colon;
+  char *p;
+  int number;
+  for (colon = strchr(line, ':'); colon; colon = strchr(colon + 1, ':')) {
+    p = colon + 1;
     if (!isdigit((unsigned char)*p))
       continue;
 
-    int number = 0;
+    number = 0;
     while (isdigit((unsigned char)*p)) {
       number = number * 10 + (*p - '0');
       p++;
@@ -185,20 +191,23 @@ static int parseGrepLine(char *line, char **out_path, int *out_line,
  * single row thousands of columns wide.
  */
 static char *cleanText(const char *src) {
+  char *out;
+  size_t n;
+  unsigned char c;
   while (*src == ' ' || *src == '\t')
     src++;
 
-  char *out = galloc(SEARCH_MAX_TEXT + 1);
+  out = galloc(SEARCH_MAX_TEXT + 1);
   if (!out)
     return NULL;
 
-  size_t n = 0;
+  n = 0;
   for (; *src && n < SEARCH_MAX_TEXT; src++) {
-    unsigned char c = (unsigned char)*src;
+    c = (unsigned char)*src;
     if (c == '\t')
       out[n++] = ' ';
     else if (c < 0x20)
-      continue; // stray control bytes would corrupt the row
+      ; // stray control bytes would corrupt the row — skip it
     else
       out[n++] = (char)c;
   }
@@ -207,18 +216,26 @@ static char *cleanText(const char *src) {
 }
 
 static int parseResults(char *output, const char *root) {
-  size_t root_len = strlen(root);
+  const size_t root_len = strlen(root);
 
   char *saveptr = NULL;
-  for (char *line = strtok_r(output, "\n", &saveptr); line;
+  char *line;
+  char *path;
+  char *text;
+  int line_no;
+  char abs[PATH_MAX];
+  const char *rel;
+  SearchHit *grown;
+  SearchHit *hit;
+  for (line = strtok_r(output, "\n", &saveptr); line;
        line = strtok_r(NULL, "\n", &saveptr)) {
     if (s_hit_count >= SEARCH_MAX_HITS) {
       s_truncated = 1;
       break;
     }
 
-    char *path = NULL, *text = NULL;
-    int line_no = 0;
+    path = NULL; text = NULL;
+    line_no = 0;
     if (!parseGrepLine(line, &path, &line_no, &text))
       continue;
 
@@ -226,23 +243,21 @@ static int parseResults(char *output, const char *root) {
     // relative to (or under) whatever root it was handed. Store both
     // forms: absolute is what opens the file, relative is what reads
     // well in a narrow pane.
-    char abs[PATH_MAX];
     if (path[0] == '/')
       snprintf(abs, sizeof(abs), "%s", path);
     else
       snprintf(abs, sizeof(abs), "%s/%s", root, path);
 
-    const char *rel = abs;
+    rel = abs;
     if (strncmp(abs, root, root_len) == 0 && abs[root_len] == '/')
       rel = abs + root_len + 1;
 
-    SearchHit *grown =
-        grealloc(s_hits, (size_t)(s_hit_count + 1) * sizeof(SearchHit));
+    grown = grealloc(s_hits, (size_t)(s_hit_count + 1) * sizeof(SearchHit));
     if (!grown)
       break;
     s_hits = grown;
 
-    SearchHit *hit = &s_hits[s_hit_count];
+    hit = &s_hits[s_hit_count];
     hit->abs_path = strdup(abs);
     hit->rel_path = strdup(rel);
     hit->line = line_no;
@@ -266,14 +281,15 @@ static int parseResults(char *output, const char *root) {
  * @brief Appends one line to the results buffer, recording which hit (if
  * any) that row jumps to.
  */
-static void addRow(Buffer *buf, const char *text, int hit_index) {
+static void addRow(Buffer *buf, const char *text, const int hit_index) {
   int *grown = grealloc(s_row_hit, (size_t)(s_row_count + 1) * sizeof(int));
+  Utf8Char *u;
   if (!grown)
     return;
   s_row_hit = grown;
   s_row_hit[s_row_count++] = hit_index;
 
-  Utf8Char *u = stringToUtf8((unsigned char *)text);
+  u = stringToUtf8((unsigned char *)text);
   if (!u)
     return;
   bufferInsertRow(buf, buf->numrows, u, utf8StringLen(u) - 1);
@@ -281,7 +297,8 @@ static void addRow(Buffer *buf, const char *text, int hit_index) {
 }
 
 static void clearBufferRows(Buffer *buf) {
-  for (int i = 0; i < buf->numrows; i++) {
+  int i;
+  for (i = 0; i < buf->numrows; i++) {
     gfree(buf->row[i].characters);
     gfree(buf->row[i].attrs);
   }
@@ -300,14 +317,18 @@ static void clearBufferRows(Buffer *buf) {
  * soon as the results share the screen with the file you're jumping into.
  */
 static void renderResults(Buffer *buf, const char *pattern) {
+  char header[SEARCH_MAX_PATTERN + 128];
+  int files;
+  int i;
+  char row[SEARCH_MAX_TEXT + 32];
+  int r;
   clearBufferRows(buf);
   gfree(s_row_hit);
   s_row_hit = NULL;
   s_row_count = 0;
 
-  char header[SEARCH_MAX_PATTERN + 128];
-  int files = 0;
-  for (int i = 0; i < s_hit_count; i++)
+  files = 0;
+  for (i = 0; i < s_hit_count; i++)
     if (i == 0 || strcmp(s_hits[i].rel_path, s_hits[i - 1].rel_path) != 0)
       files++;
 
@@ -317,14 +338,13 @@ static void renderResults(Buffer *buf, const char *pattern) {
   addRow(buf, header, -1);
   addRow(buf, "", -1);
 
-  for (int i = 0; i < s_hit_count; i++) {
+  for (i = 0; i < s_hit_count; i++) {
     if (i == 0 || strcmp(s_hits[i].rel_path, s_hits[i - 1].rel_path) != 0) {
       if (i > 0)
         addRow(buf, "", -1);
       addRow(buf, s_hits[i].rel_path, -1);
     }
 
-    char row[SEARCH_MAX_TEXT + 32];
     snprintf(row, sizeof(row), "  %5d  %s", s_hits[i].line, s_hits[i].text);
     addRow(buf, row, i);
   }
@@ -333,7 +353,7 @@ static void renderResults(Buffer *buf, const char *pattern) {
 
   // Land on the first actual result rather than the header, so ENTER
   // does something useful the moment the buffer appears.
-  for (int r = 0; r < s_row_count; r++) {
+  for (r = 0; r < s_row_count; r++) {
     if (s_row_hit[r] >= 0) {
       buf->y = r;
       break;
@@ -345,8 +365,9 @@ static void renderResults(Buffer *buf, const char *pattern) {
 
 static Buffer *openResultsBuffer(void) {
   Buffer *buf = bufferFindById(s_results_buffer_id);
+  Utf8Char *name;
   if (!buf || buf->type != EXPLORER_BUFF) {
-    Utf8Char *name = stringToUtf8((unsigned char *)SEARCH_BUFFER_NAME);
+    name = stringToUtf8((unsigned char *)SEARCH_BUFFER_NAME);
     if (!name)
       return NULL;
     s_results_buffer_id = bufferCreate(name, READ_ONLY, EXPLORER_BUFF);
@@ -361,10 +382,15 @@ static Buffer *openResultsBuffer(void) {
 }
 
 int projectSearchRun(const char *pattern, const char *root) {
+  char resolved[PATH_MAX];
+  size_t rlen;
+  char *output;
+  Buffer *buf;
+  EditorPane *active;
+  struct prefix_t prefix;
   if (!pattern || !*pattern)
     return -1;
 
-  char resolved[PATH_MAX];
   if (root && *root)
     snprintf(resolved, sizeof(resolved), "%s", root);
   else if (!getcwd(resolved, sizeof(resolved)))
@@ -372,7 +398,7 @@ int projectSearchRun(const char *pattern, const char *root) {
 
   // Strip a trailing slash so the "is this path under the root" prefix
   // test below (and the rel_path it produces) doesn't double up on it.
-  size_t rlen = strlen(resolved);
+  rlen = strlen(resolved);
   while (rlen > 1 && resolved[rlen - 1] == '/')
     resolved[--rlen] = '\0';
   snprintf(s_root, sizeof(s_root), "%s", resolved);
@@ -380,7 +406,7 @@ int projectSearchRun(const char *pattern, const char *root) {
   clearHits();
   s_truncated = 0;
 
-  char *output = runSearch(pattern, resolved);
+  output = runSearch(pattern, resolved);
   if (!output) {
     editorSetStatusMessage("No matches for \"%s\"", pattern);
     return 0;
@@ -394,19 +420,19 @@ int projectSearchRun(const char *pattern, const char *root) {
     return 0;
   }
 
-  Buffer *buf = openResultsBuffer();
+  buf = openResultsBuffer();
   if (!buf)
     return -1;
   renderResults(buf, pattern);
 
-  EditorPane *active = splitScreenGetActivePane();
+  active = splitScreenGetActivePane();
   active->buffer_id = s_results_buffer_id;
   active->cursor_y = buf->y;
   active->cursor_x = 0;
   active->y_offset = 0;
   active->x_offset = 0;
 
-  struct prefix_t prefix = find_prefix(SEARCH_PREFIX_NAME);
+  prefix = find_prefix(SEARCH_PREFIX_NAME);
   if (prefix.prefix_id != -1)
     E.prefix_state = prefix.prefix_id;
 
@@ -418,10 +444,11 @@ int projectSearchRun(const char *pattern, const char *root) {
 
 void projectSearchPrompt(void) {
   Utf8Char *input = editorPrompt("Search project: %u (ESC to cancel)", NULL, 0);
+  char *pattern;
   if (!input)
     return;
 
-  char *pattern = (char *)utf8ToString(input);
+  pattern = (char *)utf8ToString(input);
   gfree(input);
   if (!pattern)
     return;
@@ -438,16 +465,20 @@ void projectSearchPrompt(void) {
  * basenames, which would happily hand back the wrong init.lisp.
  */
 static int findOpenBufferByPath(const char *abs_path) {
+  int first;
+  Buffer *b;
+  char *full;
+  int same;
   if (E.buffers == NULL)
     return -1;
 
-  int first = E.buffers->buffer_id;
-  Buffer *b = E.buffers;
+  first = E.buffers->buffer_id;
+  b = E.buffers;
   do {
     if (b->type == FILE_BUFF && b->fullname) {
-      char *full = (char *)utf8ToString(b->fullname);
+      full = (char *)utf8ToString(b->fullname);
       if (full) {
-        int same = (strcmp(full, abs_path) == 0);
+        same = (strcmp(full, abs_path) == 0);
         gfree(full);
         if (same)
           return b->buffer_id;
@@ -462,12 +493,21 @@ static int findOpenBufferByPath(const char *abs_path) {
 void projectSearchGotoCursor(void) {
   EditorPane *active = splitScreenGetActivePane();
   Buffer *results = bufferFindById(active->buffer_id);
+  int row;
+  int index;
+  int r;
+  SearchHit *hit;
+  int existing;
+  Utf8Char *upath;
+  int id;
+  Buffer *target;
+  int line;
   if (!results || results->buffer_id != s_results_buffer_id) {
     editorSetStatusMessage("Not in the search results buffer");
     return;
   }
 
-  int row = results->y;
+  row = results->y;
   if (row < 0 || row >= s_row_count || s_row_hit == NULL)
     return;
 
@@ -476,17 +516,17 @@ void projectSearchGotoCursor(void) {
   // nothing (which just reads as ENTER being broken), take the nearest
   // result: forward first, so ENTER on a file heading opens that file's
   // first hit, then backward for the trailing rows below the last one.
-  int index = s_row_hit[row];
+  index = s_row_hit[row];
   if (index < 0) {
-    for (int r = row + 1; r < s_row_count && index < 0; r++)
+    for (r = row + 1; r < s_row_count && index < 0; r++)
       index = s_row_hit[r];
-    for (int r = row - 1; r >= 0 && index < 0; r--)
+    for (r = row - 1; r >= 0 && index < 0; r--)
       index = s_row_hit[r];
   }
   if (index < 0 || index >= s_hit_count)
     return; // no results at all
 
-  SearchHit *hit = &s_hits[index];
+  hit = &s_hits[index];
 
   // With the screen already split, open into the other pane so the
   // result list stays on screen — the same "list on one side, file on
@@ -501,14 +541,14 @@ void projectSearchGotoCursor(void) {
   if (splitScreenFocusOtherRealPane())
     active = splitScreenGetActivePane();
 
-  int existing = findOpenBufferByPath(hit->abs_path);
+  existing = findOpenBufferByPath(hit->abs_path);
   if (existing != -1) {
     active->buffer_id = existing;
   } else {
-    Utf8Char *upath = stringToUtf8((unsigned char *)hit->abs_path);
+    upath = stringToUtf8((unsigned char *)hit->abs_path);
     if (!upath)
       return;
-    int id = bufferCreate(upath, READ_AND_WRITE, FILE_BUFF);
+    id = bufferCreate(upath, READ_AND_WRITE, FILE_BUFF);
     gfree(upath);
     if (id == -1) {
       editorSetStatusMessage("Could not open %s", hit->rel_path);
@@ -517,11 +557,11 @@ void projectSearchGotoCursor(void) {
     active->buffer_id = id;
   }
 
-  Buffer *target = bufferFindById(active->buffer_id);
+  target = bufferFindById(active->buffer_id);
   if (!target)
     return;
 
-  int line = hit->line - 1; // grep counts from 1, buffers from 0
+  line = hit->line - 1; // grep counts from 1, buffers from 0
   if (line < 0)
     line = 0;
   if (line >= target->numrows)

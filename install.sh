@@ -36,8 +36,11 @@ Usage: ./install.sh [options]
       --prefix DIR      Where to install the beluga binary (default: /usr/local/bin).
       --skip-packages   Don't clone the default packages listed below.
       --debug           Build an unoptimized debug build with APP_DEBUG logging
-                        enabled (stderr debug logs), instead of the default
-                        optimized release build.
+                        enabled, instead of the default optimized release
+                        build. Logs (the editor's own trace calls, plus the
+                        language server's own stderr chatter) go to
+                        ~/.beluga/debug.log, not the terminal — `tail -f`
+                        it in another pane while you work.
   -h, --help            Show this help and exit.
 
 Safe to re-run: an existing build/ is reconfigured rather than failing,

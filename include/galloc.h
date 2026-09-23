@@ -10,11 +10,13 @@
 // where re-expanding the macro would attribute the allocation to gutils.c
 // instead of the real caller.
 void * galloc_impl(size_t size, const char * file, int line, const char * func);
+void * gcalloc_impl(size_t num, size_t size, const char * file, int line, const char * func);
 void * grealloc_impl(void * address, size_t size, const char * file, int line, const char * func);
 void gfree(void * data);
 void gShowMemory();
 
 #define galloc(size) galloc_impl((size), __FILE__, __LINE__, __func__)
+#define gcalloc(num, size) gcalloc_impl((num), (size), __FILE__, __LINE__, __func__)
 #define grealloc(address, size) grealloc_impl((address), (size), __FILE__, __LINE__, __func__)
 
 /*
@@ -30,6 +32,7 @@ struct dataBlock_t {
   const char * file;   // __FILE__ at the (re)allocation call site
   int line;             // __LINE__ at the (re)allocation call site
   const char * func;    // __func__ at the (re)allocation call site
+  struct dataBlock_t * hashNext; // gutils.c's address index; not for inspection
 };
 
 // Most-recently-allocated tracked block, or NULL. Walk older blocks via

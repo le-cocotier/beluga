@@ -13,9 +13,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Vendored interpreter: its implementation mixes declarations and code,
+// which -Wdeclaration-after-statement (meson.build) would flag ~100 times.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
 #define LISP_IMPLEMENTATION
 #include "../include/lisp.h"
 #include "../include/lisp_lib.h"
+#pragma GCC diagnostic pop
 
 /***********************************************************************************************************************
  *
@@ -31,12 +36,12 @@ extern EditorConfig E;
  *
  **********************************************************************************************************************/
 
-void registerBuiltin(char *key_sequence, LispCFunc f) {
+void registerBuiltin(const char *key_sequence, const LispCFunc f) {
   lisp_env_define(E.ctx.p->env, lisp_make_symbol(key_sequence, E.ctx),
                   lisp_make_func(f), E.ctx);
 }
 
-void initBuiltins() {
+void initBuiltins(void) {
   // Registering C functions as lisp macro
   registerBuiltin("move-cursor", moveCursor);
   registerBuiltin("map-key", mapKey);
@@ -97,6 +102,7 @@ void initBuiltins() {
   registerBuiltin("editor-open-file-path", editorOpenFilePath);
   registerBuiltin("list-buffers", l_listBuffers);
   registerBuiltin("editor-switch-to-buffer", editorSwitchToBuffer);
+  registerBuiltin("editor-kill-buffer", editorKillBuffer);
   registerBuiltin("editor-pwd", editorPwd);
   registerBuiltin("project-root", l_projectRoot);
   registerBuiltin("editor-prompt", editorPromptLisp);
@@ -133,7 +139,7 @@ void initBuiltins() {
  * only picks a handful of plain (non-color) values back out of the
  * resulting environment.
  */
-void initConfig() {
+static void initConfig(void) {
 
   E.ctx = lisp_init();
   E.ctx.p->err_port = fopen("lisp_log.err", "w");
@@ -165,7 +171,7 @@ void initConfig() {
  */
 static int readBoolConst(const char *name, int fallback) {
   int present = 0;
-  Lisp val =
+  const Lisp val =
       lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(name, E.ctx), &present);
   if (!present)
     return fallback;
@@ -186,7 +192,7 @@ static int readBoolConst(const char *name, int fallback) {
  * if no package sets one. Must run after initConfig(): it looks up symbols
  * (LSP, TAB-LENGTH, ...) that only exist once init.lisp has been evaluated.
  */
-void initStartupConstants() {
+static void initStartupConstants(void) {
   E.constantes.LSP = lisp_bool(
       lisp_eval(lisp_read("LSP", &E.ctx_error, E.ctx), &E.ctx_error, E.ctx));
   E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
@@ -243,7 +249,7 @@ void initEditor() {
   }
 
   E.status_msg_time = 0;
-  E.status_msg = calloc(PATH_MAX, sizeof(Utf8Char));
+  E.status_msg = gcalloc(PATH_MAX, sizeof(Utf8Char));
   // E.buffers is the head of a circular doubly-linked list, built up node
   // by node in bufferCreate() — NULL/0 means no buffers open yet.
   E.buffers = NULL;
@@ -348,6 +354,7 @@ void initEditor() {
 }
 
 void deInitEditor() {
+  int i;
   // free EditorPane
   gfree(E.layout.panes);
 
@@ -368,7 +375,7 @@ void deInitEditor() {
 
   // free syntax-highlighter language registrations (each has its own
   // separately-allocated word list)
-  for (int i = 0; i < E.number_of_languages; i++)
+  for (i = 0; i < E.number_of_languages; i++)
     gfree(E.languages[i].words);
   gfree(E.languages);
 

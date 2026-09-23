@@ -11,7 +11,7 @@
  * @param new_size  Desired new size in bytes
  * @return New pointer on success, NULL on failure (original ptr untouched, per realloc semantics)
  */
-void* recalloc(void* ptr, size_t old_size, size_t new_size)
+void* recalloc(void* ptr, const size_t old_size, const size_t new_size)
 {
     void* new_ptr = grealloc(ptr, new_size);
     if (new_ptr == NULL)

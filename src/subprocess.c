@@ -29,18 +29,32 @@
  * spawned it) and reaps it, so runCommandCapture()'s early-return paths
  * don't each repeat the same three lines.
  */
-static void killAndReap(pid_t pid)
+static void killAndReap(const pid_t pid)
 {
     kill(-pid, SIGKILL);
     waitpid(pid, NULL, 0);
 }
 
-char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes)
+char *runCommandCapture(const char *cmd, const long timeout_ms, const size_t max_bytes)
 {
     int pipefd[2];
+    pid_t pid;
+    size_t cap;
+    size_t len;
+    char* out;
+    struct timespec deadline;
+    int timed_out;
+    int capped;
+    struct timespec now;
+    long remaining_ms;
+    struct pollfd pfd;
+    int pr;
+    char chunk[512];
+    ssize_t n;
+    char* grown;
     if (pipe(pipefd) != 0) return NULL;
 
-    pid_t pid = fork();
+    pid = fork();
     if (pid < 0)
     {
         close(pipefd[0]);
@@ -69,8 +83,8 @@ char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes)
     fcntl(pipefd[0], F_SETFL, O_NONBLOCK); // pipe fds start with flags 0,
                                             // so this can't clobber anything
 
-    size_t cap = 256, len = 0;
-    char* out = galloc(cap);
+    cap = 256; len = 0;
+    out = galloc(cap);
     if (!out)
     {
         close(pipefd[0]);
@@ -78,7 +92,6 @@ char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes)
         return NULL;
     }
 
-    struct timespec deadline;
     clock_gettime(CLOCK_MONOTONIC, &deadline);
     deadline.tv_sec += timeout_ms / 1000;
     deadline.tv_nsec += (timeout_ms % 1000) * 1000000;
@@ -88,17 +101,16 @@ char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes)
         deadline.tv_nsec -= 1000000000L;   // either way, but tv_nsec >= 1e9 is
     }                                      // malformed and invites a later bug
 
-    int timed_out = 0, capped = 0;
+    timed_out = 0; capped = 0;
     for (;;)
     {
-        struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
-        long remaining_ms = (deadline.tv_sec - now.tv_sec) * 1000 +
+        remaining_ms = (deadline.tv_sec - now.tv_sec) * 1000 +
                             (deadline.tv_nsec - now.tv_nsec) / 1000000;
         if (remaining_ms <= 0) { timed_out = 1; break; }
 
-        struct pollfd pfd = { .fd = pipefd[0], .events = POLLIN };
-        int pr = poll(&pfd, 1, (int) remaining_ms);
+        pfd = (struct pollfd){ .fd = pipefd[0], .events = POLLIN };
+        pr = poll(&pfd, 1, (int) remaining_ms);
         if (pr < 0)
         {
             if (errno == EINTR) continue;
@@ -106,8 +118,7 @@ char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes)
         }
         if (pr == 0) { timed_out = 1; break; } // deadline reached
 
-        char chunk[512];
-        ssize_t n = read(pipefd[0], chunk, sizeof(chunk));
+        n = read(pipefd[0], chunk, sizeof(chunk));
         if (n <= 0)
         {
             if (n < 0 && errno == EAGAIN) continue;
@@ -126,7 +137,7 @@ char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes)
         if (len + (size_t) n + 1 > cap)
         {
             while (len + (size_t) n + 1 > cap) cap *= 2;
-            char* grown = grealloc(out, cap);
+            grown = grealloc(out, cap);
             if (!grown)
             {
                 gfree(out);
@@ -155,11 +166,12 @@ char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes)
     return out;
 }
 
-void shellQuote(const char *s, char *out, size_t out_size)
+void shellQuote(const char *s, char *out, const size_t out_size)
 {
     size_t pos = 0;
+    const char* p;
     if (pos + 1 < out_size) out[pos++] = '\'';
-    for (const char* p = s; *p && pos + 5 < out_size; p++)
+    for (p = s; *p && pos + 5 < out_size; p++)
     {
         if (*p == '\'')
         {

@@ -24,7 +24,7 @@ extern EditorConfig E;
 /**
  * @brief Formats one buffer's display line: "<id>: <filename> [*]".
  */
-static void formatBufferLine(struct buffer_t *b, char *out, size_t out_cap) {
+static void formatBufferLine(const struct buffer_t *b, char *out, size_t out_cap) {
     char *filename = (char *) utf8ToString(b->filename);
     snprintf(out, out_cap, "%d: %s%s", b->buffer_id,
              (filename && filename[0]) ? filename : "[No Name]",
@@ -33,19 +33,23 @@ static void formatBufferLine(struct buffer_t *b, char *out, size_t out_cap) {
 }
 
 void bufferSwitcherOpen(void) {
+    EditorPane *active;
     if (E.buffers == NULL)
         return;
 
-    EditorPane *active = splitScreenGetActivePane();
+    active = splitScreenGetActivePane();
     E.buffer_switcher.current_buffer_id = active->buffer_id;
     E.buffer_switcher.visible = 1;
 }
 
-int bufferSwitcherHandleKey(Utf8Char *key) {
+int bufferSwitcherHandleKey(const Utf8Char *key) {
+    struct buffer_t *current;
+    unsigned char c;
+    int is_single;
     if (!E.buffer_switcher.visible)
         return 0;
 
-    struct buffer_t *current = bufferFindById(E.buffer_switcher.current_buffer_id);
+    current = bufferFindById(E.buffer_switcher.current_buffer_id);
     if (!current) {
         // The highlighted buffer vanished from under us (e.g. closed by
         // something else while the popup was open) — just bail out rather
@@ -54,8 +58,8 @@ int bufferSwitcherHandleKey(Utf8Char *key) {
         return 1;
     }
 
-    unsigned char c = key->character[0];
-    int is_single = (key->length == 1);
+    c = key->character[0];
+    is_single = (key->length == 1);
 
     if (is_single && c == '\x1b') { // ESC — cancel
         E.buffer_switcher.visible = 0;
@@ -82,19 +86,32 @@ int bufferSwitcherHandleKey(Utf8Char *key) {
 }
 
 void bufferSwitcherDraw(struct abuf *ab) {
+    int count;
+    int content_w;
+    int first_buffer_id;
+    struct buffer_t *b;
+    char line[160];
+    int len;
+    int box_w;
+    int box_h;
+    int origin_x;
+    int origin_y;
+    PopupStyle style;
+    int row;
+    int is_sel;
+    char padded[160];
     if (!E.buffer_switcher.visible || E.buffers == NULL)
         return;
 
     // First pass: measure. Walk the whole (unbounded) list once to find
     // how many buffers there are and how wide the box needs to be.
-    int count = 0;
-    int content_w = 0;
-    int first_buffer_id = E.buffers->buffer_id;
-    struct buffer_t *b = E.buffers;
+    count = 0;
+    content_w = 0;
+    first_buffer_id = E.buffers->buffer_id;
+    b = E.buffers;
     do {
-        char line[160];
         formatBufferLine(b, line, sizeof(line));
-        int len = (int) strlen(line);
+        len = (int) strlen(line);
         if (len > content_w) content_w = len;
         count++;
         b = b->next;
@@ -102,28 +119,24 @@ void bufferSwitcherDraw(struct abuf *ab) {
 
     if (content_w > E.screencols - 6) content_w = E.screencols - 6;
     if (content_w < 10) content_w = 10;
-    int box_w = content_w + 4; // border(2) + marker/margin(1) + margin(1)
-    int box_h = count + 2; // rows + top/bottom border
+    box_w = content_w + 4; // border(2) + marker/margin(1) + margin(1)
+    box_h = count + 2; // rows + top/bottom border
 
-    int origin_x, origin_y;
     popupCenter(box_w, box_h, &origin_x, &origin_y);
 
-    PopupStyle style;
     popupStyleInit(&style);
 
     popupDrawTop(ab, &style, origin_x, origin_y, box_w);
 
     // ── rows: second pass, walking the list again to draw ──────────────────
-    int row = 0;
+    row = 0;
     b = E.buffers;
     do {
-        int is_sel = (b->buffer_id == E.buffer_switcher.current_buffer_id);
+        is_sel = (b->buffer_id == E.buffer_switcher.current_buffer_id);
 
         popupRowBegin(ab, &style, origin_x, origin_y + 1 + row, is_sel);
 
-        char line[160];
         formatBufferLine(b, line, sizeof(line));
-        char padded[160];
         snprintf(padded, sizeof(padded), "%-*s", content_w, line);
         padded[content_w] = '\0'; // truncate if the line itself overruns content_w
         abAppend(ab, padded, content_w);

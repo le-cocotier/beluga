@@ -17,11 +17,13 @@
 #include <pty.h>
 #endif
 
-int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, int rows, int cols)
+int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, const int rows, const int cols)
 {
     struct winsize ws = { .ws_row = rows, .ws_col = cols, .ws_xpixel = 0, .ws_ypixel = 0 };
 
-    pid_t pid = forkpty(&buf->pty_master_fd, NULL, NULL, &ws);
+    const pid_t pid = forkpty(&buf->pty_master_fd, NULL, NULL, &ws);
+    const char* shell;
+    int flags;
     if (pid < 0)
     {
         appDebug("forkpty failed: %s", strerror(errno));
@@ -31,7 +33,7 @@ int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, int rows, int 
     if (pid == 0)
     {
         // Child process: become the shell
-        const char* shell = shell_path ? shell_path : getenv("SHELL");
+        shell = shell_path ? shell_path : getenv("SHELL");
         if (!shell) shell = "/bin/zsh";
         setenv("TERM", "xterm-256color", 1);
         execl(shell, shell, "-i", (char*) NULL);
@@ -41,7 +43,7 @@ int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, int rows, int 
     // Parent process
     buf->child_pid = pid;
 
-    int flags = fcntl(buf->pty_master_fd, F_GETFL, 0);
+    flags = fcntl(buf->pty_master_fd, F_GETFL, 0);
     fcntl(buf->pty_master_fd, F_SETFL, flags | O_NONBLOCK);
 
     memset(&buf->term_state, 0, sizeof(TermParserState));
@@ -51,16 +53,17 @@ int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, int rows, int 
     return 0;
 }
 
-void ptySessionResize(struct buffer_t* buf, int rows, int cols)
+void ptySessionResize(const struct buffer_t* buf, const int rows, const int cols)
 {
+    struct winsize ws;
     if (buf->pty_master_fd < 0) return;
-    struct winsize ws = { .ws_row = rows, .ws_col = cols, .ws_xpixel = 0, .ws_ypixel = 0 };
+    ws = (struct winsize){ .ws_row = rows, .ws_col = cols, .ws_xpixel = 0, .ws_ypixel = 0 };
     ioctl(buf->pty_master_fd, TIOCSWINSZ, &ws);
     if (buf->child_pid > 0)
         kill(buf->child_pid, SIGWINCH);
 }
 
-ssize_t ptySessionWrite(struct buffer_t* buf, const char* bytes, size_t len)
+ssize_t ptySessionWrite(const struct buffer_t* buf, const char* bytes, const size_t len)
 {
     if (buf->pty_master_fd < 0) return -1;
     return write(buf->pty_master_fd, bytes, len);
@@ -68,10 +71,11 @@ ssize_t ptySessionWrite(struct buffer_t* buf, const char* bytes, size_t len)
 
 int ptySessionIsAlive(struct buffer_t* buf)
 {
+    int status;
+    pid_t r;
     if (buf->child_pid <= 0) return 0;
 
-    int status;
-    pid_t r = waitpid(buf->child_pid, &status, WNOHANG);
+    r = waitpid(buf->child_pid, &status, WNOHANG);
     if (r == 0) return 1;   // still running
     buf->child_pid = -1;    // exited (r == pid) or error (r == -1) — either way, done
     return 0;

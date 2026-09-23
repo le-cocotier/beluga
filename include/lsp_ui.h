@@ -17,7 +17,7 @@ void lspUiDrawDiagnostics(struct abuf *ab, DiagnosticList *diags,
                           EditorPane *pane, struct buffer_t *buf);
 
 // Input handling — returns 1 if the key was consumed by the popup
-int lspUiHandleKey(CompletionPopup *popup, Utf8Char *key);
+int lspUiHandleKey(CompletionPopup *popup, const Utf8Char *key);
 
 // Parse clangd JSON into our structs
 void lspParseCompletion(const char *json, CompletionPopup *popup,

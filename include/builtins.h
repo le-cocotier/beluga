@@ -48,7 +48,7 @@ Lisp l_editorSave(Lisp args, LispError *e, LispContext ctx);
 Lisp editorSetPrefix(Lisp args, LispError *e, LispContext ctx);
 Lisp editorPrefix(Lisp args, LispError *e, LispContext ctx);
 Lisp mapKey(Lisp args, LispError *e, LispContext ctx);
-void registerBuiltin(char * key_sequence, LispCFunc f);
+void registerBuiltin(const char * key_sequence, LispCFunc f);
 Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx);
 Lisp editorOpenConfig(Lisp args, LispError *e, LispContext ctx);
 
@@ -59,6 +59,7 @@ Lisp editorOpenFilePath(Lisp args, LispError *e, LispContext ctx);
 // Directory listing / scratch buffers — file explorer, tree dump, etc.
 Lisp l_listBuffers(Lisp args, LispError *e, LispContext ctx);
 Lisp editorSwitchToBuffer(Lisp args, LispError *e, LispContext ctx);
+Lisp editorKillBuffer(Lisp args, LispError *e, LispContext ctx); // (editor-kill-buffer [id])
 Lisp editorPwd(Lisp args, LispError *e, LispContext ctx);
 Lisp listDirectory(Lisp args, LispError *e, LispContext ctx);
 Lisp editorScratchOpen(Lisp args, LispError *e, LispContext ctx);
@@ -118,6 +119,8 @@ void bFree_structs(void);
 //   "before-save"   (filename)            — about to write buffer to disk
 //   "after-save"    (filename)            — buffer was just written
 //   "lsp-ready"     ()                    — LSP handshake completed
+//   "buffer-killed" (name, buffer-id)     — a buffer was just killed
+//                                            (see bufferClose() in buffer.c)
 Lisp addHook(Lisp args, LispError *e, LispContext ctx);
 void runHooks(const char *event_name, Lisp args);
 

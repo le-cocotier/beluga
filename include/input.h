@@ -20,7 +20,7 @@
 // END \x1b[4~ || <esc>[8~ || <esc>[F  || <esc>OF
 // DELETE \x1b[3~
 
-Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode);
+Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode);
 
 Utf8Char *fileCompletion(Utf8Char *path);
 

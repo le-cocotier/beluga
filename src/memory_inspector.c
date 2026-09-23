@@ -38,7 +38,7 @@ typedef enum {
 
 static SortMode s_sort_mode = SORT_RECENCY;
 
-static const char *sortModeLabel(SortMode mode) {
+static const char *sortModeLabel(const SortMode mode) {
   switch (mode) {
   case SORT_SIZE_DESC: return "size";
   case SORT_LOCATION:  return "location";
@@ -57,7 +57,7 @@ static int compareSizeDesc(const void *a, const void *b) {
 static int compareLocation(const void *a, const void *b) {
   const struct dataBlock_t *ba = *(const struct dataBlock_t * const *)a;
   const struct dataBlock_t *bb = *(const struct dataBlock_t * const *)b;
-  int c = strcmp(ba->file ? ba->file : "", bb->file ? bb->file : "");
+  const int c = strcmp(ba->file ? ba->file : "", bb->file ? bb->file : "");
   if (c != 0)
     return c;
   if (ba->line != bb->line)
@@ -66,7 +66,8 @@ static int compareLocation(const void *a, const void *b) {
 }
 
 static void clearBufferRows(Buffer *buf) {
-  for (int i = 0; i < buf->numrows; i++) {
+  int i;
+  for (i = 0; i < buf->numrows; i++) {
     gfree(buf->row[i].characters);
     gfree(buf->row[i].attrs);
   }
@@ -87,8 +88,9 @@ static void addRow(Buffer *buf, const char *text) {
 
 static Buffer *openMemoryBuffer(void) {
   Buffer *buf = bufferFindById(s_memory_buffer_id);
+  Utf8Char *name;
   if (!buf || buf->type != EXPLORER_BUFF) {
-    Utf8Char *name = stringToUtf8((unsigned char *)MEMORY_BUFFER_NAME);
+    name = stringToUtf8((unsigned char *)MEMORY_BUFFER_NAME);
     if (!name)
       return NULL;
     s_memory_buffer_id = bufferCreate(name, READ_ONLY, EXPLORER_BUFF);
@@ -107,20 +109,23 @@ static Buffer *openMemoryBuffer(void) {
 // gfree's "is this the last allocated block" check) depends on that list's
 // actual insertion order, so it must never be reordered in place.
 static struct dataBlock_t **collectSortedBlocks(int *out_count) {
-  int count = gBlockCount();
+  const int count = gBlockCount();
+  struct dataBlock_t **arr;
+  int i;
+  struct dataBlock_t *p;
   if (count <= 0) {
     *out_count = 0;
     return NULL;
   }
 
-  struct dataBlock_t **arr = galloc(sizeof(struct dataBlock_t *) * (size_t) count);
+  arr = galloc(sizeof(struct dataBlock_t *) * (size_t) count);
   if (!arr) {
     *out_count = 0;
     return NULL;
   }
 
-  int i = 0;
-  for (struct dataBlock_t *p = gBlocks(); p && i < count; p = p->lastBlock)
+  i = 0;
+  for (p = gBlocks(); p && i < count; p = p->lastBlock)
     arr[i++] = p;
 
   switch (s_sort_mode) {
@@ -144,16 +149,20 @@ static void formatRow(char *out, size_t out_size, const struct dataBlock_t *p) {
 }
 
 static void renderSnapshot(Buffer *buf) {
+  int count;
+  struct dataBlock_t **sorted;
+  size_t total;
+  int i;
+  char header[160];
+  char row[160];
   clearBufferRows(buf);
 
-  int count;
-  struct dataBlock_t **sorted = collectSortedBlocks(&count);
+  sorted = collectSortedBlocks(&count);
 
-  size_t total = 0;
-  for (int i = 0; i < count; i++)
+  total = 0;
+  for (i = 0; i < count; i++)
     total += sorted[i]->size;
 
-  char header[160];
   snprintf(header, sizeof(header),
            "%d tracked block%s, %zu bytes total — sorted by %s", count,
            count == 1 ? "" : "s", total, sortModeLabel(s_sort_mode));
@@ -161,8 +170,7 @@ static void renderSnapshot(Buffer *buf) {
   addRow(buf, "r refresh, s cycle sort, w export, CTRL-x leave");
   addRow(buf, "");
 
-  for (int i = 0; i < count; i++) {
-    char row[160];
+  for (i = 0; i < count; i++) {
     formatRow(row, sizeof(row), sorted[i]);
     addRow(buf, row);
   }
@@ -173,18 +181,20 @@ static void renderSnapshot(Buffer *buf) {
 
 void memoryInspectorOpen(void) {
   Buffer *buf = openMemoryBuffer();
+  EditorPane *active;
+  struct prefix_t prefix;
   if (!buf)
     return;
   renderSnapshot(buf);
 
-  EditorPane *active = splitScreenGetActivePane();
+  active = splitScreenGetActivePane();
   active->buffer_id = s_memory_buffer_id;
   active->cursor_y = buf->y;
   active->cursor_x = 0;
   active->y_offset = 0;
   active->x_offset = 0;
 
-  struct prefix_t prefix = find_prefix(MEMORY_PREFIX_NAME);
+  prefix = find_prefix(MEMORY_PREFIX_NAME);
   if (prefix.prefix_id != -1)
     E.prefix_state = prefix.prefix_id;
 
@@ -194,6 +204,7 @@ void memoryInspectorOpen(void) {
 
 void memoryInspectorRefresh(void) {
   Buffer *buf = bufferFindById(s_memory_buffer_id);
+  EditorPane *active;
   if (!buf || buf->type != EXPLORER_BUFF)
     return;
   renderSnapshot(buf);
@@ -202,7 +213,7 @@ void memoryInspectorRefresh(void) {
   // Without this, the active pane's cursor/scroll from before the refresh
   // can point past the new row count and read out of bounds — unlike
   // memoryInspectorOpen(), which starts these at 0 already.
-  EditorPane *active = splitScreenGetActivePane();
+  active = splitScreenGetActivePane();
   if (active->buffer_id == s_memory_buffer_id) {
     active->cursor_y = buf->y;
     active->cursor_x = 0;
@@ -222,10 +233,17 @@ void memoryInspectorCycleSort(void) {
 void memoryInspectorExport(void) {
   Utf8Char *input =
       editorPrompt("Export memory snapshot to: %u (ESC to cancel)", NULL, 0);
+  char *path;
+  FILE *f;
+  int count;
+  struct dataBlock_t **sorted;
+  size_t total;
+  int i;
+  char row[160];
   if (!input)
     return;
 
-  char *path = (char *)utf8ToString(input);
+  path = (char *)utf8ToString(input);
   gfree(input);
   if (!path)
     return;
@@ -234,23 +252,21 @@ void memoryInspectorExport(void) {
     return;
   }
 
-  FILE *f = fopen(path, "w");
+  f = fopen(path, "w");
   if (!f) {
     editorSetStatusMessage("could not open %s for writing", path);
     gfree(path);
     return;
   }
 
-  int count;
-  struct dataBlock_t **sorted = collectSortedBlocks(&count);
-  size_t total = 0;
-  for (int i = 0; i < count; i++)
+  sorted = collectSortedBlocks(&count);
+  total = 0;
+  for (i = 0; i < count; i++)
     total += sorted[i]->size;
 
   fprintf(f, "%d tracked block%s, %zu bytes total, sorted by %s\n\n", count,
           count == 1 ? "" : "s", total, sortModeLabel(s_sort_mode));
-  for (int i = 0; i < count; i++) {
-    char row[160];
+  for (i = 0; i < count; i++) {
     formatRow(row, sizeof(row), sorted[i]);
     fprintf(f, "%s\n", row);
   }

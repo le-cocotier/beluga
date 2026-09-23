@@ -47,7 +47,7 @@ static uint32_t utf8CharCodepoint(const Utf8Char *c)
  */
 int is_word_char(const Utf8Char *c)
 {
-    uint32_t cp = utf8CharCodepoint(c);
+    const uint32_t cp = utf8CharCodepoint(c);
 
     if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') ||
         (cp >= '0' && cp <= '9') || cp == '_' || cp == '#')
@@ -74,7 +74,7 @@ int is_word_char(const Utf8Char *c)
  * @note Guards against a multi-byte character whose first raw byte happens
  * to numerically match an ASCII value — length must also be 1.
  */
-static int isAsciiChar(const Utf8Char *c, char ch)
+static int isAsciiChar(const Utf8Char *c, const char ch)
 {
     return c->length == 1 && c->character[0] == (unsigned char)ch;
 }
@@ -89,10 +89,11 @@ static int isAsciiChar(const Utf8Char *c, char ch)
  * @return The number of characters matched (== strlen(needle)) on a match,
  * or 0.
  */
-static int rowMatchesAt(const Row *row, int i, const char *needle)
+static int rowMatchesAt(const Row *row, const int i, const char *needle)
 {
+    int n;
     if (!needle[0]) return 0;
-    int n = 0;
+    n = 0;
     while (needle[n])
     {
         if (i + n >= row->size || !isAsciiChar(&row->characters[i + n], needle[n]))
@@ -113,7 +114,7 @@ static int rowMatchesAt(const Row *row, int i, const char *needle)
  * caller can clip output to the pane's visible width without losing state.
  */
 static void copy_utf8_char(char *dst, int *dst_pos, const Utf8Char *src, int *src_pos,
-                           int x_start, int x_end)
+                           const int x_start, const int x_end)
 {
     const Utf8Char *c = &src[*src_pos];
     if (*src_pos >= x_start && *src_pos < x_end)
@@ -124,7 +125,7 @@ static void copy_utf8_char(char *dst, int *dst_pos, const Utf8Char *src, int *sr
     (*src_pos)++;
 }
 
-const char *get_color(TokenType type)
+static const char *get_color(const TokenType type)
 {
     switch (type)
     {
@@ -137,19 +138,20 @@ const char *get_color(TokenType type)
     }
 }
 
-const LanguageSyntax *syntaxLanguageFor(Utf8Char *filename)
+const LanguageSyntax *syntaxLanguageFor(const Utf8Char *filename)
 {
     char ext[16];
+    int i;
     if (!utf8FilenameExtension(filename, ext, sizeof(ext)))
         return NULL;
 
-    for (int i = 0; i < E.number_of_languages; i++)
+    for (i = 0; i < E.number_of_languages; i++)
         if (strcmp(E.languages[i].extension, ext) == 0)
             return &E.languages[i];
     return NULL;
 }
 
-int comment_section = 0;
+static int comment_section = 0;
 
 // ─── Block-comment state cache ──────────────────────────────────────────────
 //
@@ -184,11 +186,16 @@ int comment_section = 0;
 static void scanRowForCommentState(const Row *row, int *in_comment, const LanguageSyntax *lang)
 {
     int i = 0;
+    int closeLen;
+    int openLen;
+    int quote;
+    int q;
+    unsigned char qc;
     while (i < row->size)
     {
         if (*in_comment)
         {
-            int closeLen = rowMatchesAt(row, i, lang->block_comment_close);
+            closeLen = rowMatchesAt(row, i, lang->block_comment_close);
             if (closeLen) { *in_comment = 0; i += closeLen; }
             else i++;
             continue;
@@ -198,7 +205,7 @@ static void scanRowForCommentState(const Row *row, int *in_comment, const Langua
         if (rowMatchesAt(row, i, lang->line_comment))
             return;
 
-        int openLen = rowMatchesAt(row, i, lang->block_comment_open);
+        openLen = rowMatchesAt(row, i, lang->block_comment_open);
         if (openLen)
         {
             *in_comment = 1;
@@ -206,12 +213,12 @@ static void scanRowForCommentState(const Row *row, int *in_comment, const Langua
             continue;
         }
 
-        int quote = -1;
-        for (int q = 0; q < lang->num_quote_chars; q++)
+        quote = -1;
+        for (q = 0; q < lang->num_quote_chars; q++)
             if (isAsciiChar(&row->characters[i], lang->quote_chars[q])) { quote = q; break; }
         if (quote >= 0)
         {
-            unsigned char qc = (unsigned char) lang->quote_chars[quote];
+            qc = (unsigned char) lang->quote_chars[quote];
             i++;
             while (i < row->size && !(row->characters[i].length == 1 &&
                                       row->characters[i].character[0] == qc))
@@ -230,56 +237,96 @@ static void scanRowForCommentState(const Row *row, int *in_comment, const Langua
 }
 
 /**
- * @brief Rebuilds buf->comment_state[] in one pass over the whole buffer,
- * if it's stale (syntaxHighlighterInvalidate() was called since the last
- * build) or the row count has changed. A no-op otherwise — this is what
- * keeps re-seeding the highlighter on every frame from being an O(file
- * size) cost on every single redraw; it's only paid once per edit.
+ * @brief Extends the valid prefix of buf->comment_state[] until it covers
+ * `row`, scanning only the rows it's missing.
+ * @details The cache used to be all-or-nothing: any edit threw it away and
+ * the next frame rescanned the whole buffer from the top — ~10ms per
+ * keystroke on a 50k-line file, the single biggest cost of typing. Row
+ * Y's start state only depends on rows above it, so an edit to row N
+ * keeps [0, N] valid (see syntaxHighlighterInvalidateAfter()), and a
+ * frame only ever asks for the pane's first visible row — which is almost
+ * always at or just above the row being edited, leaving little or nothing
+ * to rescan.
  */
-static void ensureCommentStateFresh(Buffer *buf, const LanguageSyntax *lang)
+static void ensureCommentState(Buffer *buf, const LanguageSyntax *lang, int row)
 {
-    if (buf->comment_state_valid && buf->comment_state_numrows == buf->numrows)
+    int cap;
+    unsigned char *grown;
+    int r;
+    int in_comment;
+    // A row-count change that didn't go through a tracked edit
+    // (bufferInsertRow/rowRemoveAt/...): e.g. a scratch buffer being
+    // refilled directly. We can't know which rows moved, so start over.
+    if (buf->comment_state_rows_seen != buf->numrows)
+    {
+        buf->comment_state_known = 0;
+        buf->comment_state_rows_seen = buf->numrows;
+    }
+    if (buf->comment_state_known > buf->numrows)
+        buf->comment_state_known = buf->numrows;
+    if (row >= buf->numrows)
+        row = buf->numrows - 1;
+    if (row < buf->comment_state_known)
         return;
 
-    unsigned char *fresh = buf->numrows > 0 ? galloc((size_t) buf->numrows) : NULL;
-    if (buf->numrows > 0 && !fresh)
-        return; // best-effort: leave the previous (stale) cache in place rather than crash
-
-    int in_comment = 0;
-    for (int r = 0; r < buf->numrows; r++)
+    if (buf->comment_state_cap < buf->numrows)
     {
-        fresh[r] = (unsigned char) in_comment; // state at the *start* of this row
-        scanRowForCommentState(&buf->row[r], &in_comment, lang);
+        cap = buf->comment_state_cap ? buf->comment_state_cap : 1024;
+        while (cap < buf->numrows)
+            cap *= 2;
+        grown = grealloc(buf->comment_state, (size_t) cap);
+        if (!grown)
+            return; // best-effort: callers treat a missing entry as "not in a comment"
+        buf->comment_state = grown;
+        buf->comment_state_cap = cap;
     }
 
-    gfree(buf->comment_state);
-    buf->comment_state = fresh;
-    buf->comment_state_numrows = buf->numrows;
-    buf->comment_state_valid = 1;
+    r = buf->comment_state_known;
+    in_comment = 0;
+    if (r > 0)
+    {
+        in_comment = buf->comment_state[r - 1];
+        scanRowForCommentState(&buf->row[r - 1], &in_comment, lang);
+    }
+    for (; r <= row; r++)
+    {
+        buf->comment_state[r] = (unsigned char) in_comment; // state at the *start* of row r
+        if (r < row)
+            scanRowForCommentState(&buf->row[r], &in_comment, lang);
+    }
+    buf->comment_state_known = row + 1;
 }
 
-int commentStateAtRowStart(Buffer *buf, int row)
+int commentStateAtRowStart(Buffer *buf, const int row)
 {
-    if (!buf)
+    const LanguageSyntax *lang;
+    if (!buf || row < 0 || row >= buf->numrows)
         return 0;
-    const LanguageSyntax *lang = syntaxLanguageFor(buf->filename);
+    lang = syntaxLanguageFor(buf->filename);
     // No registered language, or one with no block comment at all (e.g.
     // YAML): nothing can ever be "inside" one, so there's nothing to scan.
     if (!lang || !lang->block_comment_open[0])
         return 0;
-    ensureCommentStateFresh(buf, lang);
-    if (!buf->comment_state || row < 0 || row >= buf->comment_state_numrows)
+    ensureCommentState(buf, lang, row);
+    if (!buf->comment_state || row >= buf->comment_state_known)
         return 0;
     return buf->comment_state[row];
 }
 
-void syntaxHighlighterInvalidate(Buffer *buf)
+void syntaxHighlighterInvalidateAfter(Buffer *buf, const int row)
 {
-    if (buf)
-        buf->comment_state_valid = 0;
+    int keep;
+    if (!buf)
+        return;
+    keep = row + 1; // rows [0, row] keep their start state
+    if (keep < 0)
+        keep = 0;
+    if (buf->comment_state_known > keep)
+        buf->comment_state_known = keep;
+    buf->comment_state_rows_seen = buf->numrows;
 }
 
-void syntaxHighlighterSeed(int in_comment)
+void syntaxHighlighterSeed(const int in_comment)
 {
     comment_section = in_comment;
 }
@@ -297,6 +344,8 @@ void syntaxHighlighterSeed(int in_comment)
  * path (the "c" package registers its own keyword/type list the same way).
  * @param row The row to highlight (row->characters / row->size)
  * @param length Out-param: length in bytes of the returned string (including terminator)
+ * @param x_offset First visible column (horizontal scroll offset)
+ * @param width Number of visible columns to render
  * @param lang The calling buffer's registered language (must be non-NULL —
  * callers only get here once syntaxLanguageFor() has already found one)
  * @return Newly allocated string, caller must gfree(); NULL on allocation failure
@@ -309,6 +358,25 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
     // leading/trailing codes.
     int buf_size = (row->size + 1) * 48 + 256;
     char *result = galloc(buf_size);
+    int x_start;
+    int x_end;
+    int result_pos;
+    int i;
+    const Utf8Char *chars;
+    int closeLen;
+    int k;
+    int openLen;
+    int quote_idx;
+    int q;
+    unsigned char quote;
+    char qbuf[2];
+    int start;
+    char word[256];
+    int word_byte_len;
+    int w;
+    const Utf8Char *wc;
+    TokenType type;
+    int wi;
     if (!result)
     {
         *length = 0;
@@ -322,12 +390,12 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
     // whose column falls in [x_start, x_end), so the *output* is clipped to
     // exactly what the pane can show, matching how the plain-text row path
     // already respects x_offset/width.
-    int x_start = x_offset;
-    int x_end = x_offset + width;
+    x_start = x_offset;
+    x_end = x_offset + width;
 
-    int result_pos = 0;
-    int i = 0;
-    const Utf8Char *chars = row->characters;
+    result_pos = 0;
+    i = 0;
+    chars = row->characters;
 
     while (i < row->size)
     {
@@ -350,10 +418,10 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_COMMENT);
             while (i < row->size)
             {
-                int closeLen = rowMatchesAt(row, i, lang->block_comment_close);
+                closeLen = rowMatchesAt(row, i, lang->block_comment_close);
                 if (closeLen)
                 {
-                    for (int k = 0; k < closeLen; k++)
+                    for (k = 0; k < closeLen; k++)
                         copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
                     comment_section = 0;
                     break;
@@ -376,19 +444,19 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
         }
 
         // Block comments
-        int openLen = rowMatchesAt(row, i, lang->block_comment_open);
+        openLen = rowMatchesAt(row, i, lang->block_comment_open);
         if (openLen)
         {
             comment_section = 1;
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_COMMENT);
-            for (int k = 0; k < openLen; k++)
+            for (k = 0; k < openLen; k++)
                 copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
             while (i < row->size)
             {
-                int closeLen = rowMatchesAt(row, i, lang->block_comment_close);
+                closeLen = rowMatchesAt(row, i, lang->block_comment_close);
                 if (closeLen)
                 {
-                    for (int k = 0; k < closeLen; k++)
+                    for (k = 0; k < closeLen; k++)
                         copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
                     comment_section = 0;
                     break;
@@ -401,13 +469,14 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
 
         // Strings — any of this language's configured quote characters,
         // all sharing the same backslash-escape handling.
-        int quote_idx = -1;
-        for (int q = 0; q < lang->num_quote_chars; q++)
+        quote_idx = -1;
+        for (q = 0; q < lang->num_quote_chars; q++)
             if (isAsciiChar(&chars[i], lang->quote_chars[q])) { quote_idx = q; break; }
         if (quote_idx >= 0)
         {
-            unsigned char quote = (unsigned char) lang->quote_chars[quote_idx];
-            char qbuf[2] = { (char) quote, '\0' };
+            quote = (unsigned char) lang->quote_chars[quote_idx];
+            qbuf[0] = (char) quote;
+            qbuf[1] = '\0';
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s%s", E.theme.COLOR_STRING, qbuf);
             i++;
             while (i < row->size && !(chars[i].length == 1 && chars[i].character[0] == quote))
@@ -442,15 +511,14 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
         // Identifiers and keywords
         if (is_word_char(&chars[i]))
         {
-            int start = i;
+            start = i;
             while (i < row->size && is_word_char(&chars[i]))
                 i++;
 
-            char word[256];
-            int word_byte_len = 0;
-            for (int w = start; w < i; w++)
+            word_byte_len = 0;
+            for (w = start; w < i; w++)
             {
-                const Utf8Char *wc = &chars[w];
+                wc = &chars[w];
                 if (word_byte_len + wc->length >= (int) sizeof(word))
                     break; // guard against pathologically long identifiers
                 memcpy(&word[word_byte_len], wc->character, wc->length);
@@ -458,8 +526,8 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
             }
             word[word_byte_len] = '\0';
 
-            TokenType type = TOKEN_DEFAULT;
-            for (int wi = 0; wi < lang->num_words; wi++)
+            type = TOKEN_DEFAULT;
+            for (wi = 0; wi < lang->num_words; wi++)
             {
                 if (strcmp(word, lang->words[wi].word) == 0)
                 {
@@ -474,7 +542,7 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
             // must be a plain while loop — pairing it with a for-loop's own
             // increment would skip every other character.
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", get_color(type));
-            int w = start;
+            w = start;
             while (w < i)
                 copy_utf8_char(result, &result_pos, chars, &w, x_start, x_end);
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);

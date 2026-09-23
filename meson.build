@@ -19,6 +19,12 @@ thread_dep = dependency('threads')
 add_project_arguments('-D_GNU_SOURCE', language : 'c')
 add_project_arguments('-g', language : 'c')
 
+# House rule: every variable is declared at the top of its function. The
+# compiler can only enforce part of it (a declaration after a statement in
+# the same block) — declarations opening a nested block or a for-loop
+# header aren't flagged, so keep to the rule by hand there too.
+add_project_arguments('-Wdeclaration-after-statement', language : 'c')
+
 # forkpty() lives in libutil on Linux; on macOS/BSD it is in libc and this
 # lookup simply finds nothing, which is why it is not `required`.
 util_dep = cc.find_library('util', required : false)

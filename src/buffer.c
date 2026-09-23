@@ -57,15 +57,17 @@ extern int buffer_id;
  * evicting the oldest entry once UNDO_MAX_ENTRIES is reached so a very long
  * editing session can't grow this without bound.
  */
-static void undoListPush(UndoList *list, UndoEntry entry) {
+static void undoListPush(UndoList *list, const UndoEntry entry) {
+  int new_cap;
+  UndoEntry *grown;
   if (list->count >= UNDO_MAX_ENTRIES) {
     memmove(list->entries, list->entries + 1,
             sizeof(UndoEntry) * (list->count - 1));
     list->count--;
   }
   if (list->count >= list->capacity) {
-    int new_cap = list->capacity ? list->capacity * 2 : 64;
-    UndoEntry *grown = grealloc(list->entries, sizeof(UndoEntry) * new_cap);
+    new_cap = list->capacity ? list->capacity * 2 : 64;
+    grown = grealloc(list->entries, sizeof(UndoEntry) * new_cap);
     if (!grown)
       return; // best-effort: drop the entry rather than crash
     list->entries = grown;
@@ -90,23 +92,24 @@ static void undoListPush(UndoList *list, UndoEntry entry) {
  * a cursor jump, or a fresh call right after an undo/redo — starts a new
  * group.
  */
-static void undoRecord(struct buffer_t *buf, UndoKind kind, int row, int col,
-                       Utf8Char ch) {
+static void undoRecord(struct buffer_t *buf, const UndoKind kind, const int row, const int col,
+                       const Utf8Char ch) {
+  int contiguous;
+  UndoEntry entry;
   buf->redo_stack.count = 0;
 
-  int contiguous = 0;
+  contiguous = 0;
   if (buf->undo_group_open && buf->undo_last_kind == kind &&
-      buf->undo_last_row == row) {
-    if (kind == UNDO_INSERT_CHAR && col == buf->undo_last_col + 1)
-      contiguous = 1; // typing forward
-    else if (kind == UNDO_DELETE_CHAR &&
-             (col == buf->undo_last_col - 1 || col == buf->undo_last_col))
-      contiguous = 1; // backspacing (col-1) or forward-deleting at a fixed col
-  }
+      buf->undo_last_row == row &&
+      // typing forward, or backspacing (col-1)/forward-deleting (col) at a fixed column
+      ((kind == UNDO_INSERT_CHAR && col == buf->undo_last_col + 1) ||
+       (kind == UNDO_DELETE_CHAR &&
+        (col == buf->undo_last_col - 1 || col == buf->undo_last_col))))
+    contiguous = 1;
   if (!contiguous)
     buf->undo_next_group_id++;
 
-  UndoEntry entry = {.kind = kind,
+  entry = (UndoEntry){.kind = kind,
                      .row = row,
                      .col = col,
                      .ch = ch,
@@ -141,13 +144,15 @@ static void rowSplitAt(struct buffer_t *buf, int row, int col) {
 static void rowJoinNext(struct buffer_t *buf, int row) {
   Row *next = &buf->row[row + 1];
   Row *dest = &buf->row[row];
-  for (int i = 0; i < next->size; ++i)
+  int i;
+  for (i = 0; i < next->size; ++i)
     bufferRowInsertChar(buf, dest, dest->size, &next->characters[i]);
   gfree(next->characters);
   next->characters = NULL;
   memmove(&buf->row[row + 1], &buf->row[row + 2],
           sizeof(Row) * (buf->numrows - row - 2));
   buf->numrows--;
+  syntaxHighlighterInvalidateAfter(buf, row);
 }
 
 /**
@@ -168,7 +173,7 @@ static void rowRemoveAt(struct buffer_t *buf, int at) {
   memmove(&buf->row[at], &buf->row[at + 1],
           sizeof(Row) * (buf->numrows - at - 1));
   buf->numrows--;
-  syntaxHighlighterInvalidate(buf);
+  syntaxHighlighterInvalidateAfter(buf, at - 1);
 }
 
 /**
@@ -178,15 +183,17 @@ static void rowRemoveAt(struct buffer_t *buf, int at) {
  * forward again. Leaves the cursor at the last-undone edit's position.
  */
 void bufferUndo(struct buffer_t *buf) {
+  int gid;
+  UndoEntry e;
   if (buf->undo_stack.count == 0) {
     editorSetStatusMessage("No further undo information");
     return;
   }
 
-  int gid = buf->undo_stack.entries[buf->undo_stack.count - 1].group_id;
+  gid = buf->undo_stack.entries[buf->undo_stack.count - 1].group_id;
   while (buf->undo_stack.count > 0 &&
          buf->undo_stack.entries[buf->undo_stack.count - 1].group_id == gid) {
-    UndoEntry e = buf->undo_stack.entries[--buf->undo_stack.count];
+    e = buf->undo_stack.entries[--buf->undo_stack.count];
     switch (e.kind) {
     case UNDO_INSERT_CHAR:
       bufferRowDelChar(buf, &buf->row[e.row], e.col);
@@ -221,15 +228,17 @@ void bufferUndo(struct buffer_t *buf) {
  * last-redone edit's position.
  */
 void bufferRedo(struct buffer_t *buf) {
+  int gid;
+  UndoEntry e;
   if (buf->redo_stack.count == 0) {
     editorSetStatusMessage("No further redo information");
     return;
   }
 
-  int gid = buf->redo_stack.entries[buf->redo_stack.count - 1].group_id;
+  gid = buf->redo_stack.entries[buf->redo_stack.count - 1].group_id;
   while (buf->redo_stack.count > 0 &&
          buf->redo_stack.entries[buf->redo_stack.count - 1].group_id == gid) {
-    UndoEntry e = buf->redo_stack.entries[--buf->redo_stack.count];
+    e = buf->redo_stack.entries[--buf->redo_stack.count];
     switch (e.kind) {
     case UNDO_INSERT_CHAR:
       bufferRowInsertChar(buf, &buf->row[e.row], e.col, &e.ch);
@@ -292,21 +301,28 @@ char *bufferGetRegionText(struct buffer_t *buf, int start_row, int start_col,
                           int end_row, int end_col) {
   size_t cap = 256, len = 0;
   char *text = galloc(cap);
+  int row;
+  Row *r;
+  int from;
+  int to;
+  int c;
+  Utf8Char *ch;
+  char *grown;
   if (!text)
     return NULL;
 
-  for (int row = start_row; row <= end_row && row < buf->numrows; row++) {
-    Row *r = &buf->row[row];
-    int from = (row == start_row) ? start_col : 0;
-    int to = (row == end_row) ? end_col : r->size;
+  for (row = start_row; row <= end_row && row < buf->numrows; row++) {
+    r = &buf->row[row];
+    from = (row == start_row) ? start_col : 0;
+    to = (row == end_row) ? end_col : r->size;
     if (to > r->size)
       to = r->size;
 
-    for (int c = from; c < to; c++) {
-      Utf8Char *ch = &r->characters[c];
+    for (c = from; c < to; c++) {
+      ch = &r->characters[c];
       if (len + (size_t)ch->length + 2 > cap) {
         cap *= 2;
-        char *grown = grealloc(text, cap);
+        grown = grealloc(text, cap);
         if (!grown) {
           gfree(text);
           return NULL;
@@ -319,7 +335,7 @@ char *bufferGetRegionText(struct buffer_t *buf, int start_row, int start_col,
     if (row != end_row) {
       if (len + 2 > cap) {
         cap *= 2;
-        char *grown = grealloc(text, cap);
+        grown = grealloc(text, cap);
         if (!grown) {
           gfree(text);
           return NULL;
@@ -343,6 +359,10 @@ char *bufferGetRegionText(struct buffer_t *buf, int start_row, int start_col,
  */
 void bufferDeleteRegion(struct buffer_t *buf, int start_row, int start_col,
                         int end_row, int end_col) {
+  int row;
+  int col;
+  Row *r;
+  Utf8Char deleted;
   if (buf->state == READ_ONLY)
     return;
   // See bufferInsertChar()'s comment — kill-region reaching a terminal
@@ -352,14 +372,14 @@ void bufferDeleteRegion(struct buffer_t *buf, int start_row, int start_col,
   if (start_row > end_row || (start_row == end_row && start_col >= end_col))
     return;
 
-  int row = start_row, col = start_col;
+  row = start_row; col = start_col;
   while (row < buf->numrows) {
     if (row == end_row && col >= end_col)
       break; // reached the end of the region
 
-    Row *r = &buf->row[row];
+    r = &buf->row[row];
     if (col < r->size) {
-      Utf8Char deleted = r->characters[col];
+      deleted = r->characters[col];
       bufferRowDelChar(buf, r, col);
       undoRecord(buf, UNDO_DELETE_CHAR, row, col, deleted);
       if (row == end_row)
@@ -405,6 +425,10 @@ void bufferDeleteRegion(struct buffer_t *buf, int start_row, int start_col,
  */
 void bufferApplyTextEdit(struct buffer_t *buf, int start_row, int start_col,
                          int end_row, int end_col, const char *new_text) {
+  int row;
+  int col;
+  const unsigned char *p;
+  Utf8Char ch;
   if (buf->state == READ_ONLY)
     return;
   // No LSP server is ever registered for a terminal's own pseudo-
@@ -431,8 +455,8 @@ void bufferApplyTextEdit(struct buffer_t *buf, int start_row, int start_col,
   if (start_row < end_row || (start_row == end_row && start_col < end_col))
     bufferDeleteRegion(buf, start_row, start_col, end_row, end_col);
 
-  int row = start_row, col = start_col;
-  const unsigned char *p = (const unsigned char *)new_text;
+  row = start_row; col = start_col;
+  p = (const unsigned char *)new_text;
   while (p && *p) {
     if (*p == '\n') {
       rowSplitAt(buf, row, col);
@@ -441,7 +465,6 @@ void bufferApplyTextEdit(struct buffer_t *buf, int start_row, int start_col,
       col = 0;
       p++;
     } else {
-      Utf8Char ch;
       p += utf8CreateChar(p, &ch);
       bufferRowInsertChar(buf, &buf->row[row], col, &ch);
       undoRecord(buf, UNDO_INSERT_CHAR, row, col, ch);
@@ -508,6 +531,22 @@ static int gitParseHunkHeader(const char *line, int *old_start, int *old_lines,
  * when the answer can actually have changed.
  */
 void bufferRefreshGitInfo(struct buffer_t *buf) {
+  char *dir_str;
+  char *file_str;
+  char qdir[PATH_MAX + 4];
+  char qfile[PATH_MAX + 4];
+  char cmd[3 * PATH_MAX];
+  char *branch;
+  char *status;
+  char *diff;
+  char *line;
+  int old_start;
+  int old_lines;
+  int new_start;
+  int new_lines;
+  GitLineStatus status2;
+  int i;
+  int idx;
   gfree(buf->git_lines);
   buf->git_lines = NULL;
   buf->git_lines_count = 0;
@@ -518,17 +557,15 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
   if (buf->type != FILE_BUFF || !buf->path || !buf->fullname)
     return;
 
-  char *dir_str = (char *)utf8ToString(buf->path);
-  char *file_str = (char *)utf8ToString(buf->fullname);
+  dir_str = (char *)utf8ToString(buf->path);
+  file_str = (char *)utf8ToString(buf->fullname);
 
-  char qdir[PATH_MAX + 4], qfile[PATH_MAX + 4];
   gitShellQuote(dir_str, qdir, sizeof(qdir));
   gitShellQuote(file_str, qfile, sizeof(qfile));
 
-  char cmd[3 * PATH_MAX];
   snprintf(cmd, sizeof(cmd),
            "git -C %s rev-parse --abbrev-ref HEAD 2>/dev/null", qdir);
-  char *branch = gitRunCommand(cmd);
+  branch = gitRunCommand(cmd);
   if (!branch) {
     gfree(dir_str);
     gfree(file_str);
@@ -542,37 +579,35 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
 
   snprintf(cmd, sizeof(cmd), "git -C %s status --porcelain -- %s 2>/dev/null",
            qdir, qfile);
-  char *status = gitRunCommand(cmd);
+  status = gitRunCommand(cmd);
   buf->git_dirty = status != NULL;
   gfree(status);
 
   if (buf->numrows > 0) {
-    buf->git_lines = calloc(buf->numrows, sizeof(GitLineStatus));
+    buf->git_lines = gcalloc(buf->numrows, sizeof(GitLineStatus));
     buf->git_lines_count = buf->git_lines ? buf->numrows : 0;
   }
 
   snprintf(cmd, sizeof(cmd), "git -C %s diff --no-color -U0 -- %s 2>/dev/null",
            qdir, qfile);
-  char *diff = gitRunCommand(cmd);
+  diff = gitRunCommand(cmd);
   if (diff && buf->git_lines) {
-    char *line = strtok(diff, "\n");
+    line = strtok(diff, "\n");
     while (line) {
       if (line[0] == '@' && line[1] == '@') {
-        int old_start, old_lines, new_start, new_lines;
         if (gitParseHunkHeader(line, &old_start, &old_lines, &new_start,
                                &new_lines)) {
           if (new_lines > 0) {
-            GitLineStatus status2 =
-                (old_lines == 0) ? GIT_LINE_ADDED : GIT_LINE_MODIFIED;
-            for (int i = 0; i < new_lines; i++) {
-              int idx = new_start - 1 + i; // 0-based
+            status2 = (old_lines == 0) ? GIT_LINE_ADDED : GIT_LINE_MODIFIED;
+            for (i = 0; i < new_lines; i++) {
+              idx = new_start - 1 + i; // 0-based
               if (idx >= 0 && idx < buf->git_lines_count)
                 buf->git_lines[idx] = status2;
             }
           } else if (new_start > 0) {
             // Pure deletion: no added/changed line of its own to mark —
             // flag the line right before it as the nearest visible anchor.
-            int idx = new_start - 1;
+            idx = new_start - 1;
             if (idx >= 0 && idx < buf->git_lines_count)
               buf->git_lines[idx] = GIT_LINE_MODIFIED;
           }
@@ -598,10 +633,12 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
  * @return Buffer ID if found, -1 if not found
  */
 int bufferFindByFilename(Utf8Char *filename) {
+  int first_buffer_id;
+  Buffer *buffer;
   if (E.buffers == NULL)
     return -1;
-  int first_buffer_id = E.buffers->buffer_id;
-  Buffer *buffer = E.buffers;
+  first_buffer_id = E.buffers->buffer_id;
+  buffer = E.buffers;
   do {
     if (buffer->filename != NULL &&
         utf8StringCmp(buffer->filename, filename) == 0) {
@@ -628,10 +665,12 @@ int bufferFindByFilename(Utf8Char *filename) {
  * @return buffer_id of the other buffer, or -1 if none
  */
 int bufferFindOtherLspOpen(struct buffer_t *buf) {
+  int first_buffer_id;
+  struct buffer_t *b;
   if (E.buffers == NULL || !buf->fullname)
     return -1;
-  int first_buffer_id = E.buffers->buffer_id;
-  struct buffer_t *b = E.buffers;
+  first_buffer_id = E.buffers->buffer_id;
+  b = E.buffers;
   do {
     if (b->buffer_id != buf->buffer_id && b->type == FILE_BUFF &&
         b->b_lsp_open && b->fullname &&
@@ -645,16 +684,18 @@ int bufferFindOtherLspOpen(struct buffer_t *buf) {
 
 /**
  * @brief Finds a buffer by ID
- * @param buffer_id The buffer ID to find
+ * @param buff_id The buffer ID to find
  * @return Pointer to buffer, NULL if not found
  */
-struct buffer_t *bufferFindById(int buffer_id) {
+struct buffer_t *bufferFindById(int buff_id) {
+  int first_buffer_id;
+  Buffer *buffer;
   if (E.buffers == NULL)
     return NULL;
-  int first_buffer_id = E.buffers->buffer_id;
-  Buffer *buffer = E.buffers;
+  first_buffer_id = E.buffers->buffer_id;
+  buffer = E.buffers;
   do {
-    if (buffer->buffer_id == buffer_id) {
+    if (buffer->buffer_id == buff_id) {
       return buffer;
     }
     buffer = buffer->next;
@@ -675,21 +716,34 @@ struct buffer_t *bufferFindById(int buffer_id) {
  */
 int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
                  enum buffer_type type) {
+  Utf8Char *filename;
+  char *string_filename;
+  const Utf8Char *last_slash;
+  const Utf8Char *name_start;
+  unsigned char temp_filename[5] = "term";
+  int existing_id;
+  struct buffer_t *new_buf;
+  char fullname[PATH_MAX + 1];
+  char *path_str;
+  char *fullname_str;
+  Lisp hook_args;
+  EditorPane *active;
+  struct prefix_t prefix;
+  struct buffer_t *old_next;
   appDebug("Creating new buffer");
 
-  Utf8Char *filename = NULL;
-  char *string_filename = NULL;
+  filename = NULL;
+  string_filename = NULL;
 
   if (type == FILE_BUFF) {
-    Utf8Char *last_slash = lastSlashUtf8(path);
-    const Utf8Char *name_start = last_slash ? last_slash + 1 : path;
+    last_slash = lastSlashUtf8(path);
+    name_start = last_slash ? last_slash + 1 : path;
 
-    filename = (Utf8Char *)calloc(utf8StringLen(name_start), sizeof(Utf8Char));
+    filename = (Utf8Char *)gcalloc(utf8StringLen(name_start), sizeof(Utf8Char));
     if (!filename)
       return -1;
     utf8Cpy(filename, name_start);
   } else if (type == TERMINAL_BUFF) { // path is already just a plain name, no
-      unsigned char temp_filename[5] = "term";
       filename = stringToUtf8(temp_filename);
                                     // splitting needed
     if (!filename)
@@ -700,7 +754,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
          // of scratch buffer (explorer sidebar, tree dump, ...) coexist
          // without bufferFindByFilename() treating them as the same one.
   {
-    filename = (Utf8Char *)calloc(utf8StringLen(path), sizeof(Utf8Char));
+    filename = (Utf8Char *)gcalloc(utf8StringLen(path), sizeof(Utf8Char));
     if (!filename)
       return -1;
     utf8Cpy(filename, path);
@@ -714,7 +768,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   // dedup: reusing the one "term" buffer or a singleton scratch buffer
   // like "*explorer*"/"*tree*" by name is the whole point there.
   if (type != FILE_BUFF) {
-    const int existing_id = bufferFindByFilename(filename);
+    existing_id = bufferFindByFilename(filename);
     if (existing_id != -1) {
       gfree(filename);
       return bufferSwitch(existing_id);
@@ -727,7 +781,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
     return -1;
   }
 
-  struct buffer_t *new_buf = calloc(1, sizeof(struct buffer_t));
+  new_buf = gcalloc(1, sizeof(struct buffer_t));
   new_buf->buffer_id = buffer_id++;
   new_buf->type = type;
   new_buf->state = state;
@@ -736,7 +790,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   new_buf->dirty = 0;
   new_buf->b_lsp_open = 0;
 
-  new_buf->filename = calloc(utf8StringLen(filename), sizeof(Utf8Char));
+  new_buf->filename = gcalloc(utf8StringLen(filename), sizeof(Utf8Char));
   if (!new_buf->filename) {
     gfree(filename);
     return -1;
@@ -747,8 +801,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   E.number_of_buffer++;
 
   if (type == FILE_BUFF) {
-    char fullname[PATH_MAX + 1];
-    char *path_str = (char *)utf8ToString(path);
+    path_str = (char *)utf8ToString(path);
 
     if (realpath(path_str, fullname) == NULL) {
       // File doesn't exist yet, or path invalid — fall back to the raw path
@@ -781,8 +834,8 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
     splitScreenGetActivePane()->buffer_id = new_buf->buffer_id;
     bufferRefreshGitInfo(new_buf);
 
-    char *fullname_str = (char *)utf8ToString(new_buf->fullname);
-    Lisp hook_args = lisp_cons(
+    fullname_str = (char *)utf8ToString(new_buf->fullname);
+    hook_args = lisp_cons(
         lisp_make_string2(fullname_str, E.ctx),
         lisp_cons(lisp_make_int(new_buf->buffer_id), lisp_null(), E.ctx),
         E.ctx);
@@ -794,16 +847,16 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
     new_buf->child_pid = -1;
     new_buf->pty_master_fd = -1;
     new_buf->path = NULL;
-    new_buf->fullname = stringToUtf8("term");
+    new_buf->fullname = stringToUtf8((unsigned char *) "term");
 
-    EditorPane *active = splitScreenGetActivePane();
+    active = splitScreenGetActivePane();
     if (ptySessionSpawn(new_buf, NULL, active->height, active->width) != 0) {
       editorSetStatusMessage("Error: failed to start shell");
       E.number_of_buffer--; // undo the early increment above — this buffer n
                             // ver came up
       return -1;
     }
-    struct prefix_t prefix = find_prefix("term");
+    prefix = find_prefix("term");
     E.prefix_state = prefix.prefix_id;
   } else // EXPLORER_BUFF: no real filesystem path, no rows yet — Lisp
          // populates content via editor-scratch-set-lines. Doesn't touch
@@ -835,7 +888,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
     // actually its predecessor — without this, the very first buffer
     // ever created ends up with a ->prev that permanently points to
     // itself instead of wrapping around to the last one.
-    struct buffer_t *old_next = E.buffers->next;
+    old_next = E.buffers->next;
     new_buf->prev = E.buffers;
     new_buf->next = old_next;
     E.buffers->next = new_buf;
@@ -852,17 +905,19 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
 /**
  * @brief Switches to a specific buffer by ID
  * @details Saves current buffer state, loads target buffer content and state.
- * @param buffer_id The buffer ID to switch to
+ * @param buff_id The buffer ID to switch to
  * @return 0 on success, -1 on failure
  */
-int bufferSwitch(int buffer_id) {
+int bufferSwitch(int buff_id) {
   struct buffer_t *target = NULL;
-  target = bufferFindById(buffer_id);
+  const char *prefix_name;
+  struct prefix_t prefix;
+  target = bufferFindById(buff_id);
   if (target == NULL) {
     editorSetStatusMessage("Error: buffer not found");
     return -1;
   }
-  E.layout.panes[E.layout.active_pane].buffer_id = buffer_id;
+  E.layout.panes[E.layout.active_pane].buffer_id = buff_id;
 
   // Same focus-prefix routing splitScreenSwitchPane() does, so a buffer
   // that carries its own keymap gets it however you arrive: the buffer
@@ -870,14 +925,14 @@ int bufferSwitch(int buffer_id) {
   // pane switch. This also covers re-opening the terminal while its
   // buffer already exists — bufferCreate() dedups to bufferSwitch() and
   // returns before ever reaching the code that sets the "term" prefix.
-  const char *prefix_name = NULL;
+  prefix_name = NULL;
   if (target->type == TERMINAL_BUFF)
     prefix_name = "term";
   else if (target->type == EXPLORER_BUFF)
     prefix_name = target->focus_prefix[0] ? target->focus_prefix : "explorer";
 
   if (prefix_name) {
-    struct prefix_t prefix = find_prefix(prefix_name);
+    prefix = find_prefix(prefix_name);
     if (prefix.prefix_id != -1)
       E.prefix_state = prefix.prefix_id;
   } else {
@@ -885,61 +940,172 @@ int bufferSwitch(int buffer_id) {
   }
 
   editorSetStatusMessage("Switched to: %u (buffer %d)", target->filename,
-                         buffer_id);
+                         buff_id);
   return 0;
 }
 
 /**
- * @brief Closes a buffer by ID
- * @details Frees buffer resources and removes from buffer list.
- * Prompts to save unsaved changes. If closing current buffer,
- * switches to next available buffer.
- * @param buffer_id The buffer ID to close
- * @return 0 on success, -1 on failure
+ * @brief Asks before killing something that can't be recovered: a file
+ * buffer with unsaved changes, or a terminal whose shell is still running.
+ * @return 1 to go ahead, 0 if the user declined (or pressed ESC).
  */
-int bufferClose(int buffer_id) {
-  struct buffer_t *buf = bufferFindById(buffer_id);
+static int bufferConfirmKill(struct buffer_t *buf) {
+  const char *question = NULL;
+  char name[256];
+  char *name_str;
+  char *c;
+  char prompt[512];
+  const char *u;
+  Utf8Char *answer;
+  int yes;
+  if (buf->type == FILE_BUFF && buf->dirty)
+    question = "Buffer %u modified; kill anyway? (y/n): %u";
+  else if (buf->type == TERMINAL_BUFF && buf->child_pid > 0)
+    question = "Terminal %u still running; kill it? (y/n): %u";
+  if (!question)
+    return 1;
+
+  // editorPrompt() takes a single %u for the typed answer; substitute the
+  // buffer's name into the question first.
+  name_str = (char *) utf8ToString(buf->filename);
+  snprintf(name, sizeof(name), "%s", name_str ? name_str : "");
+  gfree(name_str);
+  for (c = name; *c; c++) // the result is a format string: no stray %
+    if (*c == '%')
+      *c = '?';
+  u = strstr(question, "%u");
+  snprintf(prompt, sizeof(prompt), "%.*s%s%s", (int) (u - question), question,
+           name, u + 2);
+
+  answer = editorPrompt(prompt, NULL, 0);
+  yes = answer && answer->length == 1 &&
+            (answer->character[0] == 'y' || answer->character[0] == 'Y');
+  gfree(answer);
+  if (!yes)
+    editorSetStatusMessage("Kill cancelled");
+  return yes;
+}
+
+/**
+ * @brief Kills a buffer: every pane showing it moves to another buffer,
+ * then the buffer and everything it owns is freed.
+ * @details Follows Emacs' kill-buffer: panes aren't closed, they switch to
+ * another buffer (a file buffer if there is one). The exception is the
+ * explorer-style sidebar — a two-pane layout where the killed buffer is a
+ * scratch buffer next to a real one — which collapses to the other pane
+ * rather than leaving a file squeezed into the sidebar's width. Asks first
+ * for a modified file or a live terminal (bufferConfirmKill()), refuses to
+ * kill the very last buffer (every pane must always show one), closes the
+ * document on the language server, and fires the "buffer-killed" hook
+ * (name buffer-id) once the buffer is gone so packages holding its id —
+ * the explorer's sidebar state, say — can drop it.
+ * @param buff_id The buffer ID to kill
+ * @return 0 on success, -1 if not found, refused, or cancelled
+ */
+int bufferClose(int buff_id) {
+  struct buffer_t *buf = bufferFindById(buff_id);
+  int other;
+  struct buffer_t *other_buf;
+  struct buffer_t *replacement;
+  struct buffer_t *b;
+  int i;
+  DiagnosticList *diags;
+  int kept;
+  char *short_str;
+  char *name_str;
+  Lisp hook_args;
   if (buf == NULL) {
     editorSetStatusMessage("Error: buffer not found");
     return -1;
   }
+  if (buf->next == buf) {
+    editorSetStatusMessage("Can't kill the only buffer");
+    return -1;
+  }
+  if (!bufferConfirmKill(buf))
+    return -1;
 
-  EditorPane *active = splitScreenGetActivePane();
-
-  // If this is the current buffer, find next buffer to switch to
-  if (active->buffer_id == buffer_id) {
-    int next_id = -1;
-    if (buf->next != NULL) {
-      next_id = buf->next->buffer_id;
-    }
-
-    if (next_id != -1) {
-      bufferSwitch(next_id);
-    } else {
-      // No other buffers, clear editor
-      editorCloseFile();
-    }
+  // Sidebar case: collapse to the other pane instead of refilling this one.
+  if (buf->type == EXPLORER_BUFF && E.layout.num_panes == 2) {
+    other = E.layout.panes[0].buffer_id == buff_id
+                    ? E.layout.panes[1].buffer_id
+                    : E.layout.panes[0].buffer_id;
+    other_buf = bufferFindById(other);
+    if (other != buff_id && other_buf && other_buf->type != EXPLORER_BUFF)
+      splitScreenUnify(); // keeps the first non-EXPLORER_BUFF pane
   }
 
-  // Free buffer resources
+  // Prefer a real, editable file over the read-only splash screen or a
+  // scratch/terminal buffer; fall back to anything else that's left.
+  replacement = NULL;
+  for (b = buf->next; b != buf && !replacement; b = b->next)
+    if (b->type == FILE_BUFF && b->state != READ_ONLY)
+      replacement = b;
+  for (b = buf->next; b != buf && !replacement; b = b->next)
+    if (b->type == FILE_BUFF)
+      replacement = b;
+  if (!replacement)
+    replacement = buf->next;
+
+  for (i = 0; i < E.layout.num_panes; i++) {
+    if (E.layout.panes[i].buffer_id != buff_id)
+      continue;
+    if (i == E.layout.active_pane)
+      bufferSwitch(replacement->buffer_id); // also resyncs the key prefix
+    else
+      E.layout.panes[i].buffer_id = replacement->buffer_id;
+  }
+
+  // Language server: close the document unless another buffer still has
+  // the same file open, and drop its diagnostics — buffer ids are never
+  // reused, so nothing would ever replace them.
+  if (buf->b_lsp_open) {
+    if (bufferFindOtherLspOpen(buf) == -1 && E.lsp_client &&
+        E.lsp_client->state == LSP_READY)
+      lspDidClose(E.lsp_client, buf);
+    buf->b_lsp_open = 0;
+  }
+  diags = &E.lsp_diagnostics;
+  kept = 0;
+  for (i = 0; i < diags->count; i++)
+    if (diags->entries[i].buffer_id != buff_id)
+      diags->entries[kept++] = diags->entries[i];
+  diags->count = kept;
+
+  if (buf->type == TERMINAL_BUFF)
+    ptySessionClose(buf);
+
+  // Short name for the status bar, full path for the hook (same as
+  // "buffer-opened" passes).
+  short_str = (char *) utf8ToString(buf->filename);
+  name_str = (char *) utf8ToString(buf->fullname ? buf->fullname : buf->filename);
+
+  // Unlink before freeing, and move the list head off it if needed.
+  if (E.buffers == buf)
+    E.buffers = buf->next;
+  buf->next->prev = buf->prev;
+  buf->prev->next = buf->next;
+  E.number_of_buffer--;
+
+  for (i = 0; i < buf->numrows; i++)
+    bufferFreeRow(&buf->row[i]);
+  gfree(buf->row);
   gfree(buf->filename);
-  buf->filename = NULL;
+  gfree(buf->path);
+  gfree(buf->fullname);
   gfree(buf->undo_stack.entries);
   gfree(buf->redo_stack.entries);
   gfree(buf->git_lines);
   gfree(buf->comment_state);
-  buf->buffer_id = -1;
+  gfree(buf);
 
-  buf->next->prev = buf->prev;
-  buf->prev->next = buf->next;
-
-  E.number_of_buffer--;
-
-  if (buf->type == TERMINAL_BUFF) {
-    ptySessionClose(buf);
-  }
-
-  editorSetStatusMessage("Closed buffer %d", buffer_id);
+  editorSetStatusMessage("Killed %s", short_str ? short_str : "buffer");
+  gfree(short_str);
+  hook_args = lisp_cons(lisp_make_string2(name_str ? name_str : "", E.ctx),
+                             lisp_cons(lisp_make_int(buff_id), lisp_null(), E.ctx),
+                             E.ctx);
+  gfree(name_str);
+  runHooks("buffer-killed", hook_args);
   return 0;
 }
 
@@ -963,10 +1129,11 @@ struct buffer_t *bufferGetCurrent(void) {
  */
 struct lspServerConfig_t *lspServerConfigFor(Utf8Char *filename) {
   char ext[16];
+  int i;
   if (!utf8FilenameExtension(filename, ext, sizeof(ext)))
     return NULL;
 
-  for (int i = 0; i < E.number_of_lsp_servers; i++)
+  for (i = 0; i < E.number_of_lsp_servers; i++)
     if (strcmp(E.lsp_servers[i].extension, ext) == 0)
       return &E.lsp_servers[i];
   return NULL;
@@ -983,17 +1150,21 @@ struct lspServerConfig_t *lspServerConfigFor(Utf8Char *filename) {
  * and so must run after editorOpen().
  */
 void bufferMaybeStartLsp(struct buffer_t *buf) {
+  struct lspServerConfig_t *cfg;
+  Utf8Char *answer;
+  Utf8Char *default_root;
+  Utf8Char *root;
+  char *root_str;
   if (!E.constantes.LSP)
     return;
   if (E.lsp_client->state != LSP_NOT_STARTED)
     return; // already asked, already running, or shut down
 
-  struct lspServerConfig_t *cfg = lspServerConfigFor(buf->filename);
+  cfg = lspServerConfigFor(buf->filename);
   if (!cfg)
     return; // no server registered for this extension
 
-  Utf8Char *answer =
-      editorPrompt("Start LSP server for this project? (y/n): %u", NULL, 0);
+  answer = editorPrompt("Start LSP server for this project? (y/n): %u", NULL, 0);
   if (!answer || answer->length != 1 ||
       (answer->character[0] != 'y' && answer->character[0] != 'Y')) {
     gfree(answer);
@@ -1003,15 +1174,15 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   }
   gfree(answer);
 
-  Utf8Char *default_root = buf->path ? buf->path : buf->fullname;
-  Utf8Char *root = editorPrompt("Project root: %u", default_root,
+  default_root = buf->path ? buf->path : buf->fullname;
+  root = editorPrompt("Project root: %u", default_root,
                                 1); // bPathMode=1: Tab completes paths
   if (!root) {
     E.lsp_client->state = LSP_SHUTDOWN;
     return;
   }
 
-  char *root_str = (char *)utf8ToString(root);
+  root_str = (char *)utf8ToString(root);
   gfree(root);
 
   strncpy(E.lsp_client->language_id, cfg->language_id,
@@ -1047,6 +1218,7 @@ int lspServerConfigMatchesRunning(const struct lspServerConfig_t *cfg) {
  * bufferCreate() call has fully returned) covers the very first buffer.
  */
 void bufferMaybeSyncLsp(struct buffer_t *buf) {
+  struct lspServerConfig_t *cfg;
   if (!E.constantes.LSP || !E.lsp_client)
     return;
   if (E.lsp_client->state != LSP_READY)
@@ -1054,7 +1226,7 @@ void bufferMaybeSyncLsp(struct buffer_t *buf) {
   if (buf->b_lsp_open)
     return; // already synced
 
-  struct lspServerConfig_t *cfg = lspServerConfigFor(buf->filename);
+  cfg = lspServerConfigFor(buf->filename);
   if (!cfg)
     return; // no server registered for this extension
   // ...and that server has to be the one actually running — "only one
@@ -1087,26 +1259,30 @@ void bufferMaybeSyncLsp(struct buffer_t *buf) {
  * @return Number of open buffers
  */
 int bufferListAll(void) {
+  char buf[256] = "";
+  int offset;
+  EditorPane *active;
+  int first_buffer_id;
+  struct buffer_t *b;
+  char marker;
+  char *name;
   if (E.number_of_buffer == 0) {
     editorSetStatusMessage("No buffers open");
     return 0;
   }
 
-  char buf[256] = "";
-  int offset = 0;
-  EditorPane *active = splitScreenGetActivePane();
-  int first_buffer_id = E.buffers->buffer_id;
-  struct buffer_t *b = E.buffers;
+  offset = 0;
+  active = splitScreenGetActivePane();
+  first_buffer_id = E.buffers->buffer_id;
+  b = E.buffers;
   do {
-    char marker = (b->buffer_id == active->buffer_id) ? '*' : ' ';
-#if 0 // TODO: Remake
-        offset += utf8Printf(&buf[offset], sizeof(buf) - offset,
-                           "%c%d:%s ", marker, b->buffer_id,
-                           b->filename ? b->filename : "[No Name]");
-        b = b->next;
-#endif
-
-  } while (b->buffer_id != first_buffer_id);
+    marker = (b->buffer_id == active->buffer_id) ? '*' : ' ';
+    name = b->filename ? (char *) utf8ToString(b->filename) : NULL;
+    offset += snprintf(&buf[offset], sizeof(buf) - offset, "%c%d:%s ", marker,
+                       b->buffer_id, name ? name : "[No Name]");
+    gfree(name);
+    b = b->next;
+  } while (b->buffer_id != first_buffer_id && offset < (int) sizeof(buf) - 1);
   editorSetStatusMessage("Buffers: %s", buf);
   return E.number_of_buffer;
 }
@@ -1161,7 +1337,8 @@ int bufferSaveAll(void) {
  */
 static int bufferByteOffsetToCharIndex(Row *row, int byte_offset) {
   int bytes = 0;
-  for (int i = 0; i < row->size; i++) {
+  int i;
+  for (i = 0; i < row->size; i++) {
     if (bytes == byte_offset)
       return i;
     bytes += row->characters[i].length;
@@ -1178,8 +1355,9 @@ static char *bufferFindLastMatchBefore(const char *haystack, const char *needle,
                                        int max_byte) {
   char *result = NULL;
   const char *search_from = haystack;
+  char *match;
   while (1) {
-    char *match = strstr(search_from, needle);
+    match = strstr(search_from, needle);
     if (!match || (int)(match - haystack) >= max_byte)
       break;
     result = match;
@@ -1200,31 +1378,41 @@ static char *bufferFindLastMatchBefore(const char *haystack, const char *needle,
  * @see editorPrompt()
  */
 void bufferFind(struct buffer_t *buf) {
+  Utf8Char *query;
+  char *query_str;
+  int i;
+  Row *row;
+  char *row_str;
+  int start_char;
+  int start_byte;
+  int c;
+  int row_bytes;
+  char *match;
   appDebug("searching\n");
-  Utf8Char *query = editorPrompt("Search: %u (ESC to cancel)", NULL, 0);
+  query = editorPrompt("Search: %u (ESC to cancel)", NULL, 0);
   if (!query)
     return;
 
-  char *query_str = (char *)utf8ToString(query);
+  query_str = (char *)utf8ToString(query);
   gfree(query);
   if (query_str[0] == '\0') {
     gfree(query_str);
     return;
   }
 
-  for (int i = buf->y; i < buf->numrows; i++) {
-    Row *row = &buf->row[i];
-    char *row_str = (char *)utf8ToString(row->characters);
+  for (i = buf->y; i < buf->numrows; i++) {
+    row = &buf->row[i];
+    row_str = (char *)utf8ToString(row->characters);
 
-    int start_char = (i == buf->y) ? buf->x + 1 : 0;
-    int start_byte = 0;
-    for (int c = 0; c < start_char && c < row->size; c++)
+    start_char = (i == buf->y) ? buf->x + 1 : 0;
+    start_byte = 0;
+    for (c = 0; c < start_char && c < row->size; c++)
       start_byte += row->characters[c].length;
-    int row_bytes = (int)strlen(row_str);
+    row_bytes = (int)strlen(row_str);
     if (start_byte > row_bytes)
       start_byte = row_bytes;
 
-    char *match = strstr(row_str + start_byte, query_str);
+    match = strstr(row_str + start_byte, query_str);
     if (match) {
       buf->y = i;
       buf->x = bufferByteOffsetToCharIndex(row, (int)(match - row_str));
@@ -1244,28 +1432,37 @@ void bufferFind(struct buffer_t *buf) {
  * @see bufferFind()
  */
 void bufferFindReverse(struct buffer_t *buf) {
+  Utf8Char *query;
+  char *query_str;
+  int i;
+  Row *row;
+  char *row_str;
+  int end_char;
+  int end_byte;
+  int c;
+  char *match;
   appDebug("searching\n");
-  Utf8Char *query = editorPrompt("Reverse search: %u (ESC to cancel)", NULL, 0);
+  query = editorPrompt("Reverse search: %u (ESC to cancel)", NULL, 0);
   if (!query)
     return;
 
-  char *query_str = (char *)utf8ToString(query);
+  query_str = (char *)utf8ToString(query);
   gfree(query);
   if (query_str[0] == '\0') {
     gfree(query_str);
     return;
   }
 
-  for (int i = buf->y; i >= 0; i--) {
-    Row *row = &buf->row[i];
-    char *row_str = (char *)utf8ToString(row->characters);
+  for (i = buf->y; i >= 0; i--) {
+    row = &buf->row[i];
+    row_str = (char *)utf8ToString(row->characters);
 
-    int end_char = (i == buf->y) ? buf->x : row->size;
-    int end_byte = 0;
-    for (int c = 0; c < end_char && c < row->size; c++)
+    end_char = (i == buf->y) ? buf->x : row->size;
+    end_byte = 0;
+    for (c = 0; c < end_char && c < row->size; c++)
       end_byte += row->characters[c].length;
 
-    char *match = bufferFindLastMatchBefore(row_str, query_str, end_byte);
+    match = bufferFindLastMatchBefore(row_str, query_str, end_byte);
     if (match) {
       buf->y = i;
       buf->x = bufferByteOffsetToCharIndex(row, (int)(match - row_str));
@@ -1277,15 +1474,41 @@ void bufferFindReverse(struct buffer_t *buf) {
   gfree(query_str);
 }
 
+/**
+ * @brief Index of `row` within `buffer->row`, or -1 if it isn't one of its
+ * rows — -1 makes syntaxHighlighterInvalidateAfter() drop the whole cache,
+ * the safe answer when we can't tell which row changed.
+ */
+static int rowCapacity(int numrows) {
+  int cap = 16;
+  while (cap < numrows)
+    cap *= 2;
+  return cap;
+}
+
+static int rowIndexOf(const struct buffer_t *buffer, const Row *row) {
+  if (!buffer->row || row < buffer->row || row >= buffer->row + buffer->numrows)
+    return -1;
+  return (int) (row - buffer->row);
+}
+
 void bufferInsertRow(struct buffer_t *buffer, int at, Utf8Char *string,
                      int len) {
+  int needed;
+  Row *tmp;
   if (at < 0 || at > buffer->numrows)
     return;
-  Row *tmp = recalloc(buffer->row, sizeof(Row) * buffer->numrows,
-                      sizeof(Row) * (buffer->numrows + 1));
-  if (!tmp)
-    return;
-  buffer->row = tmp;
+  // Grow by doubling instead of one row at a time (which made loading an
+  // n-line file O(n) reallocs). No capacity field needed: this is the only
+  // place ->row ever grows, it never shrinks, and every other site resets
+  // it to NULL — so the array always holds at least rowCapacity(numrows).
+  needed = buffer->numrows + 1;
+  if (!buffer->row || needed > rowCapacity(buffer->numrows)) {
+    tmp = (Row *) grealloc(buffer->row, sizeof(Row) * (size_t) rowCapacity(needed));
+    if (!tmp)
+      return;
+    buffer->row = tmp;
+  }
 
   /* Shift existing rows to make room at 'at' — no at++ */
   if (at < buffer->numrows) {
@@ -1293,8 +1516,8 @@ void bufferInsertRow(struct buffer_t *buffer, int at, Utf8Char *string,
             sizeof(Row) * (buffer->numrows - at)); /* not -at+1 */
   }
 
-  buffer->row[at].size = (int)len;
-  buffer->row[at].characters = calloc((len + 1), sizeof(Utf8Char));
+  buffer->row[at].size = len;
+  buffer->row[at].characters = gcalloc((len + 1), sizeof(Utf8Char));
   buffer->row[at].attrs = NULL;
 
   if (!buffer->row[at].characters)
@@ -1307,7 +1530,7 @@ void bufferInsertRow(struct buffer_t *buffer, int at, Utf8Char *string,
   if (buffer->type != TERMINAL_BUFF) {
     buffer->dirty++;
   }
-  syntaxHighlighterInvalidate(buffer);
+  syntaxHighlighterInvalidateAfter(buffer, at - 1);
 }
 
 void bufferFreeRow(Row *row) {
@@ -1317,18 +1540,21 @@ void bufferFreeRow(Row *row) {
 
 /**
  * \fn editorRowInsertChar(erow *row, int at, int c)
- * \param at Index of where we want to insert the char */
+ * \param buffer The buffer `row` belongs to
+ * \param row Row to insert into
+ * \param at Index of where we want to insert the char
+ * \param character The character to insert */
 
 void bufferRowInsertChar(struct buffer_t *buffer, Row *row, int at,
                          Utf8Char *character) {
+  Utf8Char *new_chars;
   if (buffer->state == READ_ONLY)
     return;
   if (at < 0 || at > row->size)
     return;
 
-  Utf8Char *new_chars = (Utf8Char *)recalloc(
-      row->characters, row->size * sizeof(Utf8Char),
-      (row->size + 2) * sizeof(Utf8Char)); // +1 new char, +1 terminator
+  new_chars = (Utf8Char *) grealloc(
+      row->characters, (row->size + 2) * sizeof(Utf8Char)); // +1 new char, +1 terminator
   if (!new_chars) {
     return;
   }
@@ -1344,14 +1570,15 @@ void bufferRowInsertChar(struct buffer_t *buffer, Row *row, int at,
   if (buffer->type != TERMINAL_BUFF) {
     ++buffer->dirty;
   }
-  syntaxHighlighterInvalidate(buffer);
+  syntaxHighlighterInvalidateAfter(buffer, rowIndexOf(buffer, row));
 }
 
 /**
  * \fn bufferRowDelChar(struct bufferConfig *E, frow *frow, int at)
  * \brief Delete the a char at the chosen position on the given row
- * \param at Index of the char to delete
+ * \param buffer The buffer `row` belongs to
  * \param row Row on operation is made
+ * \param at Index of the char to delete
  * \note Pure row mutation — does not touch buffer->x. It used to
  * unconditionally decrement it (assuming every caller was a backspace at
  * the cursor), which made this unusable as a general "delete at column N"
@@ -1367,12 +1594,14 @@ void bufferRowDelChar(struct buffer_t *buffer, Row *row, int at) {
           (row->size - at - 1) * sizeof(Utf8Char));
   row->size -= 1;
   END_OF_STRING(row->characters[row->size]);
-  syntaxHighlighterInvalidate(buffer);
+  syntaxHighlighterInvalidateAfter(buffer, rowIndexOf(buffer, row));
 }
 
 void bufferInsertChar(Utf8Char *character) {
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buf = bufferFindById(active->buffer_id);
+  Utf8Char end_string;
+  int col;
   // A terminal buffer's rows are owned by the ANSI parser (ansi_parser.c),
   // which keeps its own attrs[] array in lockstep with row->size — this
   // generic path has no idea attrs[] even exists, so growing row->size
@@ -1388,11 +1617,10 @@ void bufferInsertChar(Utf8Char *character) {
   if (buf->type == TERMINAL_BUFF)
     return;
   if (buf->y == buf->numrows) {
-    Utf8Char end_string;
     END_OF_STRING(end_string);
     bufferInsertRow(buf, buf->numrows, &end_string, 0);
   }
-  int col = buf->x;
+  col = buf->x;
   bufferRowInsertChar(buf, &buf->row[buf->y], col, character);
   undoRecord(buf, UNDO_INSERT_CHAR, buf->y, col, *character);
   buf->x = col + 1;
@@ -1402,6 +1630,11 @@ void bufferInsertChar(Utf8Char *character) {
 void bufferDelChar(void) {
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buf = bufferFindById(active->buffer_id);
+  Row *r;
+  int col;
+  Utf8Char deleted;
+  int target_row;
+  int prev_char_count;
 
   // See bufferInsertChar()'s comment — same reasoning, same risk.
   if (buf->type == TERMINAL_BUFF)
@@ -1414,18 +1647,18 @@ void bufferDelChar(void) {
     return;
 
   /* Use row_offset, not col_offset, for row indexing */
-  Row *r = &buf->row[buf->y];
+  r = &buf->row[buf->y];
 
   if (buf->x > 0) {
-    int col = buf->x - 1;
-    Utf8Char deleted = r->characters[col];
+    col = buf->x - 1;
+    deleted = r->characters[col];
     bufferRowDelChar(buf, r, col);
     undoRecord(buf, UNDO_DELETE_CHAR, buf->y, col, deleted);
     buf->x = col;
   } else {
     /* Merge current row into the previous one */
-    int target_row = buf->y - 1;
-    int prev_char_count = buf->row[target_row].size;
+    target_row = buf->y - 1;
+    prev_char_count = buf->row[target_row].size;
     rowJoinNext(buf, target_row);
     undoRecord(buf, UNDO_JOIN_LINE, target_row, prev_char_count, (Utf8Char){0});
 
@@ -1442,6 +1675,8 @@ void bufferDelChar(void) {
 void bufferInsertNewLine(void) {
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buf = bufferFindById(active->buffer_id);
+  int split_row;
+  int split_col;
 
   // Unlike character insert/delete (bufferRowInsertChar/bufferRowDelChar),
   // this one never checked READ_ONLY at all — harmless for a normal
@@ -1462,7 +1697,7 @@ void bufferInsertNewLine(void) {
     rowInsertBlank(buf, buf->numrows);
     undoRecord(buf, UNDO_INSERT_ROW, buf->numrows - 1, 0, (Utf8Char){0});
   } else {
-    int split_row = buf->y, split_col = buf->x;
+    split_row = buf->y; split_col = buf->x;
     rowSplitAt(buf, split_row, split_col);
     undoRecord(buf, UNDO_SPLIT_LINE, split_row, split_col, (Utf8Char){0});
   }
@@ -1472,21 +1707,26 @@ void bufferInsertNewLine(void) {
 
 char *bufferToText(struct buffer_t *buf) {
   size_t total = 0;
-  for (int i = 0; i < buf->numrows; i++) {
-    Row *row = &buf->row[i];
-    for (int j = 0; j < row->size; j++)
+  int i;
+  Row *row;
+  int j;
+  char *text;
+  char *p;
+  for (i = 0; i < buf->numrows; i++) {
+    row = &buf->row[i];
+    for (j = 0; j < row->size; j++)
       total += row->characters[j].length;
     total += 1; // '\n'
   }
 
-  char *text = galloc(total + 1);
+  text = galloc(total + 1);
   if (!text)
     return NULL;
 
-  char *p = text;
-  for (int i = 0; i < buf->numrows; i++) {
-    Row *row = &buf->row[i];
-    for (int j = 0; j < row->size; j++) {
+  p = text;
+  for (i = 0; i < buf->numrows; i++) {
+    row = &buf->row[i];
+    for (j = 0; j < row->size; j++) {
       memcpy(p, row->characters[j].character, row->characters[j].length);
       p += row->characters[j].length;
     }

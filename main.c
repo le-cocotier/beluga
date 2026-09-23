@@ -1,7 +1,7 @@
 /**
  * \file main.c
  * \author Arthur Barraux
- * \brief Base file of Beluga text editor. Contain fonctions for terminal
+ * \brief Base file of Beluga text editor. Contain functions for terminal
  * interactions. \version 0.1 \date 21 septembre 2024
  */
 
@@ -25,17 +25,21 @@
 EditorConfig E;
 int buffer_id = 0;
 
-int main(int argc, char *argv[]) {
+int main(const int argc, char *argv[]) {
+    const char *home;
+    Utf8Char* splash_screen;
+    EditorPane *active;
+    Utf8Char* filename;
     if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
         printf("Beluga %s\n", BELUGA_VERSION);
         return 0;
     }
 
     // Get HOME with NULL check
-    const char *home = getenv("HOME");
-    Utf8Char* splash_screen = calloc(PATH_MAX, sizeof(Utf8Char));
-    EditorPane *active = NULL;
-   
+    home = getenv("HOME");
+    splash_screen = gcalloc(PATH_MAX, sizeof(Utf8Char));
+    active = NULL;
+
     if (!home) {
         fprintf(stderr, "Error: HOME environment variable not set\n");
         return 1;
@@ -48,10 +52,10 @@ int main(int argc, char *argv[]) {
     initEditor();
 
     active = splitScreenGetActivePane();
-    active->buffer_id = bufferCreate((Utf8Char *)splash_screen, READ_ONLY, FILE_BUFF);
+    active->buffer_id = bufferCreate(splash_screen, READ_ONLY, FILE_BUFF);
 
     if (argc >= 2) {
-        Utf8Char* filename = stringToUtf8((unsigned char *)argv[1]);
+        filename = stringToUtf8((unsigned char *)argv[1]);
         active->buffer_id = bufferCreate(filename, READ_AND_WRITE, FILE_BUFF);
         gfree(filename);
     }

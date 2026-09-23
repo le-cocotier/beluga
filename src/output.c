@@ -53,11 +53,13 @@ extern EditorConfig E;
  * is a menu.
  */
 int editorLineNumberWidth(const struct buffer_t *buf) {
+  int digits;
+  int n;
   if (!buf || !E.constantes.LINE_NUMBERS || buf->type != FILE_BUFF)
     return 0;
 
-  int digits = 1;
-  for (int n = buf->numrows > 0 ? buf->numrows : 1; n >= 10; n /= 10)
+  digits = 1;
+  for (n = buf->numrows > 0 ? buf->numrows : 1; n >= 10; n /= 10)
     digits++;
   if (digits < LINE_NUMBER_MIN_WIDTH)
     digits = LINE_NUMBER_MIN_WIDTH;
@@ -73,9 +75,10 @@ int editorLineNumberWidth(const struct buffer_t *buf) {
  * several files or the cursor would sit a few columns off the text.
  */
 int editorGutterWidth(const struct buffer_t *buf) {
+  int marker;
   if (!buf)
     return 0;
-  int marker = (buf->type == FILE_BUFF && (E.constantes.LSP || buf->git_available))
+  marker = (buf->type == FILE_BUFF && (E.constantes.LSP || buf->git_available))
                    ? GUTTER_WIDTH : 0;
   return editorLineNumberWidth(buf) + marker;
 }
@@ -89,13 +92,17 @@ int editorGutterWidth(const struct buffer_t *buf) {
  * @return 1 if this row has a (possibly empty) selection range, 0 if the
  * mark isn't active or this row is outside the region entirely.
  */
-static int rowSelectionRange(const struct buffer_t *buf, int file_row,
+static int rowSelectionRange(const struct buffer_t *buf, const int file_row,
                              int *from, int *to, int *extends_past_eol) {
+  int sr;
+  int sc;
+  int er;
+  int ec;
+  int before;
   if (!buf->mark_active)
     return 0;
 
-  int sr, sc, er, ec;
-  int before = (buf->mark_y < buf->y) ||
+  before = (buf->mark_y < buf->y) ||
                (buf->mark_y == buf->y && buf->mark_x <= buf->x);
   if (before) {
     sr = buf->mark_y; sc = buf->mark_x;
@@ -119,7 +126,11 @@ static int rowSelectionRange(const struct buffer_t *buf, int file_row,
  * in reverse video, to show a selection. Escape sequences are copied
  * through untouched and don't count as columns, so this composes safely
  * with highlight_line()'s own color codes. Caller must gfree() the result.
+ * @param rendered The already-rendered row string to wrap in reverse video
+ * @param rendered_len Length of `rendered`, in bytes
+ * @param vis_from First visible column to start reverse video at
  * @param vis_to -1 means "to the end of the rendered content".
+ * @param out_len Out-param: length of the returned string, in bytes
  */
 static char *applySelectionHighlight(const char *rendered, int rendered_len,
                                      int vis_from, int vis_to, int *out_len) {
@@ -129,12 +140,15 @@ static char *applySelectionHighlight(const char *rendered, int rendered_len,
   int col = 0;
   int reversed = 0;
   int i = 0;
+  int start;
+  unsigned char lead;
+  int clen;
 
   while (i < rendered_len) {
     if (out_pos + 16 > cap) { cap *= 2; out = grealloc(out, cap); }
 
     if ((unsigned char) rendered[i] == 0x1b) {
-      int start = i;
+      start = i;
       i++;
       if (i < rendered_len && rendered[i] == '[') {
         i++;
@@ -159,8 +173,8 @@ static char *applySelectionHighlight(const char *rendered, int rendered_len,
       reversed = 0;
     }
 
-    unsigned char lead = (unsigned char) rendered[i];
-    int clen = (lead >= 0xF0) ? 4 : (lead >= 0xE0) ? 3 : (lead >= 0xC0) ? 2 : 1;
+    lead = (unsigned char) rendered[i];
+    clen = (lead >= 0xF0) ? 4 : (lead >= 0xE0) ? 3 : (lead >= 0xC0) ? 2 : 1;
     if (i + clen > rendered_len) clen = 1;
     memcpy(out + out_pos, rendered + i, (size_t) clen);
     out_pos += (size_t) clen;
@@ -184,13 +198,37 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   char pos_buf[32];
   int pos_len;
   int byte_len_to_print;
-  int bytes_to_print;
   char *highlighted;
+  const struct buffer_t *buf;
+  int has_gutter;
+  int lineno_width;
+  int gutter_width;
+  int content_width;
+  int y;
+  int is_cursor_line;
+  int i;
+  char *lineno_color;
+  char num_buf[24];
+  int num_len;
+  GitLineStatus git_status;
+  int sel_from;
+  int sel_to;
+  int sel_extends;
+  int has_selection;
+  int vis_from;
+  int vis_to;
+  const LanguageSyntax *lang;
+  int wrapped_len;
+  char *wrapped;
+  int row_off;
+  char *line;
+  int line_len;
+  int filled;
 
   if (pane == NULL || pane->buffer_id < 0)
     return;
 
-  const struct buffer_t *buf = bufferFindById(pane->buffer_id);
+  buf = bufferFindById(pane->buffer_id);
   if (buf == NULL)
     return;
 
@@ -199,10 +237,10 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   // told to give up, misaligning its own line-wrapping. content_width is
   // what's actually left for text once the gutter (if any) is accounted for;
   // gutter + content_width always adds up to the pane's full on-screen span.
-  int has_gutter = buf->type == FILE_BUFF && (E.constantes.LSP || buf->git_available);
-  int lineno_width = editorLineNumberWidth(buf);
-  int gutter_width = editorGutterWidth(buf);
-  int content_width = pane->width - gutter_width;
+  has_gutter = buf->type == FILE_BUFF && (E.constantes.LSP || buf->git_available);
+  lineno_width = editorLineNumberWidth(buf);
+  gutter_width = editorGutterWidth(buf);
+  content_width = pane->width - gutter_width;
   if (content_width < 0)
     content_width = 0;
 
@@ -214,9 +252,9 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   syntaxHighlighterSeed(commentStateAtRowStart((struct buffer_t *) buf, pane->y_offset));
 
   // Draw all pane
-  for (int y = 0; y < pane->height; y++) {
+  for (y = 0; y < pane->height; y++) {
     file_row = y + pane->y_offset;
-    int is_cursor_line = (pane->is_active && file_row == buf->y);
+    is_cursor_line = (pane->is_active && file_row == buf->y);
 
     // Set cursor at start of pane row
     pos_len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
@@ -242,10 +280,10 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
     if (file_row >= buf->numrows) {
       // Empty line - show tilde, but still reserve the gutter's columns so
       // the tilde lines up with where text starts on real lines above it
-      for (int i = 0; i < gutter_width; ++i)
+      for (i = 0; i < gutter_width; ++i)
         abAppend(ab, " ", 1);
       abAppend(ab, "~", 1);
-      for (int i = 0; i < content_width - 1; ++i) {
+      for (i = 0; i < content_width - 1; ++i) {
         abAppend(ab, " ", 1);
       }
     } else {
@@ -263,9 +301,8 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         // near-white background (250,251,252) made the cursor's own line
         // number — the one meant to stand out — the least visible thing
         // on screen.
-        char *lineno_color = is_cursor_line ? E.theme.COLOR_DEFAULT : E.theme.COLOR_COMMENT;
-        char num_buf[24];
-        int num_len = snprintf(num_buf, sizeof(num_buf), "%*d ",
+        lineno_color = is_cursor_line ? E.theme.COLOR_DEFAULT : E.theme.COLOR_COMMENT;
+        num_len = snprintf(num_buf, sizeof(num_buf), "%*d ",
                                lineno_width - 1, file_row + 1);
         if (is_cursor_line)
           abAppend(ab, "\x1b[1m", 4);
@@ -281,7 +318,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         abAppend(ab, E.theme.COLOR_DEFAULT, (int) strlen(E.theme.COLOR_DEFAULT));
       }
       if (has_gutter) {
-        GitLineStatus git_status = (buf->git_lines && file_row < buf->git_lines_count)
+        git_status = (buf->git_lines && file_row < buf->git_lines_count)
                                         ? buf->git_lines[file_row] : GIT_LINE_NONE;
         lspUiDrawGutter(ab, &E.lsp_diagnostics, pane->buffer_id, file_row, git_status);
       }
@@ -289,10 +326,10 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
       // Selection highlight — not applied to TERMINAL_BUFF (a live shell's
       // own escape sequences make wrapping unreliable, and "mark a region
       // in a PTY view" isn't a meaningful operation anyway).
-      int sel_from = 0, sel_to = 0, sel_extends = 0;
-      int has_selection = buf->type != TERMINAL_BUFF &&
+      sel_from = 0; sel_to = 0; sel_extends = 0;
+      has_selection = buf->type != TERMINAL_BUFF &&
                           rowSelectionRange(buf, file_row, &sel_from, &sel_to, &sel_extends);
-      int vis_from = 0, vis_to = -1;
+      vis_from = 0; vis_to = -1;
       if (has_selection) {
         vis_from = sel_from - pane->x_offset;
         if (vis_from < 0) vis_from = 0;
@@ -323,7 +360,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         // tokenizer), and gave C highlighting no matter what packages
         // were loaded. Now a buffer with no registered language for its
         // extension always falls through to plain text, C included.
-        const LanguageSyntax *lang = syntaxLanguageFor(buf->filename);
+        lang = syntaxLanguageFor(buf->filename);
         if (lang) {
           byte_len_to_print = 0;
           // Render line with syntax highlighting, constrain to pane width
@@ -331,8 +368,8 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
                                        pane->x_offset, content_width, lang);
 
           if (has_selection) {
-            int wrapped_len = 0;
-            char *wrapped = applySelectionHighlight(highlighted, byte_len_to_print,
+            wrapped_len = 0;
+            wrapped = applySelectionHighlight(highlighted, byte_len_to_print,
                                                     vis_from, vis_to, &wrapped_len);
             gfree(highlighted);
             highlighted = wrapped;
@@ -350,16 +387,16 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
           // shorter row drawn in the same pane can have size < x_offset,
           // and &characters[x_offset] would then read past the row. size
           // itself is the terminator cell, which renders as empty.
-          int row_off = pane->x_offset < buf->row[file_row].size
+          row_off = pane->x_offset < buf->row[file_row].size
                             ? pane->x_offset
                             : buf->row[file_row].size;
-          char *line = (char *)utf8ToNString(
+          line = (char *)utf8ToNString(
               &buf->row[file_row].characters[row_off], content_width);
-          int line_len = (int) strlen(line);
+          line_len = (int) strlen(line);
 
           if (has_selection) {
-            int wrapped_len = 0;
-            char *wrapped = applySelectionHighlight(line, line_len, vis_from, vis_to, &wrapped_len);
+            wrapped_len = 0;
+            wrapped = applySelectionHighlight(line, line_len, vis_from, vis_to, &wrapped_len);
             gfree(line);
             line = wrapped;
             line_len = wrapped_len;
@@ -378,9 +415,9 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
       // Start from how many columns the content actually filled — clamped
       // at 0, since a row shorter than x_offset contributed nothing and
       // (size - x_offset) would otherwise go negative and over-pad.
-      int filled = buf->row[file_row].size - pane->x_offset;
+      filled = buf->row[file_row].size - pane->x_offset;
       if (filled < 0) filled = 0;
-      for (int i = filled; i < content_width; i++) {
+      for (i = filled; i < content_width; i++) {
         abAppend(ab, " ", 1);
       }
       if (has_selection && sel_extends)
@@ -414,18 +451,23 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
  */
 static void editorDrawAllPanes(struct abuf *ab) {
   const ScreenLayout *layout = splitScreenGetLayout();
+  int i;
+  const EditorPane *p;
+  char pos_buf[32];
+  int y;
+  int len;
+  int x;
 
-  for (int i = 0; i < layout->num_panes; i++)
+  for (i = 0; i < layout->num_panes; i++)
     editorDrawPane(ab, &layout->panes[i]);
 
-  for (int i = 0; i < layout->num_panes; i++) {
-    const EditorPane *p = &layout->panes[i];
-    char pos_buf[32];
+  for (i = 0; i < layout->num_panes; i++) {
+    p = &layout->panes[i];
 
     // Vertical rule down the gap on this pane's right edge.
     if (p->origin_x + p->width < E.screencols) {
-      for (int y = 0; y < p->height; y++) {
-        int len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
+      for (y = 0; y < p->height; y++) {
+        len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
                            p->origin_y + y + 1, p->origin_x + p->width + 1);
         abAppend(ab, pos_buf, len);
         // "│" is U+2502, a 3-byte UTF-8 sequence — sizeof(literal)-1 here
@@ -444,10 +486,10 @@ static void editorDrawAllPanes(struct abuf *ab) {
 
     // Horizontal rule along the gap under this pane.
     if (p->origin_y + p->height < E.screenrows) {
-      int len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
+      len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
                          p->origin_y + p->height + 1, p->origin_x + 1);
       abAppend(ab, pos_buf, len);
-      for (int x = 0; x < p->width; x++)
+      for (x = 0; x < p->width; x++)
         abAppend(ab, "\x1b[1m-\x1b[0m", sizeof("\x1b[1m-\x1b[0m") - 1);
     }
   }
@@ -463,6 +505,7 @@ static void editorDrawAllPanes(struct abuf *ab) {
 void editorScroll() {
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buf = bufferFindById(active->buffer_id);
+  int usable_width;
 
   // bufferFindById() returns NULL for an id that isn't in the list — a
   // pane still pointing at a closed buffer, or at -1 after a failed
@@ -474,7 +517,7 @@ void editorScroll() {
   // Same gutter accounting as editorDrawPane(): with the gutter reserving
   // GUTTER_WIDTH columns, only what's left is actually available before the
   // cursor needs to scroll right, or it would visually run past the pane.
-  int usable_width = active->width - editorGutterWidth(buf);
+  usable_width = active->width - editorGutterWidth(buf);
   if (usable_width < 1)
     usable_width = 1;
 
@@ -528,7 +571,7 @@ void editorScroll() {
  */
 void editorDrawStatusBar(struct abuf *ab) {
   // TO MODIFY
-  int len, render_len;
+  int len;
   int offset = 0;
 
   char status[E.screencols];
@@ -551,6 +594,8 @@ void editorDrawStatusBar(struct abuf *ab) {
   // bottom of the screen. E.screenrows already excludes these two rows.
   char bar_pos[32];
   int bar_pos_len = snprintf(bar_pos, sizeof(bar_pos), "\x1b[%d;1H", E.screenrows + 1);
+  char git_status[80] = "";
+  int first_buffer_id;
   abAppend(ab, bar_pos, bar_pos_len);
 
   abAppend(ab, "\x1b[7m", 4); // inverting colors
@@ -563,7 +608,6 @@ void editorDrawStatusBar(struct abuf *ab) {
     mode_str = mode_buf;
   }
 
-  char git_status[80] = "";
   if (buf && buf->git_available) {
     snprintf(git_status, sizeof(git_status), " (%s%s)", buf->git_branch,
              buf->git_dirty ? "*" : "");
@@ -571,7 +615,7 @@ void editorDrawStatusBar(struct abuf *ab) {
 
   // Build buffer status showing all buffers with dirty indicators
   if (E.buffers != NULL) {
-    int first_buffer_id = E.buffers->buffer_id;
+    first_buffer_id = E.buffers->buffer_id;
     b = E.buffers;
     do {
       string_filename = (char *)utf8ToString(b->filename);
@@ -610,17 +654,29 @@ void editorDrawStatusBar(struct abuf *ab) {
  * @note Messages are set by editorSetStatusMessage()
  */
 void editorDrawMessageBar(struct abuf *ab) {
-  char *status = utf8ToString(E.status_msg);
+  char *status = (char *) utf8ToString(E.status_msg);
   int msg_len = (int)strlen(status);
 
   // Same reasoning as the status bar: place it, don't inherit a position.
   char pos[32];
   int pos_len = snprintf(pos, sizeof(pos), "\x1b[%d;1H", E.screenrows + 2);
+  int bytes;
+  int cols;
   abAppend(ab, pos, pos_len);
 
   abAppend(ab, ERASE_END_LINE, 3);
   if (msg_len && time(NULL) - E.status_msg_time < 5) {
-    abAppend(ab, status, msg_len);
+    // Clip to the screen width (in characters, not bytes): this is the
+    // terminal's last row, so a longer message — a long path, say — wraps
+    // and scrolls the whole screen up a line until the next full redraw.
+    bytes = 0; cols = 0;
+    while (bytes < msg_len && cols < E.screencols - 1) {
+      bytes++;
+      while (bytes < msg_len && ((unsigned char) status[bytes] & 0xC0) == 0x80)
+        bytes++;
+      cols++;
+    }
+    abAppend(ab, status, bytes);
   }
   gfree(status);
 }
@@ -659,8 +715,9 @@ static int screenFrameChanged(const char *buf, int len) {
 }
 
 static void screenFrameCache(const char *buf, int len) {
+  char *grown;
   if (len > g_prev_frame_cap) {
-    char *grown = grealloc(g_prev_frame, (size_t) len);
+    grown = grealloc(g_prev_frame, (size_t) len);
     if (!grown) return; // best-effort: next frame just always looks "changed"
     g_prev_frame = grown;
     g_prev_frame_cap = len;
@@ -672,6 +729,11 @@ static void screenFrameCache(const char *buf, int len) {
 void editorRefreshScreen() {
   struct abuf ab = ABUF_INIT;
   char buf[32];
+  EditorPane *active;
+  struct buffer_t *buffer;
+  const char *diag;
+  char single_line[512];
+  int i;
 
   abAppend(&ab, HIDE_CURSOR, 6);
   abAppend(&ab, CURSOR_TOP_LEFT, 3);
@@ -680,8 +742,8 @@ void editorRefreshScreen() {
 
   editorScroll();
 
-  EditorPane *active = splitScreenGetActivePane();
-  struct buffer_t *buffer = bufferFindById(active->buffer_id);
+  active = splitScreenGetActivePane();
+  buffer = bufferFindById(active->buffer_id);
 
   editorDrawAllPanes(&ab);
   if (E.constantes.LSP) {
@@ -695,13 +757,12 @@ void editorRefreshScreen() {
 
     // ── LSP: diagnostic for current line in status bar
     // ────────────────────────
-    const char *diag = buffer ? lspUiDiagnosticAtCursor(&E.lsp_diagnostics,
+    diag = buffer ? lspUiDiagnosticAtCursor(&E.lsp_diagnostics,
                                                        active->buffer_id,
                                                        buffer->y)
                               : NULL;
     if (diag) {
-      char single_line[512];
-      int i = 0;
+      i = 0;
 
       // Copy until newline, \0, or screen width
       while (diag[i] && diag[i] != '\n' && i < E.screencols - 4) {

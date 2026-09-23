@@ -48,16 +48,18 @@ extern EditorConfig E;
  */
 static int rootIsGitRepo(const char *root) {
   char qroot[PATH_MAX + 4];
+  char cmd[PATH_MAX + 96];
+  char *out;
+  int yes;
   shellQuote(root, qroot, sizeof(qroot));
 
-  char cmd[PATH_MAX + 96];
   snprintf(cmd, sizeof(cmd),
            "git -C %s rev-parse --is-inside-work-tree 2>/dev/null", qroot);
 
-  char *out = runCommandCapture(cmd, 1000, 64);
+  out = runCommandCapture(cmd, 1000, 64);
   if (!out)
     return 0;
-  int yes = (strncmp(out, "true", 4) == 0);
+  yes = (strncmp(out, "true", 4) == 0);
   gfree(out);
   return yes;
 }
@@ -72,9 +74,9 @@ static int rootIsGitRepo(const char *root) {
  */
 static char *listProjectFiles(const char *root) {
   char qroot[PATH_MAX + 4];
+  char cmd[PATH_MAX * 2 + 512];
   shellQuote(root, qroot, sizeof(qroot));
 
-  char cmd[PATH_MAX * 2 + 512];
   if (rootIsGitRepo(root)) {
     snprintf(cmd, sizeof(cmd),
              "cd %s && git ls-files --cached --others --exclude-standard "
@@ -101,13 +103,16 @@ static void ownPaths(char *output) {
   FileFinder *ff = &E.file_finder;
 
   int cap = 256;
+  char *saveptr;
+  char *line;
+  char **grown;
   ff->paths = galloc((size_t)cap * sizeof(char *));
   ff->path_count = 0;
   if (!ff->paths)
     return;
 
-  char *saveptr = NULL;
-  for (char *line = strtok_r(output, "\n", &saveptr);
+  saveptr = NULL;
+  for (line = strtok_r(output, "\n", &saveptr);
        line && ff->path_count < FF_MAX_FILES;
        line = strtok_r(NULL, "\n", &saveptr)) {
     if (line[0] == '.' && line[1] == '/')
@@ -117,7 +122,7 @@ static void ownPaths(char *output) {
 
     if (ff->path_count == cap) {
       cap *= 2;
-      char **grown = grealloc(ff->paths, (size_t)cap * sizeof(char *));
+      grown = grealloc(ff->paths, (size_t)cap * sizeof(char *));
       if (!grown)
         break;
       ff->paths = grown;
@@ -141,16 +146,22 @@ static void ownPaths(char *output) {
  * "bufc" ranks "src/buffer.c" above "a/subfolder/cache".
  */
 static int fuzzyScore(const char *query, const char *path) {
+  int score;
+  int run;
+  const char *p;
+  char prev;
+  const char *q;
+  int qc;
   if (!query[0])
     return 0;
 
-  int score = 0;
-  int run = 0; // current consecutive-match streak
-  const char *p = path;
-  char prev = '/'; // pretend a separator precedes the path
+  score = 0;
+  run = 0; // current consecutive-match streak
+  p = path;
+  prev = '/'; // pretend a separator precedes the path
 
-  for (const char *q = query; *q; q++) {
-    int qc = tolower((unsigned char)*q);
+  for (q = query; *q; q++) {
+    qc = tolower((unsigned char)*q);
     while (*p && tolower((unsigned char)*p) != qc) {
       prev = *p;
       p++;
@@ -181,8 +192,8 @@ static int fuzzyScore(const char *query, const char *path) {
 static int *s_score_scratch = NULL; // score per path, indexed like paths[]
 
 static int compareByScore(const void *a, const void *b) {
-  int ia = *(const int *)a, ib = *(const int *)b;
-  int sa = s_score_scratch[ia], sb = s_score_scratch[ib];
+  const int ia = *(const int *)a, ib = *(const int *)b;
+  const int sa = s_score_scratch[ia], sb = s_score_scratch[ib];
   if (sa != sb)
     return sb - sa; // higher score first
   return ia - ib;   // stable: keep git/sort order on ties
@@ -194,6 +205,8 @@ static int compareByScore(const void *a, const void *b) {
  */
 static void rebuildMatches(void) {
   FileFinder *ff = &E.file_finder;
+  int i;
+  int sc;
 
   if (!ff->match)
     ff->match =
@@ -209,8 +222,8 @@ static void rebuildMatches(void) {
   ff->query[ff->query_len] = '\0';
 
   ff->match_count = 0;
-  for (int i = 0; i < ff->path_count; i++) {
-    int sc = fuzzyScore(ff->query, ff->paths[i]);
+  for (i = 0; i < ff->path_count; i++) {
+    sc = fuzzyScore(ff->query, ff->paths[i]);
     if (sc < 0)
       continue;
     s_score_scratch[i] = sc;
@@ -230,7 +243,8 @@ static void rebuildMatches(void) {
 
 void fileFinderClose(void) {
   FileFinder *ff = &E.file_finder;
-  for (int i = 0; i < ff->path_count; i++)
+  int i;
+  for (i = 0; i < ff->path_count; i++)
     gfree(ff->paths[i]);
   gfree(ff->paths);
   gfree(ff->match);
@@ -246,15 +260,16 @@ void fileFinderClose(void) {
 }
 
 void fileFinderOpen(void) {
+  char root[PATH_MAX];
+  char *output;
   fileFinderClose(); // drop any stale snapshot first
 
-  char root[PATH_MAX];
   if (!getcwd(root, sizeof(root))) {
     editorSetStatusMessage("find-file: can't determine the working directory");
     return;
   }
 
-  char *output = listProjectFiles(root);
+  output = listProjectFiles(root);
   if (!output) {
     editorSetStatusMessage("find-file: no files found under %s", root);
     return;
@@ -280,26 +295,30 @@ void fileFinderOpen(void) {
  * stacking up duplicate buffers.
  */
 static int findOpenBuffer(const char *rel_path) {
+  char want[PATH_MAX];
+  char cwd[PATH_MAX];
+  int first;
+  Buffer *b;
+  char *full;
+  int same;
   if (E.buffers == NULL)
     return -1;
 
-  char want[PATH_MAX];
   if (rel_path[0] == '/') {
     snprintf(want, sizeof(want), "%s", rel_path);
   } else {
-    char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof(cwd)))
       return -1;
     snprintf(want, sizeof(want), "%s/%s", cwd, rel_path);
   }
 
-  int first = E.buffers->buffer_id;
-  Buffer *b = E.buffers;
+  first = E.buffers->buffer_id;
+  b = E.buffers;
   do {
     if (b->type == FILE_BUFF && b->fullname) {
-      char *full = (char *)utf8ToString(b->fullname);
+      full = (char *)utf8ToString(b->fullname);
       if (full) {
-        int same = (strcmp(full, want) == 0);
+        same = (strcmp(full, want) == 0);
         gfree(full);
         if (same)
           return b->buffer_id;
@@ -312,21 +331,26 @@ static int findOpenBuffer(const char *rel_path) {
 }
 
 static void openSelected(void) {
-  FileFinder *ff = &E.file_finder;
+  const FileFinder *ff = &E.file_finder;
+  const char *rel;
+  EditorPane *active;
+  int existing;
+  Utf8Char *path;
+  int id;
   if (ff->selected < 0 || ff->selected >= ff->match_count)
     return;
 
-  const char *rel = ff->paths[ff->match[ff->selected]];
-  EditorPane *active = splitScreenGetActivePane();
+  rel = ff->paths[ff->match[ff->selected]];
+  active = splitScreenGetActivePane();
 
-  int existing = findOpenBuffer(rel);
+  existing = findOpenBuffer(rel);
   if (existing != -1) {
     active->buffer_id = existing;
   } else {
-    Utf8Char *path = stringToUtf8((unsigned char *)rel);
+    path = stringToUtf8((unsigned char *)rel);
     if (!path)
       return;
-    int id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
+    id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
     gfree(path);
     if (id == -1) {
       editorSetStatusMessage("find-file: could not open %s", rel);
@@ -342,13 +366,18 @@ static void openSelected(void) {
 
 // ─── Input ─────────────────────────────────────────────────────────────────
 
-int fileFinderHandleKey(Utf8Char *key) {
+int fileFinderHandleKey(const Utf8Char *key) {
   FileFinder *ff = &E.file_finder;
+  unsigned char c;
+  int is_single;
+  int had_match;
+  int is_text;
+  int n;
   if (!ff->visible)
     return 0;
 
-  unsigned char c = key->character[0];
-  int is_single = (key->length == 1);
+  c = key->character[0];
+  is_single = (key->length == 1);
 
   if (is_single && c == '\x1b') { // ESC — cancel
     fileFinderClose();
@@ -365,7 +394,7 @@ int fileFinderHandleKey(Utf8Char *key) {
     return 1;
   }
   if (is_single && c == '\r') { // ENTER — open the highlight
-    int had_match = ff->match_count > 0;
+    had_match = ff->match_count > 0;
     openSelected();
     fileFinderClose();
     if (!had_match)
@@ -389,9 +418,9 @@ int fileFinderHandleKey(Utf8Char *key) {
   // Typed text — printable ASCII, or any multi-byte UTF-8 char. The
   // remapped special keys (arrows etc.) are all >= 0x80 with length 1,
   // so they're excluded here.
-  int is_text = (is_single && c >= 0x20 && c <= 0x7E) || key->length > 1;
+  is_text = (is_single && c >= 0x20 && c <= 0x7E) || key->length > 1;
   if (is_text) {
-    int n = key->length;
+    n = (unsigned char) key->length;
     if (ff->query_len + n < (int)sizeof(ff->query) - 1) {
       memcpy(ff->query + ff->query_len, key->character, (size_t)n);
       ff->query_len += n;
@@ -411,24 +440,41 @@ int fileFinderHandleKey(Utf8Char *key) {
 
 void fileFinderDraw(struct abuf *ab) {
   FileFinder *ff = &E.file_finder;
+  int visible_count;
+  int scroll;
+  char title[160];
+  int content_w;
+  int i;
+  int len;
+  int box_w;
+  int rows;
+  int box_h;
+  int origin_x;
+  int origin_y;
+  PopupStyle style;
+  char empty[LIST_POPUP_MAX_WIDTH + 1];
+  int idx;
+  int is_sel;
+  int row;
+  const char *path;
+  char col[LIST_POPUP_MAX_WIDTH + 1];
+  int plen;
   if (!ff->visible)
     return;
 
-  int visible_count =
-      ff->match_count < FF_VISIBLE_ROWS ? ff->match_count : FF_VISIBLE_ROWS;
+  visible_count = ff->match_count < FF_VISIBLE_ROWS ? ff->match_count : FF_VISIBLE_ROWS;
 
-  int scroll = 0;
+  scroll = 0;
   if (ff->selected >= FF_VISIBLE_ROWS)
     scroll = ff->selected - FF_VISIBLE_ROWS + 1;
 
   // Title row shows the live query and the match count.
-  char title[160];
   snprintf(title, sizeof(title), "Find file: %s_  (%d)", ff->query,
            ff->match_count);
 
-  int content_w = (int)strlen(title);
-  for (int i = 0; i < visible_count; i++) {
-    int len = (int)strlen(ff->paths[ff->match[scroll + i]]);
+  content_w = (int)strlen(title);
+  for (i = 0; i < visible_count; i++) {
+    len = (int)strlen(ff->paths[ff->match[scroll + i]]);
     if (len > content_w)
       content_w = len;
   }
@@ -439,16 +485,14 @@ void fileFinderDraw(struct abuf *ab) {
   if (content_w < 20)
     content_w = 20;
 
-  int box_w = content_w + 4;
+  box_w = content_w + 4;
   // top border, title, separator, rows (at least one, so an empty result
   // set still draws a box rather than vanishing), bottom border
-  int rows = visible_count > 0 ? visible_count : 1;
-  int box_h = rows + 4;
+  rows = visible_count > 0 ? visible_count : 1;
+  box_h = rows + 4;
 
-  int origin_x, origin_y;
   popupCenter(box_w, box_h, &origin_x, &origin_y);
 
-  PopupStyle style;
   popupStyleInit(&style);
 
   popupDrawTop(ab, &style, origin_x, origin_y, box_w);
@@ -458,23 +502,21 @@ void fileFinderDraw(struct abuf *ab) {
 
   if (visible_count == 0) {
     popupRowBegin(ab, &style, origin_x, origin_y + 3, 0);
-    char empty[LIST_POPUP_MAX_WIDTH + 1];
     snprintf(empty, sizeof(empty), "%-*s", content_w, "  (no matches)");
     empty[content_w] = '\0';
     abAppend(ab, empty, content_w);
     popupRowEnd(ab, &style);
   }
 
-  for (int i = 0; i < visible_count; i++) {
-    int idx = scroll + i;
-    int is_sel = (idx == ff->selected);
-    int row = origin_y + 3 + i;
+  for (i = 0; i < visible_count; i++) {
+    idx = scroll + i;
+    is_sel = (idx == ff->selected);
+    row = origin_y + 3 + i;
 
     popupRowBegin(ab, &style, origin_x, row, is_sel);
 
-    const char *path = ff->paths[ff->match[idx]];
-    char col[LIST_POPUP_MAX_WIDTH + 1];
-    int plen = (int)strlen(path);
+    path = ff->paths[ff->match[idx]];
+    plen = (int)strlen(path);
     // Left-justify when it fits; when it doesn't, show the tail rather
     // than the head — the basename is what you're scanning for.
     snprintf(col, sizeof(col), "%-*s", content_w,

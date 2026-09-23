@@ -23,7 +23,7 @@ void lspDidChange(LspClient* lsp, struct buffer_t* buf);
 void lspDidClose(LspClient* lsp, struct buffer_t* buf);
 
 // ── Requests ─────────────────────────────────────────────────────────────────
-void lspRequestCompletion(LspClient* lsp, struct buffer_t* buf,
+void lspRequestCompletion(LspClient* lsp, const struct buffer_t* buf,
                           int line, int col,
                           int screen_x, int screen_y);
 // Response is shown via editorSetStatusMessage() (first line only).

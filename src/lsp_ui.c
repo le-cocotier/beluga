@@ -34,7 +34,7 @@ static void ab_sgr(struct abuf *ab, const char *codes) {
 // ─── Completion item kind → short tag ────────────────────────────────────────
 
 // Tag/kind numbers are the LSP CompletionItemKind enum values (1-indexed).
-static const char *kind_tag(int k) {
+static const char *kind_tag(const int k) {
     switch (k) {
         case  2: return "mth";  // Method
         case  3: return "fn ";  // Function
@@ -53,7 +53,7 @@ static const char *kind_tag(int k) {
     }
 }
 
-static const char *kind_color(int k) {
+static const char *kind_color(const int k) {
     switch (k) {
         case  3:
         case  4: return "33";   // yellow  — functions/constructors
@@ -85,38 +85,49 @@ static const char *kind_color(int k) {
 // about completion-specific content (kind tags + labels).
 
 void lspUiDrawCompletion(struct abuf *ab, CompletionPopup *popup) {
+    int visible_count;
+    int scroll;
+    int content_w;
+    int i;
+    int idx;
+    int label_len;
+    int box_w;
+    PopupStyle style;
+    CompletionItem *it;
+    int is_sel;
+    int row;
+    char label_col[COMPLETION_MAX_WIDTH];
     if (!popup->visible || popup->count == 0) return;
 
-    int visible_count = popup->count < COMPLETION_POPUP_H
+    visible_count = popup->count < COMPLETION_POPUP_H
                       ? popup->count : COMPLETION_POPUP_H;
 
     // Scroll window so selected item is always visible
-    int scroll = 0;
+    scroll = 0;
     if (popup->selected >= COMPLETION_POPUP_H)
         scroll = popup->selected - COMPLETION_POPUP_H + 1;
 
     // Size the box to the longest visible label, capped at COMPLETION_MAX_WIDTH
-    int content_w = 0;
-    for (int i = 0; i < visible_count; i++) {
-        int idx = i + scroll;
-        int label_len = (int) strlen(popup->items[idx].label);
+    content_w = 0;
+    for (i = 0; i < visible_count; i++) {
+        idx = i + scroll;
+        label_len = (int) strlen(popup->items[idx].label);
         if (label_len > content_w) content_w = label_len;
     }
     // +5 for the tag(3) + the space separating it from the label; the
     // marker/border/margin overhead is popupRowBegin/End's job, not ours.
     if (content_w > COMPLETION_MAX_WIDTH - 5) content_w = COMPLETION_MAX_WIDTH - 5;
-    int box_w = content_w + 4 + 5; // border+marker+margin*2 (4) + tag+space (5)
+    box_w = content_w + 4 + 5; // border+marker+margin*2 (4) + tag+space (5)
 
-    PopupStyle style;
     popupStyleInit(&style);
 
     popupDrawTop(ab, &style, popup->origin_x, popup->origin_y, box_w);
 
-    for (int i = 0; i < visible_count; i++) {
-        int idx = i + scroll;
-        CompletionItem *it = &popup->items[idx];
-        int is_sel = (idx == popup->selected);
-        int row = popup->origin_y + 1 + i;
+    for (i = 0; i < visible_count; i++) {
+        idx = i + scroll;
+        it = &popup->items[idx];
+        is_sel = (idx == popup->selected);
+        row = popup->origin_y + 1 + i;
 
         popupRowBegin(ab, &style, popup->origin_x, row, is_sel);
 
@@ -128,7 +139,6 @@ void lspUiDrawCompletion(struct abuf *ab, CompletionPopup *popup) {
         popupRowStyle(ab, &style, is_sel);
         abAppend(ab, " ", 1);
 
-        char label_col[COMPLETION_MAX_WIDTH];
         snprintf(label_col, sizeof(label_col), "%-*s", content_w, it->label);
         // truncate if the label itself is longer than content_w
         label_col[content_w] = '\0';
@@ -143,11 +153,13 @@ void lspUiDrawCompletion(struct abuf *ab, CompletionPopup *popup) {
 }
 
 
-int lspUiHandleKey(CompletionPopup *popup, Utf8Char *key) {
+int lspUiHandleKey(CompletionPopup *popup, const Utf8Char *key) {
+    unsigned char c;
+    int is_single;
     if (!popup->visible) return 0;
 
-    unsigned char c = key->character[0];
-    int is_single = (key->length == 1);
+    c = key->character[0];
+    is_single = (key->length == 1);
 
     if (is_single && c == '\x1b') { // ESC only — dismiss
         popup->visible = 0;
@@ -167,10 +179,12 @@ int lspUiHandleKey(CompletionPopup *popup, Utf8Char *key) {
 }
 
 static DiagSeverity diag_worst_on_line(DiagnosticList *diags,
-                                       int buffer_id, int line) {
+                                       const int buffer_id, const int line) {
     DiagSeverity worst = 0;
-    for (int i = 0; i < diags->count; i++) {
-        Diagnostic *d = &diags->entries[i];
+    int i;
+    Diagnostic *d;
+    for (i = 0; i < diags->count; i++) {
+        d = &diags->entries[i];
         if (d->buffer_id == buffer_id && d->line == line) {
             // LSP severities count up from most to least severe (1=Error
             // .. 4=Hint), so the more urgent diagnostic has the SMALLER
@@ -188,8 +202,8 @@ static DiagSeverity diag_worst_on_line(DiagnosticList *diags,
 // buf_id : active buffer id
 // line   : file line number (0-based) for this screen row
 void lspUiDrawGutter(struct abuf *ab, DiagnosticList *diags,
-                     int buf_id, int line, GitLineStatus git_status) {
-    DiagSeverity s = diag_worst_on_line(diags, buf_id, line);
+                     const int buf_id, const int line, const GitLineStatus git_status) {
+    const DiagSeverity s = diag_worst_on_line(diags, buf_id, line);
     switch (s) {
         case DIAG_ERROR:
             ab_sgr(ab, "1;31");         // bold red
@@ -232,9 +246,11 @@ void lspUiDrawGutter(struct abuf *ab, DiagnosticList *diags,
 
 // Returns the diagnostic message for the line the cursor is on, or NULL.
 const char *lspUiDiagnosticAtCursor(DiagnosticList *diags,
-                                    int buffer_id, int cursor_line) {
-    for (int i = 0; i < diags->count; i++) {
-        Diagnostic *d = &diags->entries[i];
+                                    const int buffer_id, const int cursor_line) {
+    int i;
+    Diagnostic *d;
+    for (i = 0; i < diags->count; i++) {
+        d = &diags->entries[i];
         if (d->buffer_id == buffer_id && d->line == cursor_line)
             return d->message;
     }
@@ -244,39 +260,49 @@ const char *lspUiDiagnosticAtCursor(DiagnosticList *diags,
 // ─── Parse clangd JSON → our structs ─────────────────────────────────────────
 
 void lspParseCompletion(const char *json, CompletionPopup *popup,
-                        int screen_x, int screen_y) {
+                        const int screen_x, const int screen_y) {
+    cJSON *root;
+    cJSON *result;
+    cJSON *items;
+    cJSON *item;
+    CompletionItem *ci;
+    cJSON *label;
+    cJSON *insertText;
+    cJSON *detail;
+    cJSON *kind;
+    const char *raw_label;
+    const char *raw_insert;
     popup->count    = 0;
     popup->selected = 0;
     popup->origin_x = screen_x + 1;
     popup->origin_y = screen_y + 2;  // one row below cursor
 
-    cJSON *root  = cJSON_Parse(json);
+    root = cJSON_Parse(json);
     if (!root) return;
-    cJSON *result = cJSON_GetObjectItem(root, "result");
+    result = cJSON_GetObjectItem(root, "result");
     if (!result) { cJSON_Delete(root); return; }
     // result can be a list or {isIncomplete, items:[…]}
-    cJSON *items = cJSON_IsArray(result)
+    items = cJSON_IsArray(result)
                  ? result
                  : cJSON_GetObjectItem(result, "items");
     if (!items) { cJSON_Delete(root); return; }
 
-    cJSON *item;
     cJSON_ArrayForEach(item, items) {
         if (popup->count >= COMPLETION_MAX_ITEMS) break;
-        CompletionItem *ci = &popup->items[popup->count++];
+        ci = &popup->items[popup->count++];
 
-        cJSON *label  = cJSON_GetObjectItem(item, "label");
-        cJSON *insertText = cJSON_GetObjectItem(item, "insertText");
-        cJSON *detail = cJSON_GetObjectItem(item, "detail");
-        cJSON *kind   = cJSON_GetObjectItem(item, "kind");
+        label = cJSON_GetObjectItem(item, "label");
+        insertText = cJSON_GetObjectItem(item, "insertText");
+        detail = cJSON_GetObjectItem(item, "detail");
+        kind = cJSON_GetObjectItem(item, "kind");
 
-        const char *raw_label = label ? label->valuestring : "";
+        raw_label = label ? label->valuestring : "";
         if (raw_label[0] == ' ') raw_label++;
 
         strncpy(ci->label,  raw_label,                          127);
         strncpy(ci->detail, detail ? detail->valuestring : "",   63);
 
-        const char *raw_insert = (insertText && insertText->valuestring)
+        raw_insert = (insertText && insertText->valuestring)
                                 ? insertText->valuestring
                                 : raw_label;
         strncpy(ci->insertText, raw_insert, 127);
@@ -292,33 +318,47 @@ void lspParseCompletion(const char *json, CompletionPopup *popup,
 }
 
 void lspParseDiagnostics(const char *json, DiagnosticList *diags,
-                         int buffer_id) {
+                         const int buffer_id) {
     cJSON *root = cJSON_Parse(json);
+    cJSON *params;
+    cJSON *diag_arr;
+    int w;
+    int i;
+    cJSON *d;
+    Diagnostic *diag;
+    cJSON *range;
+    cJSON *start;
+    cJSON *end_pos;
+    cJSON *sev;
+    cJSON *msg;
+    cJSON *line_it;
+    cJSON *scol_it;
+    cJSON *ecol_it;
+    const char *raw;
     if (!root) return;
 
-    cJSON *params = cJSON_GetObjectItem(root, "params");
+    params = cJSON_GetObjectItem(root, "params");
     if (!params) { cJSON_Delete(root); return; }
-    cJSON *diag_arr = cJSON_GetObjectItem(params, "diagnostics");
+    diag_arr = cJSON_GetObjectItem(params, "diagnostics");
     if (!diag_arr) { cJSON_Delete(root); return; }
 
     // Remove old entries for this buffer
-    int w = 0;
-    for (int i = 0; i < diags->count; i++)
+    w = 0;
+    for (i = 0; i < diags->count; i++)
         if (diags->entries[i].buffer_id != buffer_id)
             diags->entries[w++] = diags->entries[i];
     diags->count = w;
 
-    cJSON *d;
     cJSON_ArrayForEach(d, diag_arr) {
         if (diags->count >= DIAG_MAX) break;
-        Diagnostic *diag = &diags->entries[diags->count++];
+        diag = &diags->entries[diags->count++];
         diag->buffer_id = buffer_id;
 
-        cJSON *range    = cJSON_GetObjectItem(d, "range");
-        cJSON *start    = cJSON_GetObjectItem(range, "start");
-        cJSON *end_pos  = cJSON_GetObjectItem(range, "end");
-        cJSON *sev      = cJSON_GetObjectItem(d, "severity");
-        cJSON *msg      = cJSON_GetObjectItem(d, "message");
+        range = cJSON_GetObjectItem(d, "range");
+        start = cJSON_GetObjectItem(range, "start");
+        end_pos = cJSON_GetObjectItem(range, "end");
+        sev = cJSON_GetObjectItem(d, "severity");
+        msg = cJSON_GetObjectItem(d, "message");
 
         // Every one of these is cJSON_GetObjectItem()'s NULL-on-missing —
         // dereferencing ->valueint straight off it (as this did) turns any
@@ -327,17 +367,17 @@ void lspParseDiagnostics(const char *json, DiagnosticList *diags,
         // were already written defensively; these four weren't. A server
         // is meant to always send a full range, so this is about not
         // crashing the editor over a payload we merely didn't expect.
-        cJSON *line_it  = start ? cJSON_GetObjectItem(start, "line") : NULL;
-        cJSON *scol_it  = start ? cJSON_GetObjectItem(start, "character") : NULL;
-        cJSON *ecol_it  = end_pos ? cJSON_GetObjectItem(end_pos, "character") : NULL;
+        line_it = start ? cJSON_GetObjectItem(start, "line") : NULL;
+        scol_it = start ? cJSON_GetObjectItem(start, "character") : NULL;
+        ecol_it = end_pos ? cJSON_GetObjectItem(end_pos, "character") : NULL;
 
         diag->line      = line_it ? line_it->valueint : 0;
         diag->col_start = scol_it ? scol_it->valueint : 0;
         diag->col_end   = ecol_it ? ecol_it->valueint : diag->col_start;
         diag->severity  = sev ? (DiagSeverity)sev->valueint : DIAG_ERROR;
 
-        const char *raw = msg ? msg->valuestring : "";
-        int i = 0;
+        raw = msg ? msg->valuestring : "";
+        i = 0;
         while (raw[i] && raw[i] != '\n' && i < 255)
         {
             diag->message[i] = raw[i];

@@ -89,13 +89,11 @@ Utf8Char *fileCompletion(Utf8Char *path) {
   DIR *dir;
   struct dirent *entry;
   Utf8Char directory[PATH_MAX] = {0};
-  Utf8Char file[PATH_MAX] = {0};
   Utf8Char predict[PATH_MAX] = {0};
-  Utf8Char *last_slash = lastSlashUtf8(path);
-  Utf8Char *full_path = calloc(PATH_MAX, sizeof(Utf8Char));
+  const Utf8Char *last_slash = lastSlashUtf8(path);
+  Utf8Char *full_path = gcalloc(PATH_MAX, sizeof(Utf8Char));
   Utf8Char *entry_name_utf8 = NULL;
   int predict_len = 0;
-  size_t dir_len;
   char *dir_path = NULL;
   char *entry_name = NULL;
   char *full_path_str = NULL;
@@ -106,29 +104,30 @@ Utf8Char *fileCompletion(Utf8Char *path) {
     utf8Printf(directory, PATH_MAX, "%u", path);
     END_OF_STRING(directory[utf8StringLen(directory) - 2])
   } else {
-    utf8NCpy(directory, path, (last_slash - path));
+    utf8NCpy(directory, path, (int) (last_slash - path));
     predict_len = utf8Printf(predict, PATH_MAX, "%u", last_slash + 1);
   }
 
-  dir_path = utf8ToString(directory);
+  dir_path = (char *) utf8ToString(directory);
   dir = opendir(dir_path);
   gfree(dir_path);
   if (!dir)
     return path;
 
-  // skip . and ..
-  readdir(dir);
-  readdir(dir);
+  // skip . and .. — every directory has both, so NULL here would mean
+  // opendir() handed back something that isn't a real directory listing.
+  (void) readdir(dir);
+  (void) readdir(dir);
 
   while ((entry = readdir(dir)) != NULL) {
     entry_name = entry->d_name;
-    entry_name_utf8 = stringToUtf8(entry_name);
+    entry_name_utf8 = stringToUtf8((unsigned char *) entry_name);
     if ((predict_len == 0) ||
         (utf8StringNCmp(entry_name_utf8, predict, predict_len) == 0)) {
       utf8Printf(full_path, PATH_MAX, "%u/%u", directory, entry_name_utf8);
       gfree(entry_name_utf8);
 
-      full_path_str = utf8ToString(full_path);
+      full_path_str = (char *) utf8ToString(full_path);
       if (stat(full_path_str, &st) == 0 && S_ISDIR(st.st_mode)) {
         full_path[utf8StringLen(full_path) - 1].character[0] = '/';
         full_path[utf8StringLen(full_path) - 1].length = 1;
@@ -164,11 +163,13 @@ Utf8Char *fileCompletion(Utf8Char *path) {
  * @note Caller is responsible for bFreeing the returned string
  * @note Uses editorReadKey() for input and editorRefreshScreen() for display
  */
-Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode) {
-  Utf8Char *buf = calloc(PATH_MAX, sizeof(Utf8Char));
+Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode) {
+  Utf8Char *buf = gcalloc(PATH_MAX, sizeof(Utf8Char));
   int buf_len = 0;
   Utf8Char *c = NULL;
   Utf8Char *full_path = NULL;
+  Utf8Char path[PATH_MAX];
+  char *pwd;
   if (placeHolder != NULL) {
     buf_len = utf8Printf(buf, PATH_MAX, "%u",
                          placeHolder); // zero not counted by snprintf
@@ -200,8 +201,7 @@ Utf8Char *editorPrompt(char *prompt, Utf8Char *placeHolder, char bPathMode) {
       }
     } else if (bPathMode && *c->character == '\t') {
       // Completion of first path
-      Utf8Char path[PATH_MAX];
-      char *pwd; // getenv is allocating memory
+       // getenv is allocating memory
       if (*buf[0].character != '/') {
         pwd = getenv("PWD");
         appDebug("%s\n", pwd);
@@ -259,7 +259,7 @@ int executeKeyBind(char *key_sequence) {
   return 0;
 }
 
-void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
+static void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
   unsigned char seq[8];
   int len;
 
@@ -302,7 +302,7 @@ void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
     break;
   default:
     memcpy(seq, key->character, key->length);
-    len = key->length;
+    len = (int) key->length;
     break;
   }
 
@@ -320,6 +320,25 @@ void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
  */
 void editorProcessKeypress() {
   Utf8Char *c = editorReadKey();
+  EditorPane *active;
+  struct buffer_t *buf;
+  CompletionItem *item;
+  int file_col;
+  Row *row;
+  int word_start;
+  int already_typed;
+  const char *suffix;
+  int i;
+  Utf8Char ch;
+  int first_buffer_id;
+  struct buffer_t *b;
+  int is_printable;
+  int is_word;
+  int should_trigger_completion;
+  const char *trig;
+  int trig_len;
+  int match;
+  int k;
 
   // Modal: while the buffer switcher is open, it owns every key —
   // checked before anything else so it can't be shadowed by a
@@ -344,18 +363,17 @@ void editorProcessKeypress() {
     return;
   }
 
-  EditorPane *active = splitScreenGetActivePane();
-  struct buffer_t *buf = bufferFindById(active->buffer_id);
+  active = splitScreenGetActivePane();
+  buf = bufferFindById(active->buffer_id);
 
   if (E.constantes.LSP && buf->b_lsp_open) {
 
     if (E.lsp_client && E.lsp_completion.visible) {
       if (*c->character == '\r') {
-        CompletionItem *item =
-            &E.lsp_completion.items[E.lsp_completion.selected];
+        item = &E.lsp_completion.items[E.lsp_completion.selected];
 
-        int file_col = active->cursor_x + active->x_offset;
-        Row *row = &buf->row[active->cursor_y + active->y_offset];
+        file_col = active->cursor_x + active->x_offset;
+        row = &buf->row[active->cursor_y + active->y_offset];
 
         // is_word_char() treats '#' as part of a "word" so the syntax
         // highlighter can match whole keywords like "#include" — but
@@ -365,16 +383,16 @@ void editorProcessKeypress() {
         // would over-count already_typed by one and silently drop the
         // first character of every such completion, so stop the scan
         // right after any '#' instead of consuming it.
-        int word_start = file_col;
+        word_start = file_col;
         while (word_start > 0 &&
                is_word_char(&row->characters[word_start - 1]) &&
                row->characters[word_start - 1].character[0] != '#')
           word_start--;
 
-        int already_typed = file_col - word_start;
-        const char *suffix = item->insertText + already_typed;
-        for (int i = 0; suffix[i]; i++) {
-          Utf8Char ch = {.character = {suffix[i], 0, 0, 0}, .length = 1};
+        already_typed = file_col - word_start;
+        suffix = item->insertText + already_typed;
+        for (i = 0; suffix[i]; i++) {
+          ch = (Utf8Char){.character = {suffix[i], 0, 0, 0}, .length = 1};
           bufferInsertChar(&ch);
         }
 
@@ -392,8 +410,8 @@ void editorProcessKeypress() {
 
   E.dirty = 0;
   if (E.buffers != NULL) {
-    int first_buffer_id = E.buffers->buffer_id;
-    struct buffer_t *b = E.buffers;
+    first_buffer_id = E.buffers->buffer_id;
+    b = E.buffers;
     do {
       E.dirty += b->dirty;
       b = b->next;
@@ -435,16 +453,15 @@ void editorProcessKeypress() {
     return;
   }
 
-  int is_printable = utf8IsPrintable(c);
-  int is_word = is_word_char(c);
+  is_printable = utf8IsPrintable(c);
+  is_word = is_word_char(c);
 
   if (is_printable) {
     bufferInsertChar(c);
     E.quit_times_buffer = E.constantes.QUIT_TIMES;
   }
 
-  int should_trigger_completion =
-      E.constantes.LSP && buf->b_lsp_open && is_printable && is_word;
+  should_trigger_completion = E.constantes.LSP && buf->b_lsp_open && is_printable && is_word;
 
   // Word-char keystrokes aren't the only thing worth asking the
   // server about — member-access completion (by far the most common
@@ -455,17 +472,17 @@ void editorProcessKeypress() {
   if (!should_trigger_completion && E.constantes.LSP && buf->b_lsp_open &&
       is_printable && E.lsp_client && buf->numrows > 0 &&
       buf->y < buf->numrows) {
-    Row *row = &buf->row[buf->y];
-    for (int i = 0;
+    row = &buf->row[buf->y];
+    for (i = 0;
          i < E.lsp_client->num_trigger_chars && !should_trigger_completion;
          i++) {
-      const char *trig = E.lsp_client->trigger_chars[i];
-      int trig_len = (int)strlen(trig);
+      trig = E.lsp_client->trigger_chars[i];
+      trig_len = (int)strlen(trig);
       if (trig_len == 0 || trig_len > buf->x)
         continue;
 
-      int match = 1;
-      for (int k = 0; k < trig_len; k++) {
+      match = 1;
+      for (k = 0; k < trig_len; k++) {
         if (row->characters[buf->x - trig_len + k].character[0] !=
             (unsigned char)trig[k]) {
           match = 0;

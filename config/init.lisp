@@ -78,6 +78,7 @@
 ;;   "before-save"   (filename)           - about to write buffer to disk
 ;;   "after-save"    (filename)           - buffer was just written
 ;;   "lsp-ready"     ()                   - LSP handshake completed
+;;   "buffer-killed" (name buffer-id)     - a buffer was killed (CTRL-x k)
 ;;
 ;; Example: log every save to the status bar.
 ;; (add-hook "after-save" (lambda (filename) (editor-set-prefix "no-prefix")))
@@ -272,6 +273,7 @@
 (map-key "c" editor-open-config "user")
 (map-key "ARROW-RIGHT" editor-switch-next-buffer "user")
 (map-key "b" editor-buffer-picker "user")
+(map-key "k" editor-kill-buffer "user")
 (map-key "\"" editor-split-screen-vertical "user")
 (map-key "%" editor-split-screen-horizontal "user")
 (map-key "o" editor-switch-next-pane "user")

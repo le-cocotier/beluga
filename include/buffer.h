@@ -10,18 +10,20 @@
 
 /**
  * @brief Creates a new buffer for a file
- * @param filename Path to the file
+ * @param path Path to the file
+ * @param state READ_ONLY or READ_AND_WRITE
+ * @param type FILE_BUFF, TERMINAL_BUFF, or EXPLORER_BUFF
  * @return Buffer ID on success, -1 on failure
  */
 int bufferCreate(const Utf8Char* path, enum bufferStatus_e state, enum buffer_type type);
 /**
  * @brief Switches to a specific buffer by ID
- * @param buffer_id The buffer ID to switch to
+ * @param buff_id The buffer ID to switch to
  * @return 0 on success, -1 on failure
  */
-int bufferSwitch(int buffer_id);
+int bufferSwitch(int buff_id);
 
-struct buffer_t *bufferFindById(int buffer_id);
+struct buffer_t *bufferFindById(int buff_id);
 
 /**
  * @brief Finds another FILE_BUFF buffer already LSP-synced for the same
@@ -32,11 +34,13 @@ struct buffer_t *bufferFindById(int buffer_id);
 int bufferFindOtherLspOpen(struct buffer_t* buf);
 
 /**
- * @brief Closes a buffer by ID
- * @param buffer_id The buffer ID to close
- * @return 0 on success, -1 on failure
+ * @brief Kills a buffer: panes showing it switch to another buffer, then
+ * it's freed. Asks first for a modified file or a live terminal; refuses
+ * to kill the last buffer. Fires the "buffer-killed" hook (name buffer-id).
+ * @param buff_id The buffer ID to kill
+ * @return 0 on success, -1 if not found, refused, or cancelled
  */
-int bufferClose(int buffer_id);
+int bufferClose(int buff_id);
 
 /**
  * @brief Gets the current active buffer
