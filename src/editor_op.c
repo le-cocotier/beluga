@@ -48,7 +48,7 @@ void editorSetStatusMessage(const char *fmt, ...) {
  * @note Updates global editor state E
  */
 int editorMoveCursor(const int key) {
-  // TODO: Rebuid for utf8
+  // TODO(TODO.md): display width of wide / combining characters
   const EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buf = bufferFindById(active->buffer_id);
   const Row *row = &buf->row[buf->y];
@@ -88,7 +88,7 @@ int editorMoveCursor(const int key) {
   return 1;
 }
 
-// TODO: Rebuild pasting functionality
+// TODO(TODO.md): paste — CRLF, bulk insert (see editorPaste in builtins.c)
 
 char *editorGetClipboard(void) {
   FILE *pipe = popen(CLIPBOARD_PASTE_CMD, "r");

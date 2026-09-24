@@ -46,6 +46,10 @@ Usage: ./install.sh [options]
 Safe to re-run: an existing build/ is reconfigured rather than failing,
 already-cloned packages are left alone, and your config is never touched
 without asking first.
+
+Your own changes belong in ~/.beluga/packages/personal-config/init.lisp:
+it's created from a template on the first install and never overwritten
+afterwards (even with --yes or --skip-packages), so it survives updates.
 EOF
 }
 
@@ -159,6 +163,24 @@ else
     ok "Config installed at ~/.beluga/config/init.lisp"
 fi
 
+# personal-config: the one package that's yours rather than a git clone —
+# created once from the template, then never overwritten (not even with
+# --yes or on re-install), so edits there survive every update. Independent
+# of --skip-packages for the same reason.
+PERSONAL_CONFIG=~/.beluga/packages/personal-config/init.lisp
+if [ -f "$PERSONAL_CONFIG" ]; then
+    echo "  personal-config already exists, leaving it alone"
+else
+    mkdir -p "$(dirname "$PERSONAL_CONFIG")"
+    cp ./config/personal-config.lisp "$PERSONAL_CONFIG"
+    ok "Personal config created at $PERSONAL_CONFIG"
+fi
+# A config from before personal-config existed never loads it, so edits
+# there would silently do nothing.
+if ! grep -q '^[[:space:]]*(add-package[[:space:]]*"personal-config")' ~/.beluga/config/init.lisp; then
+    warn "~/.beluga/config/init.lisp doesn't load personal-config — add (add-package \"personal-config\") after the theme's add-package line"
+fi
+
 # --- packages ----------------------------------------------------------
 
 # Packages enabled by default in config/init.lisp (currently just "outline").
@@ -232,4 +254,5 @@ ok "Installed $("$PREFIX/beluga" --version) to $PREFIX/beluga"
 if ! command -v beluga &>/dev/null; then
     warn "$PREFIX isn't on your PATH yet — add it, e.g.: export PATH=\"$PREFIX:\$PATH\""
 fi
-echo "Check ~/.beluga/config/init.lisp for customization."
+echo "Put your customizations in ~/.beluga/packages/personal-config/init.lisp — unlike"
+echo "~/.beluga/config/init.lisp, it's never replaced by an update."

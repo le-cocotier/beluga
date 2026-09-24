@@ -38,7 +38,10 @@
 (add-package "theme-dark")
 ;; (add-package "theme-light")
 
-;; Add the pseudo-package personal-config which is just modifications that won't be erased by update
+;; Your own modifications, kept out of this file so an update can replace it
+;; without erasing them: ~/.beluga/packages/personal-config/init.lisp,
+;; created once by install.sh and never overwritten. Loaded here — after the
+;; theme so its colors win, before the key bindings below so its map-keys win.
 (add-package "personal-config")
 
 ;; Per-language packages: each registers its own

@@ -317,7 +317,7 @@ unsigned char* utf8ToString(const Utf8Char* string)
 
 }
 
-// TODO: adapt to the right size
+// TODO(TODO.md): allocation is one byte short for the terminator
 unsigned char* utf8ToNString(const Utf8Char* string, int n)
 {
     unsigned char* new_string = gcalloc( n * 4, sizeof(unsigned char));

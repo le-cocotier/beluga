@@ -239,7 +239,7 @@ void editorOpen(struct buffer_t* buffer) {
  * @see editorRowsToString()
  */
 void editorSave() {
-    //TODO: utf8
+  // TODO(TODO.md): failed-open reported as saved, non-atomic write
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buffer = bufferFindById(active->buffer_id);
   char* string_line;
