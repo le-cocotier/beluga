@@ -10,7 +10,7 @@ You will only need **meson** and a **C compiler** to compile the editor.
 ### From source
 Here is the installation line for development version:
 
-```git clone https://git.giorgio-nas.fr/beluga/beluga.git && cd beluga && meson setup build && meson compile -C build```
+```git clone https://git.giorgio-nas.fr/arthur/beluga.git && cd beluga && meson setup build && meson compile -C build```
 
 The executable file will be `build/beluga`. Feel free to add it to your path.
 
