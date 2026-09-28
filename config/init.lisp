@@ -1,6 +1,6 @@
 ;; MACROS
 
-(define TAB-LENGTH 4)
+(define TAB-LENGTH 2)
 (define QUIT-TIMES 1)
 (define LSP #t)
 
@@ -24,6 +24,7 @@
 (add-prefix "user")
 (add-prefix "term")
 (add-prefix "project")
+(add-prefix "config")
 
 ;; PACKAGES
 
@@ -273,7 +274,7 @@
 (map-key "CTRL-c" editor-quit "user")
 (map-key "CTRL-s" editor-save "user")
 (map-key "f" editor-open-file "user")
-(map-key "c" editor-open-config "user")
+(map-key "c" '(editor-set-prefix "config") "user")
 (map-key "ARROW-RIGHT" editor-switch-next-buffer "user")
 (map-key "b" editor-buffer-picker "user")
 (map-key "k" editor-kill-buffer "user")
@@ -290,6 +291,10 @@
 (map-key "s" project-search "user")
 (if (app-debug?) (map-key "m" memory-inspector "user"))
 
+;; config
+(map-key "c" editor-open-config "config")
+(map-key "p" '(dired-open "~/.beluga/packages") "config")
+(map-key "m" '(editor-open-file-path "~/.beluga/packages/personal-config/init.lisp") "config")
 ;; project
 (map-key "d" lsp-definition "project")
 (map-key "h" lsp-hover "project")

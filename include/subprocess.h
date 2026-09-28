@@ -23,6 +23,15 @@
 // grow the buffer without bound. Pass 0 for no cap.
 char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes);
 
+// Same deadline and cap as runCommandCapture(), but runs argv directly via
+// execvp — no shell, so arguments need no quoting at all — and captures
+// stderr along with stdout. stdin is /dev/null. *exit_status (if non-NULL)
+// gets the exit code, 127 if argv[0] couldn't be run, or -1 if the child
+// was killed or didn't exit normally. Returns the output as
+// runCommandCapture() does: NULL when there was none.
+char *runArgvCapture(char *const argv[], long timeout_ms, size_t max_bytes,
+                     int *exit_status);
+
 // Wraps `s` in single quotes for safe use inside a shell command string,
 // escaping any embedded single quotes. Always NUL-terminates, and truncates
 // rather than overflowing if `out_size` is too small.

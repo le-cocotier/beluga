@@ -724,6 +724,8 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   int existing_id;
   struct buffer_t *new_buf;
   char fullname[PATH_MAX + 1];
+  char expanded[PATH_MAX + 1];
+  const char *home;
   char *path_str;
   char *fullname_str;
   Lisp hook_args;
@@ -771,7 +773,14 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
     existing_id = bufferFindByFilename(filename);
     if (existing_id != -1) {
       gfree(filename);
-      return bufferSwitch(existing_id);
+      // Always the buffer's id: this used to return bufferSwitch()'s own
+      // 0-on-success instead, so reusing a scratch buffer by name
+      // (editor-scratch-open) handed Lisp buffer 0 — whatever that was.
+      // Only a terminal is switched to here; a scratch buffer is left for
+      // the caller to place, same as when it's freshly created below.
+      if (type == TERMINAL_BUFF && bufferSwitch(existing_id) != 0)
+        return -1;
+      return existing_id;
     }
   }
 
@@ -803,11 +812,21 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   if (type == FILE_BUFF) {
     path_str = (char *)utf8ToString(path);
 
-    if (realpath(path_str, fullname) == NULL) {
-      // File doesn't exist yet, or path invalid — fall back to the raw path
-      snprintf(fullname, sizeof(fullname), "%s", path_str);
-    }
+    // "~" is only $HOME to a shell — to realpath()/fopen() it's a plain
+    // directory name, so "~/.beluga/..." from a keybind or typed at the
+    // open-file prompt used to become a new empty buffer for a file
+    // under ./~/ instead of opening the real one.
+    home = getenv("HOME");
+    if (home && path_str[0] == '~' && (path_str[1] == '/' || path_str[1] == '\0'))
+      snprintf(expanded, sizeof(expanded), "%s%s", home, path_str + 1);
+    else
+      snprintf(expanded, sizeof(expanded), "%s", path_str);
     gfree(path_str);
+
+    if (realpath(expanded, fullname) == NULL) {
+      // File doesn't exist yet, or path invalid — fall back to the raw path
+      snprintf(fullname, sizeof(fullname), "%s", expanded);
+    }
 
     new_buf->fullname = stringToUtf8((unsigned char *)fullname);
     new_buf->path = stringToUtf8((unsigned char *)dirname(fullname));

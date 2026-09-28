@@ -495,6 +495,11 @@ void whichKeyDraw(struct abuf *ab) {
     buf = active ? bufferFindById(active->buffer_id) : NULL;
     if (buf && buf->type == TERMINAL_BUFF)
         return;
+    // A sticky prefix (explorer, search, dired, ...) is the same kind of
+    // ambient state: it's the mode of the buffer you're in, not a chord
+    // waiting for its second key, so it never "settles" into needing help.
+    if (E.prefix[E.prefix_state].sticky)
+        return;
 
     // Only once the prefix has been pending a moment, so fluent chords
     // don't strobe the panel on their way through.

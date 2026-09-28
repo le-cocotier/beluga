@@ -94,6 +94,9 @@ Lisp editorCopyEndLine(Lisp args, LispError *e, LispContext ctx);
 Lisp editorMoveBegBuffer(Lisp args, LispError *e, LispContext ctx);
 Lisp editorMoveEndBuffer(Lisp args, LispError *e, LispContext ctx);
 
+Lisp editorGetPaneWitdh(Lisp args, LispError *e, LispContext ctx);
+Lisp editorGetPaneHeight(Lisp args, LispError *e, LispContext ctx);
+
 // Other
 
 Lisp editorAutoComplete(Lisp args, LispError *e, LispContext ctx);
@@ -151,6 +154,26 @@ Lisp editorListPopup(Lisp args, LispError *e, LispContext ctx);
 // can gate debug-only setup (e.g. the memory inspector below) without
 // referencing a builtin that might not exist in this build.
 Lisp l_appDebugP(Lisp args, LispError *e, LispContext ctx);
+
+// (editor-recenter [row]) — scroll the active pane so the cursor's line is
+// in the middle (or at `row`; negative counts from the bottom).
+Lisp l_editorRecenter(Lisp args, LispError *e, LispContext ctx);
+// (pane-height) / (pane-width) — the active pane's text area, in rows / columns.
+Lisp l_paneHeight(Lisp args, LispError *e, LispContext ctx);
+Lisp l_paneWidth(Lisp args, LispError *e, LispContext ctx);
+
+// ─── Filesystem & process primitives (see builtins.c) ─────────────────────────
+// (expand-path path [base-dir]) — absolute path: "~" expanded, relative
+// paths resolved against base-dir (default: working dir), "."/".." collapsed.
+Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx);
+// (file-attributes path) — #f, or (is-dir is-link size mtime "mode" "date" "link-target").
+Lisp l_fileAttributes(Lisp args, LispError *e, LispContext ctx);
+// (process-run "program" "arg" ...) — no shell; returns (exit-code . "output").
+Lisp l_processRun(Lisp args, LispError *e, LispContext ctx);
+// (editor-message "text") — show text on the status line.
+Lisp l_editorMessage(Lisp args, LispError *e, LispContext ctx);
+// (editor-scratch-set-prefix buffer-id "prefix") — keymap a scratch buffer activates on focus.
+Lisp l_editorScratchSetPrefix(Lisp args, LispError *e, LispContext ctx);
 
 #ifdef APP_DEBUG
 // (memory-inspector) — opens/refreshes the "*memory*" buffer listing every

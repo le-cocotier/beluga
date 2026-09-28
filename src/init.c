@@ -75,6 +75,8 @@ void initBuiltins(void) {
   registerBuiltin("editor-move-cursor-beg-buffer", editorMoveBegBuffer);
   registerBuiltin("editor-move-cursor-end-buffer", editorMoveEndBuffer);
   registerBuiltin("editor-auto-complete", editorAutoComplete);
+  registerBuiltin("editor-get-pane-width", editorGetPaneWitdh);
+  registerBuiltin("editor-get-pane-height", editorGetPaneHeight);
   // registerBuiltin("lsp-complete",    lspComplete);
   registerBuiltin("lsp-definition", lspDefinition);
   registerBuiltin("lsp-hover", lspHover);
@@ -118,6 +120,14 @@ void initBuiltins(void) {
   registerBuiltin("syntax-add-keyword", l_syntaxAddKeyword);
   registerBuiltin("syntax-add-type", l_syntaxAddType);
   registerBuiltin("app-debug?", l_appDebugP);
+  registerBuiltin("editor-recenter", l_editorRecenter);
+  registerBuiltin("pane-height", l_paneHeight);
+  registerBuiltin("pane-width", l_paneWidth);
+  registerBuiltin("expand-path", l_expandPath);
+  registerBuiltin("file-attributes", l_fileAttributes);
+  registerBuiltin("process-run", l_processRun);
+  registerBuiltin("editor-message", l_editorMessage);
+  registerBuiltin("editor-scratch-set-prefix", l_editorScratchSetPrefix);
 #ifdef APP_DEBUG
   registerBuiltin("memory-inspector", l_memoryInspectorOpen);
   registerBuiltin("memory-inspector-refresh", l_memoryInspectorRefresh);
@@ -351,6 +361,7 @@ void initEditor() {
   E.lsp_client->sync_debounce_buffer_id = -1;
 
   E.quit_times_buffer = E.constantes.QUIT_TIMES;
+
 }
 
 void deInitEditor() {

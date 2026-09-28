@@ -27,6 +27,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "../include/completion.h"
@@ -1428,6 +1429,7 @@ Lisp editorMoveBegBuffer(Lisp args, LispError *e, LispContext ctx) {
   struct buffer_t *buffer = bufferFindById(active->buffer_id);
   buffer->x = 0;
   buffer->y = 0;
+  editorGetPaneHeight(lisp_null(), &E.ctx_error, E.ctx);
   return lisp_null();
 }
 
@@ -1879,6 +1881,354 @@ Lisp l_appDebugP(Lisp args, LispError *e, LispContext ctx) {
 #endif
 }
 
+/**
+ * @brief Lisp function: scroll so the cursor's line sits at a given screen row
+ * @details (editor-recenter [row]) — like Emacs' recenter: the cursor stays
+ * on the same buffer position, only the active pane's view scrolls. With no
+ * argument the line goes to the middle of the pane; a row >= 0 counts from
+ * the top of the pane, a negative one from the bottom (-1 = last row). The
+ * top of the buffer can't scroll past row 0, so a line near the start stays
+ * wherever it naturally is. Pairs with editor-goto-line for "jump there and
+ * show it in context".
+ * @return lisp_null()
+ */
+Lisp l_editorRecenter(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf;
+  int target;
+  (void) e;
+  (void) ctx;
+
+  if (!active)
+    return lisp_null();
+  buf = bufferFindById(active->buffer_id);
+  if (!buf || active->height < 1)
+    return lisp_null();
+
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT) {
+    target = (int) lisp_int(lisp_car(args));
+    if (target < 0)
+      target += active->height;
+  } else {
+    target = active->height / 2;
+  }
+  if (target < 0)
+    target = 0;
+  if (target > active->height - 1)
+    target = active->height - 1;
+  if (target > buf->y)
+    target = buf->y; // can't scroll above the first line
+
+  // Both halves of editorScroll()'s invariant (buf->y == cursor_y +
+  // y_offset) set together, so its per-frame fixup has nothing to undo.
+  active->y_offset = buf->y - target;
+  active->cursor_y = target;
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp functions: the active pane's size in text rows / columns
+ * @details (pane-height) / (pane-width) — the area text is drawn in: the
+ * status bar and message line aren't counted, the line-number gutter is
+ * (it's inside the pane). Read them when you need them rather than caching
+ * them — splits and terminal resizes change them at any time.
+ * @return Lisp int
+ */
+Lisp l_paneHeight(Lisp args, LispError *e, LispContext ctx) {
+  const EditorPane *active = splitScreenGetActivePane();
+  (void) args; (void) e; (void) ctx;
+  return lisp_make_int(active ? active->height : 0);
+}
+
+Lisp l_paneWidth(Lisp args, LispError *e, LispContext ctx) {
+  const EditorPane *active = splitScreenGetActivePane();
+  (void) args; (void) e; (void) ctx;
+  return lisp_make_int(active ? active->width : 0);
+}
+
+/***********************************************************************************************************************
+ *
+ * Filesystem & process primitives — what a file-manager package (dired)
+ * needs on top of list-directory: per-file metadata, a way to run
+ * rm/mv/cp/mkdir without a shell, path expansion, and control over its
+ * own buffer's keymap and the status line.
+ *
+ **********************************************************************************************************************/
+
+/**
+ * @brief Collapses "." / ".." / repeated slashes in an absolute path,
+ * lexically — the path doesn't have to exist (a rename or mkdir target
+ * usually doesn't yet), so realpath() isn't an option.
+ * @param in Absolute path (starting with '/')
+ * @param out Receives the normalized path, never empty ("/" at minimum)
+ */
+static void normalizePath(const char *in, char *out, const size_t out_size) {
+  size_t len = 0;
+  const char *seg = in;
+  const char *end;
+  size_t seg_len;
+
+  out[0] = '\0';
+  while (*seg) {
+    while (*seg == '/')
+      seg++;
+    end = seg;
+    while (*end && *end != '/')
+      end++;
+    seg_len = (size_t) (end - seg);
+
+    if (seg_len == 0 || (seg_len == 1 && seg[0] == '.')) {
+      // empty (trailing slash) or "." — nothing to add
+    } else if (seg_len == 2 && seg[0] == '.' && seg[1] == '.') {
+      while (len > 0 && out[len - 1] != '/')
+        len--;
+      if (len > 0)
+        len--; // drop the slash too
+      out[len] = '\0';
+    } else if (len + 1 + seg_len + 1 <= out_size) {
+      out[len++] = '/';
+      memcpy(out + len, seg, seg_len);
+      len += seg_len;
+      out[len] = '\0';
+    }
+    seg = end;
+  }
+  if (len == 0 && out_size >= 2) {
+    out[0] = '/';
+    out[1] = '\0';
+  }
+}
+
+/**
+ * @brief Lisp function: make a path absolute
+ * @details (expand-path path [base-dir]) — expands a leading "~" to $HOME,
+ * resolves a relative path against base-dir (default: the working
+ * directory), and collapses "." and ".." lexically. The path doesn't have
+ * to exist.
+ * @return Lisp string: the absolute path
+ */
+Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
+  const char *path;
+  const char *base = NULL;
+  const char *home;
+  char cwd[PATH_MAX];
+  char joined[PATH_MAX * 2];
+  char out[PATH_MAX];
+
+  if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  path = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING)
+    base = lisp_string(lisp_car(args));
+
+  home = getenv("HOME");
+  if (path[0] == '~' && (path[1] == '/' || path[1] == '\0') && home) {
+    snprintf(joined, sizeof(joined), "%s/%s", home, path + 1);
+  } else if (path[0] == '/') {
+    snprintf(joined, sizeof(joined), "%s", path);
+  } else {
+    if (!base || base[0] == '\0') {
+      if (getcwd(cwd, sizeof(cwd)) == NULL)
+        snprintf(cwd, sizeof(cwd), "/");
+      base = cwd;
+    }
+    snprintf(joined, sizeof(joined), "%s/%s", base, path);
+  }
+
+  normalizePath(joined, out, sizeof(out));
+  return lisp_make_string2(out, ctx);
+}
+
+/**
+ * @brief Builds an `ls -l` style mode string ("drwxr-xr-x") from st_mode.
+ */
+static void modeString(const mode_t mode, char out[11]) {
+  if (S_ISDIR(mode))       out[0] = 'd';
+  else if (S_ISLNK(mode))  out[0] = 'l';
+  else if (S_ISCHR(mode))  out[0] = 'c';
+  else if (S_ISBLK(mode))  out[0] = 'b';
+  else if (S_ISFIFO(mode)) out[0] = 'p';
+  else if (S_ISSOCK(mode)) out[0] = 's';
+  else                     out[0] = '-';
+  out[1] = (mode & S_IRUSR) ? 'r' : '-';
+  out[2] = (mode & S_IWUSR) ? 'w' : '-';
+  out[3] = (mode & S_ISUID) ? ((mode & S_IXUSR) ? 's' : 'S') : ((mode & S_IXUSR) ? 'x' : '-');
+  out[4] = (mode & S_IRGRP) ? 'r' : '-';
+  out[5] = (mode & S_IWGRP) ? 'w' : '-';
+  out[6] = (mode & S_ISGID) ? ((mode & S_IXGRP) ? 's' : 'S') : ((mode & S_IXGRP) ? 'x' : '-');
+  out[7] = (mode & S_IROTH) ? 'r' : '-';
+  out[8] = (mode & S_IWOTH) ? 'w' : '-';
+  out[9] = (mode & S_ISVTX) ? ((mode & S_IXOTH) ? 't' : 'T') : ((mode & S_IXOTH) ? 'x' : '-');
+  out[10] = '\0';
+}
+
+/**
+ * @brief Lisp function: metadata for one path
+ * @details (file-attributes path) — returns #f if the path doesn't exist
+ * (lstat fails), otherwise the list
+ *   (is-dir is-link size mtime "mode" "date" "link-target")
+ * `is-link` and `mode`/`size` describe the path itself (lstat), while
+ * `is-dir` follows a symlink, so a link to a directory can be entered.
+ * `mtime` is seconds since the epoch, for sorting; `date` is formatted the
+ * way `ls -l` does it ("Sep 28 14:02" within the last six months,
+ * "Sep 28  2025" otherwise). `link-target` is "" unless is-link.
+ */
+Lisp l_fileAttributes(Lisp args, LispError *e, LispContext ctx) {
+  const char *path;
+  struct stat lst;
+  struct stat st;
+  int is_dir;
+  int is_link;
+  char mode[11];
+  char date[32];
+  char target[PATH_MAX];
+  ssize_t target_len;
+  time_t now;
+  struct tm tm_mtime;
+  Lisp fields[7];
+
+  if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  path = lisp_string(lisp_car(args));
+  if (lstat(path, &lst) != 0)
+    return lisp_false();
+
+  is_link = S_ISLNK(lst.st_mode);
+  is_dir = is_link ? (stat(path, &st) == 0 && S_ISDIR(st.st_mode))
+                   : S_ISDIR(lst.st_mode);
+  modeString(lst.st_mode, mode);
+
+  now = time(NULL);
+  localtime_r(&lst.st_mtime, &tm_mtime);
+  // Same six-month cutoff ls uses to switch from time-of-day to year.
+  if (lst.st_mtime > now - 15778476 && lst.st_mtime <= now + 3600)
+    strftime(date, sizeof(date), "%b %e %H:%M", &tm_mtime);
+  else
+    strftime(date, sizeof(date), "%b %e  %Y", &tm_mtime);
+
+  target[0] = '\0';
+  if (is_link) {
+    target_len = readlink(path, target, sizeof(target) - 1);
+    target[target_len > 0 ? target_len : 0] = '\0';
+  }
+
+  fields[0] = lisp_make_bool(is_dir);
+  fields[1] = lisp_make_bool(is_link);
+  fields[2] = lisp_make_int((LispInt) lst.st_size);
+  fields[3] = lisp_make_int((LispInt) lst.st_mtime);
+  fields[4] = lisp_make_string2(mode, ctx);
+  fields[5] = lisp_make_string2(date, ctx);
+  fields[6] = lisp_make_string2(target, ctx);
+  return lisp_make_list2(fields, 7, ctx);
+}
+
+/**
+ * @brief Lisp function: run a program and capture its output
+ * @details (process-run "program" "arg" ...) — runs the program directly
+ * (execvp, searched on PATH), **not** through a shell: every argument
+ * reaches it verbatim, so file names with spaces or quotes need no
+ * escaping. stdout and stderr are captured together; stdin is /dev/null.
+ * Blocks the editor until the program exits, up to 60 seconds (then it's
+ * killed), keeping at most 1 MiB of output.
+ * @return (exit-code . "output"): exit-code 0 on success, 127 if the
+ * program couldn't be run, -1 if it was killed; output with trailing
+ * newlines stripped, "" if none.
+ */
+Lisp l_processRun(Lisp args, LispError *e, LispContext ctx) {
+  Lisp it;
+  int argc = 0;
+  int i;
+  char **argv;
+  char *out;
+  int status;
+  Lisp result;
+
+  for (it = args; lisp_is_pair(it); it = lisp_cdr(it)) {
+    if (lisp_type(lisp_car(it)) != LISP_STRING) {
+      *e = LISP_ERROR_ARG_TYPE;
+      return lisp_null();
+    }
+    argc++;
+  }
+  if (argc == 0) {
+    *e = LISP_ERROR_TOO_FEW_ARGS;
+    return lisp_null();
+  }
+
+  argv = galloc((size_t) (argc + 1) * sizeof(char *));
+  if (!argv)
+    return lisp_null();
+  i = 0;
+  for (it = args; lisp_is_pair(it); it = lisp_cdr(it))
+    argv[i++] = (char *) lisp_string(lisp_car(it));
+  argv[argc] = NULL;
+
+  out = runArgvCapture(argv, 60000, 1 << 20, &status);
+  gfree(argv);
+
+  result = lisp_cons(lisp_make_int(status), lisp_make_string2(out ? out : "", ctx), ctx);
+  gfree(out);
+  return result;
+}
+
+/**
+ * @brief Lisp function: show a message on the status line
+ * @details (editor-message "text") — the same line hover results and
+ * "File saved" use; it fades like any other status message.
+ * @return lisp_null()
+ */
+Lisp l_editorMessage(Lisp args, LispError *e, LispContext ctx) {
+  (void) ctx;
+  if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  editorSetStatusMessage("%s", lisp_string(lisp_car(args)));
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function: give a scratch buffer its own keymap
+ * @details (editor-scratch-set-prefix buffer-id "prefix") — the prefix is
+ * activated whenever that buffer gets focus (switching to it, or moving
+ * into its pane), and right away if it's already the active pane's
+ * buffer. Without this a scratch buffer falls back to the "explorer"
+ * prefix. Only affects scratch buffers, like editor-scratch-set-lines.
+ * @return #t if set, #f if buffer-id isn't a scratch buffer
+ */
+Lisp l_editorScratchSetPrefix(Lisp args, LispError *e, LispContext ctx) {
+  int buffer_id;
+  const char *prefix_name;
+  struct buffer_t *buf;
+  struct prefix_t prefix;
+  (void) ctx;
+
+  if (!lisp_is_pair(args) || !lisp_is_pair(lisp_cdr(args)) ||
+      lisp_type(lisp_car(lisp_cdr(args))) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  buffer_id = (int) lisp_int(lisp_car(args));
+  prefix_name = lisp_string(lisp_car(lisp_cdr(args)));
+
+  buf = bufferFindById(buffer_id);
+  if (!buf || buf->type != EXPLORER_BUFF)
+    return lisp_false();
+
+  snprintf(buf->focus_prefix, sizeof(buf->focus_prefix), "%s", prefix_name);
+  if (splitScreenGetActivePane()->buffer_id == buffer_id) {
+    prefix = find_prefix(prefix_name);
+    if (prefix.prefix_id != -1)
+      E.prefix_state = prefix.prefix_id;
+  }
+  return lisp_true();
+}
+
 #ifdef APP_DEBUG
 /**
  * @brief Lisp function to open the memory inspector
@@ -2072,4 +2422,14 @@ Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx) {
   word = lisp_string(lisp_car(args));
   syntaxAddWord(ext, word, 1);
   return lisp_null();
+}
+
+Lisp editorGetPaneWitdh(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane* active = splitScreenGetActivePane();
+  return lisp_make_int(active->width);
+}
+
+Lisp editorGetPaneHeight(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane* active = splitScreenGetActivePane();
+  return lisp_make_int(active->height);
 }
