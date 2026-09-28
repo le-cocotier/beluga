@@ -41,3 +41,38 @@
 ;; CTRL-d (c, python, ...), whichever loads first wins; the other's
 ;; binding is silently unreachable — rebind one if you use both together.
 (map-key "CTRL-d" rust-toggle-comment "no-prefix")
+
+;; ─── Syntax highlighting ────────────────────────────────────────────────────
+
+(define rust-keywords
+  (list "fn" "let" "mut" "if" "else" "while" "loop" "match" "return" "break"
+        "continue" "struct" "enum" "impl" "trait" "pub" "use" "mod" "crate"
+        "self" "Self" "super" "as" "where" "dyn" "move" "async" "await"
+        "unsafe" "extern" "static" "const" "type" "ref" "in" "for"))
+
+(define rust-types
+  (list "i8" "i16" "i32" "i64" "i128" "isize" "u8" "u16" "u32" "u64" "u128"
+        "usize" "f32" "f64" "bool" "char" "str" "String" "Vec" "Option"
+        "Some" "None" "Result" "Ok" "Err"))
+
+(define (rust--add-keywords words)
+  (if (null? words)
+      #f
+      (begin
+        (syntax-add-keyword "rs" (car words))
+        (rust--add-keywords (cdr words)))))
+
+(define (rust--add-types words)
+  (if (null? words)
+      #f
+      (begin
+        (syntax-add-type "rs" (car words))
+        (rust--add-types (cdr words)))))
+
+;; "//" line comments, "/* */" block comments (Rust's block comments nest,
+;; which this generic highlighter doesn't model — a nested /* */ pair
+;; closes highlighting early, same simplification every other language
+;; here makes), both quote styles open a string/char literal.
+(syntax-define-language "rs" "//" "/*" "*/" "\"'")
+(rust--add-keywords rust-keywords)
+(rust--add-types rust-types)

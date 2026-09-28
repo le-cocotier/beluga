@@ -52,10 +52,19 @@
                    acc)
              acc)))))
 
+;; #t at the end asks for a live-filtering popup — type to narrow the list
+;; by substring, same as CTRL-P's file finder. See Builtins.md /
+;; editor-list-popup for what the 5th argument does.
 (define (editor-outline)
   (editor-list-popup "Outline"
                       (outline--entries 0 '())
-                      (lambda (row) (editor-goto-line row))
-                      '()))
+                      ;; Jump, then scroll so the definition lands mid-pane
+                      ;; with context around it (not on the bottom row).
+                      (lambda (row)
+                        (begin
+                          (editor-goto-line row)
+                          (editor-recenter)))
+                      '()
+                      #t))
 
 (map-key "CTRL-o" editor-outline "no-prefix")

@@ -39,3 +39,49 @@
 ;; CTRL-d (python, rust, ...), whichever loads first wins; the other's
 ;; binding is silently unreachable — rebind one if you use both together.
 (map-key "CTRL-d" c-toggle-comment "no-prefix")
+
+;; ─── Syntax highlighting ────────────────────────────────────────────────────
+;; The exact keyword and type lists beluga's own syntax highlighter used to
+;; hardcode in C, before highlighting itself became something packages
+;; provide — every language, C included, now goes through the same
+;; (syntax-define-language ...) + syntax-add-keyword/syntax-add-type
+;; mechanism. Removing this package no longer just loses clangd and the
+;; comment toggle; it loses C highlighting too, the same as any other
+;; language package being absent already meant no highlighting for it.
+
+(define c-keywords
+  (list "if" "else" "while" "for" "do" "switch"
+        "case" "break" "#include" "#define" "#if" "#endif" "#ifndef" "continue" "return"
+        "goto" "struct" "union" "enum" "typedef" "static"
+        "extern" "const" "volatile" "sizeof" "auto" "register"
+        "inline" "restrict"))
+
+(define c-types
+  (list "int" "char" "float" "double"
+        "void" "long" "short" "unsigned"
+        "signed" "bool"))
+
+(define (c--add-keywords ext words)
+  (if (null? words)
+      #f
+      (begin
+        (syntax-add-keyword ext (car words))
+        (c--add-keywords ext (cdr words)))))
+
+(define (c--add-types ext words)
+  (if (null? words)
+      #f
+      (begin
+        (syntax-add-type ext (car words))
+        (c--add-types ext (cdr words)))))
+
+;; "//" line comments, "/* */" block comments, both '"' and '\'' open a
+;; string/char literal — registered separately for .c and .h since
+;; syntax-define-language is one extension per call, same as lsp-server.
+(define (c--register-syntax ext)
+  (syntax-define-language ext "//" "/*" "*/" "\"'")
+  (c--add-keywords ext c-keywords)
+  (c--add-types ext c-types))
+
+(c--register-syntax "c")
+(c--register-syntax "h")

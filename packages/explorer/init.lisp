@@ -116,15 +116,28 @@
     (let ((restored-row (explorer--row-of selected-path explorer-paths 0)))
       (editor-goto-line (if (>= restored-row 0) restored-row 0)))))
 
+;; Roots the tree at the enclosing git project (project-root) — so opening
+;; the sidebar from a subdirectory still shows the whole project, not just
+;; wherever the editor happened to be started from. Outside any project,
+;; it asks for a directory instead of silently defaulting to the working
+;; directory (which might not be what you meant to browse); ESC there
+;; leaves the sidebar closed, the same as declining the LSP-start prompt.
 (define (explorer-open)
   (if explorer-open?
       '()
-      (begin
-        (set! explorer-root (editor-pwd))
-        (set! explorer-expanded (list explorer-root))
-        (set! explorer-buffer-id (editor-explorer-sidebar-open "*explorer*" explorer-sidebar-width))
-        (set! explorer-open? #t)
-        (explorer-refresh))))
+      (let* ((git-root (project-root))
+             (root (if (string=? git-root "")
+                       (editor-prompt "Explorer root: %u (ESC to cancel)"
+                                      (editor-pwd) #t)
+                       git-root)))
+        (if root
+            (begin
+              (set! explorer-root root)
+              (set! explorer-expanded (list explorer-root))
+              (set! explorer-buffer-id (editor-explorer-sidebar-open "*explorer*" explorer-sidebar-width))
+              (set! explorer-open? #t)
+              (explorer-refresh))
+            '()))))
 
 (define (explorer-close)
   (if explorer-open?
@@ -135,6 +148,17 @@
 
 (define (explorer-toggle)
   (if explorer-open? (explorer-close) (explorer-open)))
+
+;; Killing the sidebar's buffer (CTRL-x k) already collapses the split; just
+;; forget it here, or explorer-open? stays #t and the next toggle would
+;; "close" a sidebar that's already gone instead of opening a new one.
+(add-hook "buffer-killed"
+          (lambda (name id)
+            (if (= id explorer-buffer-id)
+                (begin
+                  (set! explorer-open? #f)
+                  (set! explorer-buffer-id -1))
+                '())))
 
 (define (explorer-activate)
   (if (null? explorer-paths)
@@ -161,6 +185,7 @@
 (map-key "ARROW-DOWN" '(move-cursor "down") "explorer")
 (map-key "q" explorer-close "explorer")
 (map-key "e" explorer-toggle "user")
+(map-key "ESCAPE" '(editor-set-prefix "no-prefix") "explorer")
 
 ;; ─── static tree dump ───────────────────────────────────────────────────────
 
@@ -194,4 +219,4 @@
     (editor-scratch-set-lines buf-id lines)
     (editor-switch-to-buffer buf-id)))
 
-(map-key "p" project-tree "user")
+(map-key "CTRL-p" project-tree "user")
