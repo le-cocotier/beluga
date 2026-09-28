@@ -1011,10 +1011,29 @@ Lisp editorPrintC(const Lisp args, LispError *e, LispContext ctx) {
   return lisp_null();
 }
 
+// Names of the packages add-package has already loaded, so loading one
+// twice is a no-op — the default config and personal-config can both name
+// a package without it running twice (its hooks registered twice, its
+// prefix and keys duplicated). A fixed table: past 128 packages the
+// dedup simply stops, which only costs a double load.
+#define MAX_LOADED_PACKAGES 128
+static char s_loaded_packages[MAX_LOADED_PACKAGES][64];
+static int s_loaded_package_count = 0;
+
+static int packageAlreadyLoaded(const char *name) {
+  int i;
+  for (i = 0; i < s_loaded_package_count; i++)
+    if (strcmp(s_loaded_packages[i], name) == 0)
+      return 1;
+  return 0;
+}
+
 /**
  * @brief Lisp function to load and execute a package
  * @details Loads a Lisp package from the user's packages directory
- * (~/.beluga/packages/<package_name>/init.lisp) and evaluates it.
+ * (~/.beluga/packages/<package_name>/init.lisp) and evaluates it — once:
+ * naming a package that's already loaded again does nothing, like Emacs'
+ * require.
  * @param args Lisp list with one argument: package name (string)
  * @param e Error pointer for Lisp error handling
  * @param ctx Lisp context
@@ -1028,6 +1047,8 @@ Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
   char *package_dir;
   FILE *fd_package;
   appDebug("%s\n", package_name);
+  if (packageAlreadyLoaded(package_name))
+    return lisp_null();
   home = getenv("HOME");
   if (!home) {
     return lisp_null();
@@ -1042,6 +1063,14 @@ Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
   if (!fd_package) {
     gfree(package_dir);
     return lisp_null();
+  }
+
+  // Recorded before evaluating, so a package that (directly or not) names
+  // itself can't recurse into loading itself again.
+  if (s_loaded_package_count < MAX_LOADED_PACKAGES &&
+      strlen(package_name) < sizeof(s_loaded_packages[0])) {
+    strcpy(s_loaded_packages[s_loaded_package_count], package_name);
+    s_loaded_package_count++;
   }
 
   lisp_eval(lisp_read_file(fd_package, &E.ctx_error, E.ctx), &E.ctx_error,

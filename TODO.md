@@ -111,9 +111,16 @@ is actually left to do.
   loaded. `personal-config` loads before the helper functions defined further
   down the default config (`enter-and-tab`, `editor-buffer-picker`, …), so it
   can't bind them today.
-- [ ] **[feature]** `install.sh --update`: `git pull` every package already
-  cloned in `~/.beluga/packages/` (skipping `personal-config`), then rebuild.
-  Today already-cloned packages are never updated.
+- [x] ~~`install.sh --update`~~: bundled packages now live in `packages/` and
+  every install brings them up to date (`--dev` symlinks them instead).
+- [ ] **[feature]** `use-package`: `(use-package "name" ["git-url"])`, which
+  clones a missing non-bundled package on first use and reports a missing
+  or failing one in the status bar (see the `add-package` item above).
+- [ ] **[feature]** A `*packages*` buffer listing every package (bundled /
+  git / local, loaded?, branch, dirty, ahead/behind) with fetch, pull, diff,
+  commit and push, built on a reusable `*git*` status view that also works
+  for the current project. Needs an async `process-run` variant first, so
+  a network `git push`/`fetch` doesn't freeze the editor.
 
 ---
 

@@ -27,11 +27,15 @@
 (add-prefix "config")
 
 ;; PACKAGES
-
-;; First git clone it
+;;
+;; Bundled packages come with beluga (packages/ in its repo) and install.sh
+;; puts them in ~/.beluga/packages/ — all of the ones named in this file.
+;; A package that isn't there (your own, or a third-party one: git clone it
+;; into ~/.beluga/packages/<name>) makes (add-package ...) a silent no-op.
 (add-package "smart_delimiters")
 (add-package "outline")
 (add-package "explorer")
+(add-package "dired")    ; CTRL-x d, CTRL-x CTRL-j — and CTRL-x c p below
 
 ;; Themes: exactly one should be loaded (the second one just overwrites
 ;; whatever colors the first one set). Fork either as a starting point
@@ -48,10 +52,10 @@
 ;; Per-language packages: each registers its own
 ;; (lsp-server "ext" "language-id" "command" "arg1" ...) — which spawns
 ;; that language server the first time a matching file is opened — plus
-;; a CTRL-d comment-toggle keybind. See packages/<name>/init.lisp. Same
-;; "git clone it first" convention as smart_delimiters above. Calling
-;; (lsp-server ...) directly here also works fine for a language with no
-;; package of its own yet.
+;; a CTRL-d comment-toggle keybind. See packages/<name>/init.lisp. All
+;; bundled, so enabling one is just uncommenting it (or adding the line to
+;; personal-config). Calling (lsp-server ...) directly here also works fine
+;; for a language with no package of its own yet.
 ;; (add-package "c")
 ;; (add-package "python")   ; needs pyright-langserver on PATH
 ;; (add-package "rust")     ; needs rust-analyzer on PATH

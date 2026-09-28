@@ -22,6 +22,7 @@ die()   { error "$@"; exit 1; }
 
 ASSUME_YES=0
 SKIP_PACKAGES=0
+DEV_MODE=0
 DEBUG_BUILD=0
 PREFIX="/usr/local/bin"
 
@@ -34,7 +35,11 @@ Usage: ./install.sh [options]
   -y, --yes            Don't prompt for confirmation; assume "yes" (and
                         never overwrite an existing config).
       --prefix DIR      Where to install the beluga binary (default: /usr/local/bin).
-      --skip-packages   Don't clone the default packages listed below.
+      --skip-packages   Don't install the bundled packages (packages/ in
+                        this checkout).
+      --dev             Symlink the bundled packages to this checkout instead
+                        of copying them, for working on them: edits there are
+                        live in the editor and tracked by this repo's git.
       --debug           Build an unoptimized debug build with APP_DEBUG logging
                         enabled, instead of the default optimized release
                         build. Logs (the editor's own trace calls, plus the
@@ -44,8 +49,10 @@ Usage: ./install.sh [options]
   -h, --help            Show this help and exit.
 
 Safe to re-run: an existing build/ is reconfigured rather than failing,
-already-cloned packages are left alone, and your config is never touched
-without asking first.
+and your config is never touched without asking first. Bundled packages
+are replaced to match this checkout; one with local edits (or an old git
+clone of it) is moved to ~/.beluga/packages.bak/ first, never deleted.
+Packages that aren't bundled are never touched.
 
 Your own changes belong in ~/.beluga/packages/personal-config/init.lisp:
 it's created from a template on the first install and never overwritten
@@ -59,6 +66,7 @@ while [ $# -gt 0 ]; do
         --prefix) PREFIX="${2:?--prefix needs a directory}"; shift ;;
         --prefix=*) PREFIX="${1#*=}" ;;
         --skip-packages) SKIP_PACKAGES=1 ;;
+        --dev) DEV_MODE=1 ;;
         --debug) DEBUG_BUILD=1 ;;
         -h|--help) usage; exit 0 ;;
         *) die "Unknown option: $1 (see --help)" ;;
@@ -183,38 +191,83 @@ fi
 
 # --- packages ----------------------------------------------------------
 
-# Packages enabled by default in config/init.lisp (currently just "outline").
-# Packages live in their own git repos — same convention as the
-# smart_delimiters example ("First git clone it") — so this clones rather
-# than copying anything out of this checkout. Already-installed packages are
-# left alone (git pull them yourself to update) rather than clobbered, since
-# ~/.beluga/packages/ is meant to be user-editable.
+# Bundled packages ship in this checkout's packages/ directory, versioned
+# with the editor itself: they call builtins that only exist from a given
+# version on (dired's process-run, outline's editor-recenter), so they're
+# installed from the same checkout as the binary instead of being cloned
+# from repos of their own that could drift out of step with it. A normal
+# install copies them; --dev symlinks each one to the checkout instead, so
+# editing a package there is live in the editor and shows up in this
+# repo's git status right next to the C changes.
 #
-# One "name url" pair per line — kept as a plain list rather than an
-# associative array, since macOS ships bash 3.2 as /bin/bash (no declare -A
-# support; that needs bash 4+) and this script's shebang targets /bin/bash.
-BELUGA_PACKAGES="
-outline https://git.giorgio-nas.fr/arthur/outline.git
-smart_delimiters https://git.giorgio-nas.fr/arthur/smart_delimiters.git
-c https://git.giorgio-nas.fr/arthur/c.git
-explorer https://git.giorgio-nas.fr/arthur/explorer.git
-"
+# ~/.beluga/packages/<name> for a bundled package is beluga's to replace on
+# every install — that's what keeps it in step with the binary. Anything
+# that would be lost doing so (a copy with local edits, or an old git
+# clone from before packages were bundled) is moved to
+# ~/.beluga/packages.bak/<name>-<timestamp> first, never deleted. Packages
+# that aren't bundled — personal-config, your own, third-party ones — are
+# never touched.
+
+PACKAGES_SRC="$SCRIPT_DIR/packages"
+PACKAGES_BAK=~/.beluga/packages.bak
+STAMP="$(date +%Y%m%d-%H%M%S)"
+
+backup_package() {
+    # backup_package <installed dir> <name> <why>
+    mkdir -p "$PACKAGES_BAK"
+    mv "$1" "$PACKAGES_BAK/$2-$STAMP"
+    warn "'$2' $3 — moved to $PACKAGES_BAK/$2-$STAMP"
+}
+
+install_package() {
+    # install_package <name> — prints nothing when already up to date
+    local name="$1"
+    local src="$PACKAGES_SRC/$1"
+    local dest=~/.beluga/packages/"$1"
+
+    if [ -L "$dest" ]; then
+        if [ "$DEV_MODE" -eq 1 ] && [ "$(readlink "$dest")" = "$src" ]; then
+            return 0
+        fi
+        rm "$dest"   # a symlink holds nothing of its own to lose
+    elif [ -d "$dest/.git" ]; then
+        backup_package "$dest" "$name" "was a git clone (now bundled)"
+    elif [ -d "$dest" ]; then
+        if diff -rq -x lisp_log.err -x .DS_Store "$src" "$dest" >/dev/null 2>&1; then
+            if [ "$DEV_MODE" -eq 0 ]; then
+                return 0
+            fi
+            rm -rf "$dest"   # identical to the bundled copy: nothing to keep
+        else
+            backup_package "$dest" "$name" "had local changes"
+        fi
+    elif [ -e "$dest" ]; then
+        backup_package "$dest" "$name" "wasn't a directory"
+    fi
+
+    if [ "$DEV_MODE" -eq 1 ]; then
+        ln -s "$src" "$dest"
+        echo "  $name -> $src"
+    else
+        cp -R "$src" "$dest"
+        echo "  $name"
+    fi
+}
 
 if [ "$SKIP_PACKAGES" -eq 1 ]; then
-    info "Skipping package installation (--skip-packages)"
+    info "Skipping bundled packages (--skip-packages)"
+elif [ ! -d "$PACKAGES_SRC" ]; then
+    warn "No packages/ directory in this checkout — skipping bundled packages"
 else
-    info "Installing packages ..."
-    echo "$BELUGA_PACKAGES" | while read -r pkg_name pkg_url; do
-        [ -z "$pkg_name" ] && continue
-        dest=~/.beluga/packages/"$pkg_name"
-        if [ -d "$dest" ]; then
-            echo "  '$pkg_name' already installed, skipping"
-        elif git clone --quiet "$pkg_url" "$dest"; then
-            ok "$pkg_name"
-        else
-            warn "Couldn't clone '$pkg_name' — (add-package \"$pkg_name\") in init.lisp will silently no-op until it's installed"
-        fi
+    if [ "$DEV_MODE" -eq 1 ]; then
+        info "Linking bundled packages to $PACKAGES_SRC (--dev) ..."
+    else
+        info "Installing bundled packages ..."
+    fi
+    for pkg_dir in "$PACKAGES_SRC"/*/; do
+        install_package "$(basename "$pkg_dir")"
     done
+    ok "Bundled packages up to date"
 fi
 
 # --- build ----------------------------------------------------------
