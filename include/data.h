@@ -83,6 +83,12 @@ typedef struct editor_pane_t
     int cursor_x; // Local cursor x in this pane
     int cursor_y; // Local cursor y in this pane
     int x_offset, y_offset;
+    // The buffer the four fields above were last fitted to. When buffer_id
+    // no longer matches (any buffer switch, however it happened), the view
+    // is recomputed around the new buffer's own cursor instead of keeping
+    // the scroll position of whatever the pane showed before — see
+    // paneFitShownBuffer() in output.c. -1 forces a fit.
+    int shown_buffer_id;
     int is_active; // Is this pane currently active
 } EditorPane;
 

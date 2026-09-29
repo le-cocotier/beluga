@@ -44,6 +44,7 @@ void splitScreenInit(void) {
     E.layout.panes[0].cursor_y = 0;
     E.layout.panes[0].y_offset = 0;
     E.layout.panes[0].x_offset = 0;
+    E.layout.panes[0].shown_buffer_id = -1;
     E.layout.panes[0].is_active = 1;
 }
 
@@ -317,6 +318,7 @@ int splitScreenWithSidebar(const int sidebar_buffer_id, const int main_buffer_id
     E.layout.panes[0].cursor_y = 0;
     E.layout.panes[0].y_offset = 0;
     E.layout.panes[0].x_offset = 0;
+    E.layout.panes[0].shown_buffer_id = -1;
     E.layout.panes[0].is_active = 1;
 
     // Main pane
@@ -329,6 +331,7 @@ int splitScreenWithSidebar(const int sidebar_buffer_id, const int main_buffer_id
     E.layout.panes[1].cursor_y = 0;
     E.layout.panes[1].y_offset = 0;
     E.layout.panes[1].x_offset = 0;
+    E.layout.panes[1].shown_buffer_id = -1;
     E.layout.panes[1].is_active = 0;
 
     // Focus starts on the sidebar — the whole point of just having opened

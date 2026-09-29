@@ -193,6 +193,37 @@ static char *applySelectionHighlight(const char *rendered, int rendered_len,
 /**
  * @brief Renders a single pane with its buffer content
  */
+/**
+ * @brief Recomputes a pane's view when it has started showing a different
+ * buffer.
+ * @details Scroll offsets live on the pane, not the buffer, so without this
+ * a buffer switched into a pane inherited the previous buffer's scroll
+ * position: switching from line 1000 of a file to a short buffer left its
+ * first rows scrolled out of sight above the cursor. On a change of buffer
+ * the view is placed around the new buffer's own cursor instead: from the
+ * top when the cursor fits on the first screen, otherwise centered (or, for
+ * a terminal, bottom-aligned like the shell's own screen).
+ * A no-op while the pane keeps showing the same buffer, so ordinary
+ * scrolling (editorScroll()'s minimal adjustments) is untouched.
+ */
+static void paneFitShownBuffer(EditorPane *pane, const struct buffer_t *buf) {
+  if (pane->shown_buffer_id == pane->buffer_id)
+    return;
+  pane->shown_buffer_id = pane->buffer_id;
+
+  if (buf->y < pane->height)
+    pane->y_offset = 0;                            // fits on the first screen
+  else if (buf->type == TERMINAL_BUFF)
+    pane->y_offset = buf->y - (pane->height - 1);  // a shell's screen: bottom-aligned
+  else
+    pane->y_offset = buf->y - pane->height / 2;    // deep in a file: centered
+  pane->cursor_y = buf->y - pane->y_offset;
+  // Horizontal: start from column 0, editorScroll() walks right to the
+  // cursor if it's off-screen.
+  pane->x_offset = 0;
+  pane->cursor_x = 0;
+}
+
 static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   int file_row;
   char pos_buf[32];
@@ -231,6 +262,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   buf = bufferFindById(pane->buffer_id);
   if (buf == NULL)
     return;
+  paneFitShownBuffer(pane, buf);
 
   // The diagnostic gutter only makes sense for real source files — drawing
   // it for a terminal pane would eat GUTTER_WIDTH columns the PTY was never
@@ -513,6 +545,7 @@ void editorScroll() {
   // every iteration, so there's nothing to scroll toward without it.
   if (buf == NULL)
     return;
+  paneFitShownBuffer(active, buf);
 
   // Same gutter accounting as editorDrawPane(): with the gutter reserving
   // GUTTER_WIDTH columns, only what's left is actually available before the
