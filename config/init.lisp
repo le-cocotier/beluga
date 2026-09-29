@@ -36,6 +36,7 @@
 (add-package "outline")
 (add-package "explorer")
 (add-package "dired")    ; CTRL-x d, CTRL-x CTRL-j — and CTRL-x c p below
+(add-package "git")      ; CTRL-x g: status, stage, commit, push/pull, log, branches
 
 ;; Themes: exactly one should be loaded (the second one just overwrites
 ;; whatever colors the first one set). Fork either as a starting point

@@ -12,6 +12,7 @@
 #include "../include/project_search.h"
 #include "../include/file_finder.h"
 #include "../include/subprocess.h"
+#include "../include/async_process.h"
 #include "../include/buffer.h"
 #include "../include/data.h"
 #include "../include/output.h"
@@ -817,6 +818,8 @@ Lisp editorScratchSetLines(Lisp args, LispError *e, LispContext ctx) {
   const char *line_str;
   Utf8Char *uline;
   int len;
+  Utf8Char *expanded;
+  int expanded_len;
   args = lisp_cdr(args);
   lines = lisp_car(args);
 
@@ -838,7 +841,15 @@ Lisp editorScratchSetLines(Lisp args, LispError *e, LispContext ctx) {
     line_str = lisp_string(lisp_car(lines));
     uline = stringToUtf8((unsigned char *) line_str);
     len = utf8StringLen(uline) - 1; // utf8StringLen() counts the terminator too
-    bufferInsertRow(buf, buf->numrows, uline, len);
+    // Same tab expansion a file gets when it's loaded (a diff or grep hit
+    // of tab-indented code used to reach the terminal as raw tabs).
+    expanded = expandTabsForLine(uline, len, &expanded_len);
+    if (expanded) {
+      bufferInsertRow(buf, buf->numrows, expanded, expanded_len);
+      gfree(expanded);
+    } else {
+      bufferInsertRow(buf, buf->numrows, uline, len);
+    }
     gfree(uline);
     lines = lisp_cdr(lines);
   }
@@ -2203,6 +2214,128 @@ Lisp l_processRun(Lisp args, LispError *e, LispContext ctx) {
   result = lisp_cons(lisp_make_int(status), lisp_make_string2(out ? out : "", ctx), ctx);
   gfree(out);
   return result;
+}
+
+/**
+ * @brief Lisp function: run a program in the background
+ * @details (process-start callback "program" "arg" ...) — like process-run
+ * (no shell, stdout+stderr captured, stdin /dev/null), but returns at once;
+ * `callback` is called later, from the main loop, with the same
+ * (exit-code . "output") pair once the program exits. The program has no
+ * controlling terminal, so anything that would prompt for a password fails
+ * instead (see async_process.h). At most 16 run at a time.
+ * @return the process id (>= 0), or #f if it couldn't be started
+ */
+Lisp l_processStart(Lisp args, LispError *e, LispContext ctx) {
+  Lisp callback;
+  Lisp it;
+  int argc = 0;
+  int i;
+  char **argv;
+  int id;
+  (void) ctx;
+
+  if (!lisp_is_pair(args)) {
+    *e = LISP_ERROR_TOO_FEW_ARGS;
+    return lisp_null();
+  }
+  callback = lisp_car(args);
+  args = lisp_cdr(args);
+  for (it = args; lisp_is_pair(it); it = lisp_cdr(it)) {
+    if (lisp_type(lisp_car(it)) != LISP_STRING) {
+      *e = LISP_ERROR_ARG_TYPE;
+      return lisp_null();
+    }
+    argc++;
+  }
+  if (argc == 0) {
+    *e = LISP_ERROR_TOO_FEW_ARGS;
+    return lisp_null();
+  }
+
+  argv = galloc((size_t) (argc + 1) * sizeof(char *));
+  if (!argv)
+    return lisp_false();
+  i = 0;
+  for (it = args; lisp_is_pair(it); it = lisp_cdr(it))
+    argv[i++] = (char *) lisp_string(lisp_car(it));
+  argv[argc] = NULL;
+
+  id = asyncProcessStart(argv, callback);
+  gfree(argv);
+  return id >= 0 ? lisp_make_int(id) : lisp_false();
+}
+
+/**
+ * @brief Lisp function: split a string on a separator
+ * @details (string-split "text" "sep" [limit]) — the pieces between each
+ * occurrence of `sep` (any length >= 1), empty ones included: "a,,b" on ","
+ * is ("a" "" "b"). With `limit`, stops after that many pieces and drops the
+ * rest — for command output that could be huge, since walking a long list
+ * recursively in Lisp is bounded by the interpreter's stack.
+ * @return Lisp list of strings
+ */
+Lisp l_stringSplit(Lisp args, LispError *e, LispContext ctx) {
+  const char *text;
+  const char *sep;
+  size_t sep_len;
+  long limit = -1;
+  long count = 0;
+  const char *start;
+  const char *hit;
+  char *piece;
+  Lisp head;
+  Lisp tail;
+  Lisp cell;
+
+  if (!lisp_is_pair(args) || !lisp_is_pair(lisp_cdr(args)) ||
+      lisp_type(lisp_car(args)) != LISP_STRING ||
+      lisp_type(lisp_car(lisp_cdr(args))) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  text = lisp_string(lisp_car(args));
+  sep = lisp_string(lisp_car(lisp_cdr(args)));
+  sep_len = strlen(sep);
+  if (sep_len == 0) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  args = lisp_cdr(lisp_cdr(args));
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT)
+    limit = (long) lisp_int(lisp_car(args));
+
+  head = lisp_null();
+  tail = lisp_null();
+  start = text;
+  while (limit < 0 || count < limit) {
+    hit = strstr(start, sep);
+    piece = hit ? strndup(start, (size_t) (hit - start)) : strdup(start);
+    if (!piece)
+      break;
+    cell = lisp_cons(lisp_make_string2(piece, ctx), lisp_null(), ctx);
+    free(piece);
+    if (lisp_is_null(head)) head = cell; else lisp_set_cdr(tail, cell);
+    tail = cell;
+    count++;
+    if (!hit)
+      break;
+    start = hit + sep_len;
+  }
+  return head;
+}
+
+/**
+ * @brief Lisp function: id of the buffer in the active pane
+ * @details (current-buffer-id) — lets code that runs later (a process
+ * callback, a hook) check whether its own buffer is still the one on
+ * screen before moving the cursor in it.
+ * @return Lisp int, or -1 with no buffer
+ */
+Lisp l_currentBufferId(Lisp args, LispError *e, LispContext ctx) {
+  const EditorPane *active = splitScreenGetActivePane();
+  (void) args; (void) e; (void) ctx;
+  return lisp_make_int(active ? active->buffer_id : -1);
 }
 
 /**

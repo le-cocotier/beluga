@@ -101,7 +101,7 @@ void editorCloseFile(void) {
  * @param len Length of `line`, in characters
  * @param out_len Out-param: length of the returned copy, if one was made
  */
-static Utf8Char* expandTabsForLine(const Utf8Char* line, int len, int* out_len)
+Utf8Char* expandTabsForLine(const Utf8Char* line, int len, int* out_len)
 {
   int has_tab = 0;
   int i;

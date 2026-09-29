@@ -126,6 +126,9 @@ void initBuiltins(void) {
   registerBuiltin("expand-path", l_expandPath);
   registerBuiltin("file-attributes", l_fileAttributes);
   registerBuiltin("process-run", l_processRun);
+  registerBuiltin("process-start", l_processStart);
+  registerBuiltin("string-split", l_stringSplit);
+  registerBuiltin("current-buffer-id", l_currentBufferId);
   registerBuiltin("editor-message", l_editorMessage);
   registerBuiltin("editor-scratch-set-prefix", l_editorScratchSetPrefix);
 #ifdef APP_DEBUG

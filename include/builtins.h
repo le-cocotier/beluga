@@ -170,6 +170,13 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx);
 Lisp l_fileAttributes(Lisp args, LispError *e, LispContext ctx);
 // (process-run "program" "arg" ...) — no shell; returns (exit-code . "output").
 Lisp l_processRun(Lisp args, LispError *e, LispContext ctx);
+// (process-start callback "program" "arg" ...) — background process-run;
+// callback gets (exit-code . "output") from the main loop when it exits.
+Lisp l_processStart(Lisp args, LispError *e, LispContext ctx);
+// (string-split "text" "sep" [limit]) — list of the pieces between seps.
+Lisp l_stringSplit(Lisp args, LispError *e, LispContext ctx);
+// (current-buffer-id) — id of the active pane's buffer.
+Lisp l_currentBufferId(Lisp args, LispError *e, LispContext ctx);
 // (editor-message "text") — show text on the status line.
 Lisp l_editorMessage(Lisp args, LispError *e, LispContext ctx);
 // (editor-scratch-set-prefix buffer-id "prefix") — keymap a scratch buffer activates on focus.

@@ -59,6 +59,7 @@ src_files = files(
   'src/which_key.c',
   'src/popup_ui.c',
   'src/subprocess.c',
+  'src/async_process.c',
   'src/project_search.c',
   'src/file_finder.c'
 )

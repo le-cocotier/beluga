@@ -209,7 +209,11 @@ char *runArgvCapture(char *const argv[], const long timeout_ms, const size_t max
         // Child: stdout AND stderr -> pipe, so a failing mv/cp can say why.
         // stdin from /dev/null: the editor owns the terminal in raw mode,
         // and anything that tried to prompt (rm -i, an overwrite question)
-        // would otherwise read the user's next keystrokes.
+        // would otherwise read the user's next keystrokes. setsid() below
+        // goes further: with no controlling terminal, not even /dev/tty is
+        // reachable — ssh/git/gpg password prompts fail instead of drawing
+        // over the editor. (It also makes the child a process-group leader,
+        // which the kill(-pid) on timeout relies on, as setpgid did.)
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         dup2(pipefd[1], STDERR_FILENO);
@@ -220,7 +224,7 @@ char *runArgvCapture(char *const argv[], const long timeout_ms, const size_t max
             dup2(devnull, STDIN_FILENO);
             close(devnull);
         }
-        setpgid(0, 0);
+        setsid();
         execvp(argv[0], argv);
         _exit(127);
     }

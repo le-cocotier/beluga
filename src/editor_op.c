@@ -1,4 +1,5 @@
 #include "../include/editor_op.h"
+#include "../include/async_process.h"
 #include "../include/galloc.h"
 
 #include <stdarg.h>
@@ -194,6 +195,8 @@ void editorRunLoop(void) {
         maxfd = E.lsp_client->read_from_server_fd;
     }
 
+    maxfd = asyncProcessAddFds(&readfds, maxfd);
+
     tv = (struct timeval){.tv_sec = 0, .tv_usec = 50000}; // 50ms tick
     ready = select(maxfd + 1, &readfds, NULL, NULL, &tv);
 
@@ -227,6 +230,10 @@ void editorRunLoop(void) {
           (E.lsp_client->read_from_server_fd >= 0) &&
           FD_ISSET(E.lsp_client->read_from_server_fd, &readfds))
         lspPoll(E.lsp_client);
+
+      // Before keys: a finished process's callback (e.g. a refresh after
+      // a push) should land before the next keystroke acts on its buffer.
+      asyncProcessPoll(&readfds);
 
       if (FD_ISSET(STDIN_FILENO, &readfds))
         editorProcessKeypress();

@@ -116,11 +116,15 @@ is actually left to do.
 - [ ] **[feature]** `use-package`: `(use-package "name" ["git-url"])`, which
   clones a missing non-bundled package on first use and reports a missing
   or failing one in the status bar (see the `add-package` item above).
+- [x] ~~Git manager~~: the `git` package (`CTRL-x g`) — status, stage,
+  discard, diff, commit/amend, log, branches, and push/pull/fetch in the
+  background through the new `process-start`.
 - [ ] **[feature]** A `*packages*` buffer listing every package (bundled /
-  git / local, loaded?, branch, dirty, ahead/behind) with fetch, pull, diff,
-  commit and push, built on a reusable `*git*` status view that also works
-  for the current project. Needs an async `process-run` variant first, so
-  a network `git push`/`fetch` doesn't freeze the editor.
+  git / local, loaded?, branch, dirty, ahead/behind), opening the `*git*`
+  view (`git-status-dir`) on a package's repository.
+- [ ] **[feature]** git package: multi-line commit messages (today's prompt
+  is one line), hunk-level staging, colored diffs (the highlighter is
+  keyword-based and can't color `+`/`-` lines yet).
 
 ---
 
