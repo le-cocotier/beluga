@@ -1,11 +1,11 @@
 #include "../include/init.h"
-#include "../include/galloc.h"
 #include "../include/builtins.h"
 #include "../include/color.h"
 #include "../include/completion.h"
 #include "../include/data.h"
 #include "../include/define.h"
 #include "../include/file_finder.h"
+#include "../include/galloc.h"
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
@@ -87,6 +87,7 @@ void initBuiltins(void) {
   registerBuiltin("editor-redo", editorRedo);
   registerBuiltin("editor-set-mark", editorSetMark);
   registerBuiltin("editor-kill-region", editorKillRegion);
+  registerBuiltin("editor-cut-region", editorCutRegion);
   registerBuiltin("editor-copy-region", editorCopyRegion);
 
   registerBuiltin("add-hook", addHook);
@@ -364,7 +365,6 @@ void initEditor() {
   E.lsp_client->sync_debounce_buffer_id = -1;
 
   E.quit_times_buffer = E.constantes.QUIT_TIMES;
-
 }
 
 void deInitEditor() {

@@ -29,12 +29,6 @@ is actually left to do.
     the launching shell exported, not the process's actual working
     directory. Use `getcwd()`, or the project root.
 
-- [ ] **[bug]** `utf8ToNString()` writes one byte past its buffer — `src/utf8.c` *(was "TODO: adapt to the right size")*
-  - It allocates `n * 4` bytes, but `n` four-byte characters plus the `'\0'`
-    need `n * 4 + 1`. With `n <= 0`, the terminator is written into a
-    zero-size allocation. Size it as `n * 4 + 1`, or better, sum the real
-    `length` of the first `n` characters, like `utf8ToString()` does.
-
 - [ ] **[bug]** Saving — `src/file_io.c`, `editorSave()` *(was "TODO: utf8")*
   - The UTF-8 part is done: rows go through `utf8ToString()`. What's left:
   - When `fopen()` fails, it still shows **"File saved"**. There's no error

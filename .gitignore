@@ -1,5 +1,7 @@
 build/*
 doc/*
-beluga.wiki/*
+beluga.wiki
 .*/*
 test/*
+*.log
+*.err

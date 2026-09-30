@@ -272,7 +272,8 @@
 (map-key "CTRL-k" editor-cut-end-line "no-prefix")
 (map-key "CTRL-l" editor-copy-end-line "no-prefix")
 (map-key "CTRL-SPACE" editor-set-mark "no-prefix")
-(map-key "CTRL-w" editor-kill-region "no-prefix")
+(map-key "CTRL-DEL" editor-kill-region "no-prefix")
+(map-key "CTRL-w" editor-cut-region "no-prefix")
 
 ;; user
 (map-key "p" '(editor-set-prefix "project") "user")

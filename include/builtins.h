@@ -20,12 +20,12 @@ Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx);
 Lisp moveCursor(Lisp args, LispError *e, LispContext ctx);
 Lisp moveCursorBeginLine(Lisp args, LispError *e, LispContext ctx);
 Lisp moveCursorEndLine(Lisp args, LispError *e, LispContext ctx);
-Lisp editorMoveCursorPageUp(Lisp args, LispError* e, LispContext ctx);
+Lisp editorMoveCursorPageUp(Lisp args, LispError *e, LispContext ctx);
 Lisp editorMoveCursorPageDown(Lisp args, LispError *e, LispContext ctx);
 
 // Text editing
 
-Lisp l_editorInsertNewLine(Lisp args, LispError* e, LispContext ctx);
+Lisp l_editorInsertNewLine(Lisp args, LispError *e, LispContext ctx);
 Lisp l_editorInserTab(Lisp args, LispError *e, LispContext ctx);
 Lisp deletePreviousChar(Lisp args, LispError *e, LispContext ctx);
 Lisp editorPrintC(Lisp args, LispError *e, LispContext ctx);
@@ -39,6 +39,7 @@ Lisp editorRedo(Lisp args, LispError *e, LispContext ctx);
 // then kill/copy the region. See bufferRegionBounds() in buffer.c.
 Lisp editorSetMark(Lisp args, LispError *e, LispContext ctx);
 Lisp editorKillRegion(Lisp args, LispError *e, LispContext ctx);
+Lisp editorCutRegion(Lisp args, LispError *e, LispContext ctx);
 Lisp editorCopyRegion(Lisp args, LispError *e, LispContext ctx);
 
 // Editor
@@ -48,7 +49,7 @@ Lisp l_editorSave(Lisp args, LispError *e, LispContext ctx);
 Lisp editorSetPrefix(Lisp args, LispError *e, LispContext ctx);
 Lisp editorPrefix(Lisp args, LispError *e, LispContext ctx);
 Lisp mapKey(Lisp args, LispError *e, LispContext ctx);
-void registerBuiltin(const char * key_sequence, LispCFunc f);
+void registerBuiltin(const char *key_sequence, LispCFunc f);
 Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx);
 Lisp editorOpenConfig(Lisp args, LispError *e, LispContext ctx);
 
@@ -59,7 +60,8 @@ Lisp editorOpenFilePath(Lisp args, LispError *e, LispContext ctx);
 // Directory listing / scratch buffers — file explorer, tree dump, etc.
 Lisp l_listBuffers(Lisp args, LispError *e, LispContext ctx);
 Lisp editorSwitchToBuffer(Lisp args, LispError *e, LispContext ctx);
-Lisp editorKillBuffer(Lisp args, LispError *e, LispContext ctx); // (editor-kill-buffer [id])
+Lisp editorKillBuffer(Lisp args, LispError *e,
+                      LispContext ctx); // (editor-kill-buffer [id])
 Lisp editorPwd(Lisp args, LispError *e, LispContext ctx);
 Lisp listDirectory(Lisp args, LispError *e, LispContext ctx);
 Lisp editorScratchOpen(Lisp args, LispError *e, LispContext ctx);
@@ -70,7 +72,6 @@ Lisp addPackage(Lisp args, LispError *e, LispContext ctx);
 Lisp editorOpenTerminal(Lisp args, LispError *e, LispContext ctx);
 Lisp editorExecuteCommand(Lisp args, LispError *e, LispContext ctx);
 
-
 // Buffer
 
 Lisp editorSwitchNextBuffer(Lisp args, LispError *e, LispContext ctx);
@@ -78,14 +79,12 @@ Lisp editorSwitchBufferPopup(Lisp args, LispError *e, LispContext ctx);
 Lisp bufferFind_L(Lisp args, LispError *e, LispContext ctx);
 Lisp bufferFindReverse_L(Lisp args, LispError *e, LispContext ctx);
 
-
 // Pane
 
 Lisp l_editorSplitScreenVertical(Lisp args, LispError *e, LispContext ctx);
 Lisp l_editorSplitScreenHorizontal(Lisp args, LispError *e, LispContext ctx);
 Lisp editorSwitchNextPane(Lisp args, LispError *e, LispContext ctx);
 Lisp editorUnifiedPanes(Lisp args, LispError *e, LispContext ctx);
-
 
 Lisp editorPaste(Lisp args, LispError *e, LispContext ctx);
 Lisp editorCutEndLine(Lisp args, LispError *e, LispContext ctx);
@@ -130,11 +129,13 @@ void runHooks(const char *event_name, Lisp args);
 // Buffer/cursor introspection — lets Lisp code (hooks, custom commands,
 // packages) make decisions based on real editor state instead of only
 // being able to move the cursor blindly.
-Lisp lineTextAt(Lisp args, LispError *e, LispContext ctx);        // (line-text [row])
-Lisp cursorRowLisp(Lisp args, LispError *e, LispContext ctx);     // (cursor-row)
-Lisp cursorColLisp(Lisp args, LispError *e, LispContext ctx);     // (cursor-col)
-Lisp bufferLineCountLisp(Lisp args, LispError *e, LispContext ctx); // (buffer-line-count)
-Lisp bufferFilenameLisp(Lisp args, LispError *e, LispContext ctx); // (buffer-filename)
+Lisp lineTextAt(Lisp args, LispError *e, LispContext ctx); // (line-text [row])
+Lisp cursorRowLisp(Lisp args, LispError *e, LispContext ctx); // (cursor-row)
+Lisp cursorColLisp(Lisp args, LispError *e, LispContext ctx); // (cursor-col)
+Lisp bufferLineCountLisp(Lisp args, LispError *e,
+                         LispContext ctx); // (buffer-line-count)
+Lisp bufferFilenameLisp(Lisp args, LispError *e,
+                        LispContext ctx); // (buffer-filename)
 
 // (editor-goto-line row [col]) — moves the cursor to row (0-based, clamped
 // to the buffer), optionally to col (clamped to that row's length; 0 if
@@ -158,15 +159,18 @@ Lisp l_appDebugP(Lisp args, LispError *e, LispContext ctx);
 // (editor-recenter [row]) — scroll the active pane so the cursor's line is
 // in the middle (or at `row`; negative counts from the bottom).
 Lisp l_editorRecenter(Lisp args, LispError *e, LispContext ctx);
-// (pane-height) / (pane-width) — the active pane's text area, in rows / columns.
+// (pane-height) / (pane-width) — the active pane's text area, in rows / c
+// lumns.
 Lisp l_paneHeight(Lisp args, LispError *e, LispContext ctx);
 Lisp l_paneWidth(Lisp args, LispError *e, LispContext ctx);
 
-// ─── Filesystem & process primitives (see builtins.c) ─────────────────────────
-// (expand-path path [base-dir]) — absolute path: "~" expanded, relative
-// paths resolved against base-dir (default: working dir), "."/".." collapsed.
+// ─── Filesystem & process primitives (see builtins.c) ─────
+// ─────────────────── (expand-path path [base-dir]) — absolute path: "~" e
+// panded, relative paths resolved against base-dir (default: working dir),
+// "."/".." collapsed.
 Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx);
-// (file-attributes path) — #f, or (is-dir is-link size mtime "mode" "date" "link-target").
+// (file-attributes path) — #f, or (is-dir is-link size mtime "mode" "date" "
+// ink-target").
 Lisp l_fileAttributes(Lisp args, LispError *e, LispContext ctx);
 // (process-run "program" "arg" ...) — no shell; returns (exit-code . "output").
 Lisp l_processRun(Lisp args, LispError *e, LispContext ctx);
@@ -179,7 +183,8 @@ Lisp l_stringSplit(Lisp args, LispError *e, LispContext ctx);
 Lisp l_currentBufferId(Lisp args, LispError *e, LispContext ctx);
 // (editor-message "text") — show text on the status line.
 Lisp l_editorMessage(Lisp args, LispError *e, LispContext ctx);
-// (editor-scratch-set-prefix buffer-id "prefix") — keymap a scratch buffer activates on focus.
+// (editor-scratch-set-prefix buffer-id "prefix") — keymap a scratch buffer a
+// tivates on focus.
 Lisp l_editorScratchSetPrefix(Lisp args, LispError *e, LispContext ctx);
 
 #ifdef APP_DEBUG

@@ -70,6 +70,10 @@
 #define ALT_X        0x89   // Alt/Option-x — "execute command" (M-x style)
 #define ALT_ARROW_LEFT   0x8A   // Alt/Option + Left  — "ALT-ARROW-LEFT"  to map-key
 #define ALT_ARROW_RIGHT  0x8B   // Alt/Option + Right — "ALT-ARROW-RIGHT" to map-key
+#define CTRL_DEL_KEY     0x8C   // Ctrl + Delete (\x1b[3;5~) — "CTRL-DEL" to map-key
+#define UNKNOWN_KEY      0x8F   // a recognized-but-unbound sequence (F-keys, Insert, ...):
+                                // not printable, so it does nothing instead of
+                                // being typed or acting as ESC
 
 #define BACKSPACE    127    // 0x7F (DEL byte many terminals send for Backspace)
 

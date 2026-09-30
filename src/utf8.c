@@ -24,17 +24,19 @@
  *
  * @return utf8 char
  */
-Utf8Char* readUtf8Char(void)
-{
+Utf8Char* readUtf8Char(void) {
     Utf8Char* new_char = gcalloc(1, sizeof(Utf8Char));
     char seq0;
     char m1;
     char m2;
     char seq1;
     char final;
-    char mod;
-    char letter;
     int is_alt;
+    int is_ctrl;
+    int number;
+    int modifier;
+    int in_modifier;
+    int seq_len;
     read(STDIN_FILENO, &new_char->character[0], 1);
 
     if (new_char->character[0]) {
@@ -110,24 +112,59 @@ Utf8Char* readUtf8Char(void)
         {
             if (seq1 >= '0' && seq1 <= '9')
             {
-                // Extended sequence like \x1b[3~ (Delete), \x1b[5~ (PageUp),
-                // or a modified key like \x1b[1;3C (Alt+Right).
-                if (read(STDIN_FILENO, &final, 1) != 1) {
-                    new_char->length = 1;
-                    return new_char;
-                }
-                if (seq1 == '1' && final == ';')
+                // CSI <number> [; <modifier>] <final>: \x1b[3~ (Delete),
+                // \x1b[15~ (F5), \x1b[3;5~ (Ctrl+Delete), \x1b[1;3C
+                // (Alt+Right). Read to the final byte however long the
+                // sequence is: stopping early (as this used to, after one
+                // digit and one more byte) left the rest in the input to be
+                // typed as text — Ctrl+Delete inserted "5~", F5 a "~".
+                // modifier is xterm's 1 + (1 Shift, 2 Alt, 4 Ctrl, 8 Meta).
+                number = seq1 - '0';
+                modifier = 1;
+                in_modifier = 0;
+                seq_len = 0;
+                for (;;)
                 {
-                    // CSI 1 ; <mod> <letter>. mod 3 = Alt, 9 = Meta
-                    // (macOS "Option as Meta"); Shift (2) / Ctrl (5) etc.
-                    // aren't bound, so those fall through to the plain key.
-                    if (read(STDIN_FILENO, &mod, 1) != 1 ||
-                        read(STDIN_FILENO, &letter, 1) != 1) {
-                        new_char->length = 1;
-                        return new_char;
+                    if (read(STDIN_FILENO, &final, 1) != 1 || ++seq_len > 16)
+                    {
+                        final = 0; // truncated or runaway: give up on it
+                        break;
                     }
-                    is_alt = (mod == '3' || mod == '9');
-                    switch (letter)
+                    if (final >= '0' && final <= '9')
+                    {
+                        if (in_modifier)
+                            modifier = modifier * 10 + (final - '0');
+                        else
+                            number = number * 10 + (final - '0');
+                    }
+                    else if (final == ';' && !in_modifier)
+                    {
+                        in_modifier = 1;
+                        modifier = 0;
+                    }
+                    else
+                        break;
+                }
+                is_alt = (modifier == 3 || modifier == 9);
+                is_ctrl = (modifier == 5);
+
+                if (final == '~')
+                {
+                    switch (number)
+                    {
+                        case 1: case 7: new_char->character[0] = BEG_LINE;  break;
+                        case 3: new_char->character[0] = is_ctrl ? CTRL_DEL_KEY : DEL_KEY; break;
+                        case 4: case 8: new_char->character[0] = END_LINE;  break;
+                        case 5: new_char->character[0] = PAGE_UP;           break;
+                        case 6: new_char->character[0] = PAGE_DOWN;         break;
+                        default: new_char->character[0] = UNKNOWN_KEY;      break; // F-keys, Insert, ...
+                    }
+                }
+                else
+                {
+                    // Shift/Ctrl on these aren't bound, so they fall
+                    // through to the plain key.
+                    switch (final)
                     {
                         case 'C': new_char->character[0] = is_alt ? ALT_ARROW_RIGHT : ARROW_RIGHT; break;
                         case 'D': new_char->character[0] = is_alt ? ALT_ARROW_LEFT  : ARROW_LEFT;  break;
@@ -135,23 +172,8 @@ Utf8Char* readUtf8Char(void)
                         case 'B': new_char->character[0] = ARROW_DOWN; break;
                         case 'H': new_char->character[0] = BEG_LINE;   break;
                         case 'F': new_char->character[0] = END_LINE;   break;
-                        default:  new_char->character[0] = '\x1b';     break;
+                        default:  new_char->character[0] = UNKNOWN_KEY; break;
                     }
-                }
-                else if (final != '~') {
-                    new_char->length = 1;
-                    return new_char; // unrecognized, fall back to ESC
-                }
-                else switch (seq1)
-                {
-                    case '1': new_char->character[0] = BEG_LINE;   break;
-                    case '3': new_char->character[0] = DEL_KEY;    break;
-                    case '4': new_char->character[0] = END_LINE;   break;
-                    case '5': new_char->character[0] = PAGE_UP;    break;
-                    case '6': new_char->character[0] = PAGE_DOWN;  break;
-                    case '7': new_char->character[0] = BEG_LINE;   break;
-                    case '8': new_char->character[0] = END_LINE;   break;
-                    default:  new_char->character[0] = '\x1b';     break;
                 }
             }
             else
@@ -317,10 +339,10 @@ unsigned char* utf8ToString(const Utf8Char* string)
 
 }
 
-// TODO(TODO.md): allocation is one byte short for the terminator
-unsigned char* utf8ToNString(const Utf8Char* string, int n)
-{
-    unsigned char* new_string = gcalloc( n * 4, sizeof(unsigned char));
+
+unsigned char* utf8ToNString(const Utf8Char* string, int n) {
+    unsigned char* new_string = gcalloc( (n * 4) + 1, sizeof(unsigned char));
+    // Allocation is in most case. It's done to optimize memory access. One allocation for all string.
     int i = 0;
     while (*string->character != '\0' && n--)
     {

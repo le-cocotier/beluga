@@ -277,7 +277,10 @@ if [ "$DEBUG_BUILD" -eq 1 ]; then
     MESON_ARGS=(-Dbuildtype=debug -Dc_args=-DAPP_DEBUG)
 else
     info "Building (release) ..."
-    MESON_ARGS=(-Dbuildtype=release)
+    # -Dc_args= explicitly: `meson setup --reconfigure` keeps every option
+    # it isn't given, so after one --debug install the -DAPP_DEBUG from it
+    # silently stayed in every "release" build that followed.
+    MESON_ARGS=(-Dbuildtype=release -Dc_args=)
 fi
 
 if [ -d build ]; then

@@ -123,6 +123,7 @@ char* keyToString(const Utf8Char* key)
         case ARROW_RIGHT: strcpy(key_str, "ARROW-RIGHT"); break;
         case ALT_ARROW_LEFT:  strcpy(key_str, "ALT-ARROW-LEFT");  break;
         case ALT_ARROW_RIGHT: strcpy(key_str, "ALT-ARROW-RIGHT"); break;
+        case CTRL_DEL_KEY:    strcpy(key_str, "CTRL-DEL");        break;
         case PAGE_UP:     strcpy(key_str, "PAGE-UP");     break;
         case PAGE_DOWN:   strcpy(key_str, "PAGE-DOWN");   break;
         case DEL_KEY:     strcpy(key_str, "DEL");         break;
