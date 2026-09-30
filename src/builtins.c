@@ -1134,6 +1134,27 @@ Lisp editorSwitchNextBuffer(Lisp args, LispError *e, LispContext ctx) {
   return lisp_null();
 }
 
+Lisp editorSwitchPreviousBuffer(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active;
+  struct buffer_t *current;
+  appDebug("switch buffer\n");
+  // buffer_id is a monotonically-increasing counter, not a dense 0..N-1
+  // array index (especially once any buffer's been closed, leaving gaps),
+  // so "(id + 1) % count" can land on an id that doesn't exist. Walk the
+  // actual list instead.
+  active = splitScreenGetActivePane();
+  current = bufferFindById(active->buffer_id);
+  if (current) {
+    // Through bufferSwitch() rather than assigning buffer_id directly, so
+    // this lands in the same keymap the buffer switcher popup would give:
+    // a terminal or a scratch buffer with its own prefix needs that prefix
+    // activated however you arrived at it.
+    bufferSwitch(current->prev->buffer_id);
+  }
+
+  return lisp_null();
+}
+
 /**
  * @brief Lisp function to open the CTRL-x b buffer switcher popup
  * @details Pops a list of every open buffer up in the middle of the

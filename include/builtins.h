@@ -75,6 +75,7 @@ Lisp editorExecuteCommand(Lisp args, LispError *e, LispContext ctx);
 // Buffer
 
 Lisp editorSwitchNextBuffer(Lisp args, LispError *e, LispContext ctx);
+Lisp editorSwitchPreviousBuffer(Lisp args, LispError *e, LispContext ctx);
 Lisp editorSwitchBufferPopup(Lisp args, LispError *e, LispContext ctx);
 Lisp bufferFind_L(Lisp args, LispError *e, LispContext ctx);
 Lisp bufferFindReverse_L(Lisp args, LispError *e, LispContext ctx);

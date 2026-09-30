@@ -65,6 +65,7 @@ void initBuiltins(void) {
   registerBuiltin("editor-set-prefix", editorSetPrefix);
   registerBuiltin("editor-insert-tab", l_editorInserTab);
   registerBuiltin("editor-switch-next-buffer", editorSwitchNextBuffer);
+  registerBuiltin("editor-switch-prev-buffer", editorSwitchPreviousBuffer);
   registerBuiltin("editor-split-screen-vertical", l_editorSplitScreenVertical);
   registerBuiltin("editor-split-screen-horizontal",
                   l_editorSplitScreenHorizontal);
