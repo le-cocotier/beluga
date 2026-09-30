@@ -88,6 +88,7 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
    * 3 arguments keybind command prefix
    */
   const char *key_sequence = lisp_string(lisp_car(args));
+  int i;
   void *memory_temp;
   Lisp func;
   const char *prefix_name;
@@ -95,6 +96,23 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
   args = lisp_cdr(args);
   // second argument
   func = lisp_car(args);
+  // Third argument
+  args = lisp_cdr(args);
+  prefix_name = lisp_string(lisp_car(args));
+  prefix = find_prefix(prefix_name);
+
+  // Check if key already bind
+
+  for (i = 0; i < E.number_of_keybinds; ++i) {
+    if (strcmp(E.key_binds[i].key_sequence, key_sequence) == 0) {
+      if (E.key_binds[i].prefix_id == prefix.prefix_id) {
+        // Keybind found, just change the function
+        E.key_binds[E.number_of_keybinds - 1].command = func;
+        whichKeyInvalidate();
+        return lisp_null();
+      }
+    }
+  }
 
   memory_temp =
       grealloc(E.key_binds, ++E.number_of_keybinds * sizeof(struct keyBind_t));
@@ -107,12 +125,6 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
   strncpy(E.key_binds[E.number_of_keybinds - 1].key_sequence, key_sequence, 50);
 
   E.key_binds[E.number_of_keybinds - 1].command = func;
-
-  // Third argument
-  args = lisp_cdr(args);
-  prefix_name = lisp_string(lisp_car(args));
-  prefix = find_prefix(prefix_name);
-
   E.key_binds[E.number_of_keybinds - 1].prefix_id = prefix.prefix_id;
 
   // The which-key panel caches a resolved command name per binding; adding

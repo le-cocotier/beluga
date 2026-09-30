@@ -82,13 +82,6 @@ is actually left to do.
 
 ## Configuration and packages
 
-- [ ] **[feature]** Let a later `map-key` replace an existing binding.
-  Bindings are appended and the **first** registered one wins, so:
-  - a key taken by a package can't be rebound from `personal-config` or at
-    runtime;
-  - every language package fights over `CTRL-d` (see the note in
-    `config/init.lisp`).
-
   Replacing the existing key+prefix entry fixes both. It flips the load
   order rule, though: `(add-package "personal-config")` would then have to
   move to the end of `config/init.lisp`.
