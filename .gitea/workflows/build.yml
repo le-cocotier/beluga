@@ -2,7 +2,7 @@ name: Build project
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "develop"]
 
 jobs:
   build:
@@ -25,11 +25,40 @@ jobs:
       - name: Build project
         run: meson compile -C build
 
-      - name: Run tests
-        run: ctest --test-dir build || true
+      - name: Run tests (includes the OS-boundary check)
+        run: meson test -C build --print-errorlogs
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: beluga
           path: build/beluga
+
+  build-windows:
+    runs-on: giorgio-runner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          tokens: ${{ secrets.GITEA_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build mingw-w64
+
+      - name: Configure Meson (cross-compiling for Windows)
+        run: meson setup --cross-file cross/mingw-w64.ini build-windows
+
+      - name: Build project
+        run: meson compile -C build-windows
+
+      - name: Check the OS boundary
+        run: tools/check_os_boundary.sh .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: beluga-windows
+          path: build-windows/beluga.exe

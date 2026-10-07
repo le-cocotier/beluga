@@ -22,7 +22,9 @@
 #include "../include/editor_op.h"
 #include "../include/popup_ui.h"
 #include "../include/split_screen.h"
+#include "../include/project_files.h"
 #include "../include/subprocess.h"
+#include "../include/utils.h"
 #include "../include/terminal.h"
 #include "../include/utf8.h"
 
@@ -41,56 +43,119 @@ extern EditorConfig E;
 
 // ─── Building the file list ─────────────────────────────────────────────────
 
-/**
- * @brief Is `root` inside a git work tree? Same cheap check project
- * search makes — ask git rather than hunt for a .git dir, which gets
- * worktrees and submodules wrong.
- */
-static int rootIsGitRepo(const char *root) {
-  char qroot[PATH_MAX + 4];
-  char cmd[PATH_MAX + 96];
-  char *out;
-  int yes;
-  shellQuote(root, qroot, sizeof(qroot));
+typedef struct {
+  char *text; // newline-separated, galloc'd
+  size_t len;
+  size_t cap;
+  int full;   // FF_MAX_OUTPUT reached
+} PathList;
 
-  snprintf(cmd, sizeof(cmd),
-           "git -C %s rev-parse --is-inside-work-tree 2>/dev/null", qroot);
+static void pathListAdd(PathList *l, const char *path) {
+  const size_t n = strlen(path);
+  char *grown;
+  size_t cap;
+  if (l->full)
+    return;
+  if (l->len + n + 2 > FF_MAX_OUTPUT) {
+    l->full = 1;
+    return;
+  }
+  if (l->len + n + 2 > l->cap) {
+    cap = l->cap ? l->cap : 4096;
+    while (l->len + n + 2 > cap)
+      cap *= 2;
+    grown = grealloc(l->text, cap);
+    if (!grown) {
+      l->full = 1;
+      return;
+    }
+    l->text = grown;
+    l->cap = cap;
+  }
+  memcpy(l->text + l->len, path, n);
+  l->len += n;
+  l->text[l->len++] = '\n';
+  l->text[l->len] = '\0';
+}
 
-  out = runCommandCapture(cmd, 1000, 64);
-  if (!out)
-    return 0;
-  yes = (strncmp(out, "true", 4) == 0);
-  gfree(out);
-  return yes;
+static int comparePaths(const void *a, const void *b) {
+  return strcmp(*(char *const *)a, *(char *const *)b); // LC_ALL=C order
 }
 
 /**
- * @brief Runs the file-listing command and returns its raw newline-
- * separated stdout (paths relative to `root`), or NULL.
- * @details git branch: tracked files plus untracked-but-not-ignored ones
- * (so a file you just created shows up), de-duplicated. Non-git branch:
- * find(1) from the root with the usual heavy directories pruned. Both are
- * run with cwd = root so every path comes back root-relative.
+ * @brief Sorts the `len` bytes of `text`, entries separated by `sep`,
+ * byte-wise and drops duplicates (LC_ALL=C sort -u). Returns a galloc'd,
+ * newline-separated copy; consumes `text`.
+ */
+static char *sortUniqueLines(char *text, const size_t len, const char sep) {
+  size_t count = 0;
+  size_t cap = 1024;
+  char **lines = galloc(cap * sizeof(char *));
+  char **grown;
+  char *p = text;
+  char *const stop = text + len;
+  char *end;
+  PathList out = {NULL, 0, 0, 0};
+  size_t i;
+
+  if (!lines) {
+    gfree(text);
+    return NULL;
+  }
+  while (p < stop) {
+    end = memchr(p, sep, (size_t)(stop - p));
+    if (!end)
+      end = stop; // text[len] is the NUL terminator
+    *end = '\0';
+    if (*p) {
+      if (count == cap) {
+        cap *= 2;
+        grown = grealloc(lines, cap * sizeof(char *));
+        if (!grown)
+          break;
+        lines = grown;
+      }
+      lines[count++] = p;
+    }
+    p = end + 1;
+  }
+  qsort(lines, count, sizeof(char *), comparePaths);
+  for (i = 0; i < count; i++)
+    if (i == 0 || strcmp(lines[i], lines[i - 1]) != 0)
+      pathListAdd(&out, lines[i]);
+  gfree(lines);
+  gfree(text);
+  return out.text;
+}
+
+static int addWalkedFile(const char *rel_path, const char *full_path, void *ctx) {
+  PathList *list = ctx;
+  (void)full_path;
+  pathListAdd(list, rel_path);
+  return list->full;
+}
+
+/**
+ * @brief The project's files, newline-separated and relative to `root`,
+ * sorted (galloc'd), or NULL.
+ * @details In a git repository: tracked files plus untracked-but-not-
+ * ignored ones (so a file you just created shows up), NUL-separated from
+ * git so no file name needs quoting. Elsewhere: every file under the
+ * root, the usual heavy directories skipped.
  */
 static char *listProjectFiles(const char *root) {
-  char qroot[PATH_MAX + 4];
-  char cmd[PATH_MAX * 2 + 512];
-  shellQuote(root, qroot, sizeof(qroot));
+  char *argv[] = {"git", "-C", (char *)root, "ls-files", "--cached", "--others",
+                  "--exclude-standard", "-z", NULL};
+  PathList list = {NULL, 0, 0, 0};
+  size_t len = 0;
+  char *out;
 
-  if (rootIsGitRepo(root)) {
-    snprintf(cmd, sizeof(cmd),
-             "cd %s && git ls-files --cached --others --exclude-standard "
-             "-z 2>/dev/null | tr '\\0' '\\n' | LC_ALL=C sort -u",
-             qroot);
-  } else {
-    snprintf(cmd, sizeof(cmd),
-             "cd %s && find . \\( -name .git -o -name node_modules "
-             "-o -name build -o -name .beluga -o -name dist \\) -prune "
-             "-o -type f -print 2>/dev/null | LC_ALL=C sort",
-             qroot);
+  if (projectIsGitRepo(root)) {
+    out = runArgvCaptureBytes(argv, FF_LIST_CMD_TIMEOUT_MS, FF_MAX_OUTPUT, &len);
+    return out ? sortUniqueLines(out, len, '\0') : NULL;
   }
-
-  return runCommandCapture(cmd, FF_LIST_CMD_TIMEOUT_MS, FF_MAX_OUTPUT);
+  projectWalkFiles(root, addWalkedFile, &list);
+  return list.text ? sortUniqueLines(list.text, list.len, '\n') : NULL;
 }
 
 /**
@@ -112,9 +177,9 @@ static void ownPaths(char *output) {
     return;
 
   saveptr = NULL;
-  for (line = strtok_r(output, "\n", &saveptr);
+  for (line = utilStrtok(output, "\n", &saveptr);
        line && ff->path_count < FF_MAX_FILES;
-       line = strtok_r(NULL, "\n", &saveptr)) {
+       line = utilStrtok(NULL, "\n", &saveptr)) {
     if (line[0] == '.' && line[1] == '/')
       line += 2;
     if (line[0] == '\0')
@@ -127,7 +192,7 @@ static void ownPaths(char *output) {
         break;
       ff->paths = grown;
     }
-    ff->paths[ff->path_count] = strdup(line);
+    ff->paths[ff->path_count] = utilStrdup(line);
     if (!ff->paths[ff->path_count])
       break;
     ff->path_count++;
@@ -260,11 +325,12 @@ void fileFinderClose(void) {
 }
 
 void fileFinderOpen(void) {
-  char root[PATH_MAX];
+  char *root;
   char *output;
   fileFinderClose(); // drop any stale snapshot first
 
-  if (!getcwd(root, sizeof(root))) {
+  root = os_getcwd();
+  if (!root) {
     editorSetStatusMessage("find-file: can't determine the working directory");
     return;
   }
@@ -272,6 +338,7 @@ void fileFinderOpen(void) {
   output = listProjectFiles(root);
   if (!output) {
     editorSetStatusMessage("find-file: no files found under %s", root);
+    free(root);
     return;
   }
   ownPaths(output);
@@ -279,9 +346,11 @@ void fileFinderOpen(void) {
 
   if (E.file_finder.path_count == 0) {
     editorSetStatusMessage("find-file: no files found under %s", root);
+    free(root);
     fileFinderClose();
     return;
   }
+  free(root);
 
   rebuildMatches();
   E.file_finder.visible = 1;
@@ -296,7 +365,7 @@ void fileFinderOpen(void) {
  */
 static int findOpenBuffer(const char *rel_path) {
   char want[PATH_MAX];
-  char cwd[PATH_MAX];
+  char *cwd;
   int first;
   Buffer *b;
   char *full;
@@ -304,12 +373,14 @@ static int findOpenBuffer(const char *rel_path) {
   if (E.buffers == NULL)
     return -1;
 
-  if (rel_path[0] == '/') {
+  if (os_path_is_absolute(rel_path)) {
     snprintf(want, sizeof(want), "%s", rel_path);
   } else {
-    if (!getcwd(cwd, sizeof(cwd)))
+    cwd = os_getcwd();
+    if (!cwd)
       return -1;
     snprintf(want, sizeof(want), "%s/%s", cwd, rel_path);
+    free(cwd);
   }
 
   first = E.buffers->buffer_id;
@@ -318,7 +389,7 @@ static int findOpenBuffer(const char *rel_path) {
     if (b->type == FILE_BUFF && b->fullname) {
       full = (char *)utf8ToString(b->fullname);
       if (full) {
-        same = (strcmp(full, want) == 0);
+        same = os_path_equal(full, want);
         gfree(full);
         if (same)
           return b->buffer_id;

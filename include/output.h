@@ -2,7 +2,6 @@
 #define OUTPUT_H_
 
 #include "data.h"
-#include <unistd.h>
 
 /**
  * \fn void editorDrawRows(struct editorConfig *E, struct abuf *ab)

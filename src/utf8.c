@@ -7,14 +7,34 @@
 #include "../include/terminal.h"
 #include "../include/data.h"
 #include "../include/utils.h"
+#include "../include/os.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <stdarg.h>
 
+
+/**
+ * @brief Reads `n` key bytes, waiting up to 100ms for each — the timing
+ * raw mode's VTIME=1 gave read(): enough for the rest of an escape
+ * sequence to arrive, short enough that a lone ESC still reads as ESC.
+ * @return How many bytes were read (fewer than `n` if input stopped).
+ */
+static int readKeyBytes(void *buf, const int n)
+{
+    int got = 0;
+    long r;
+    while (got < n)
+    {
+        r = os_stream_read(os_term_input(), (char *) buf + got, (size_t) (n - got), 100);
+        if (r <= 0)
+            break;
+        got += (int) r;
+    }
+    return got;
+}
 
 /**
  * @fn readUtf8Char
@@ -37,7 +57,7 @@ Utf8Char* readUtf8Char(void) {
     int modifier;
     int in_modifier;
     int seq_len;
-    read(STDIN_FILENO, &new_char->character[0], 1);
+    readKeyBytes(&new_char->character[0], 1);
 
     if (new_char->character[0]) {
         appDebug("%c\r\n", *new_char->character);
@@ -47,7 +67,7 @@ Utf8Char* readUtf8Char(void) {
     if (new_char->character[0] == '\x1b')
     {
 
-        if (read(STDIN_FILENO, &seq0, 1) != 1) {
+        if (readKeyBytes(&seq0, 1) != 1) {
             new_char->length = 1;
             return new_char; // lone ESC, nothing followed in time
         }
@@ -71,8 +91,8 @@ Utf8Char* readUtf8Char(void) {
                 // ESC ESC [ C  /  ESC ESC O C — a plain arrow sequence
                 // behind a Meta prefix, the form a terminal in "Option as
                 // Meta key" mode uses for Option+arrow.
-                if (read(STDIN_FILENO, &m1, 1) == 1 && (m1 == '[' || m1 == 'O') &&
-                    read(STDIN_FILENO, &m2, 1) == 1)
+                if (readKeyBytes(&m1, 1) == 1 && (m1 == '[' || m1 == 'O') &&
+                    readKeyBytes(&m2, 1) == 1)
                 {
                     switch (m2)
                     {
@@ -102,7 +122,7 @@ Utf8Char* readUtf8Char(void) {
             return new_char;
         }
 
-        if (read(STDIN_FILENO, &seq1, 1) != 1) {
+        if (readKeyBytes(&seq1, 1) != 1) {
             new_char->character[0] = '\x1b';
             new_char->length = 1;
             return new_char; // incomplete sequence, treat as lone ESC
@@ -125,7 +145,7 @@ Utf8Char* readUtf8Char(void) {
                 seq_len = 0;
                 for (;;)
                 {
-                    if (read(STDIN_FILENO, &final, 1) != 1 || ++seq_len > 16)
+                    if (readKeyBytes(&final, 1) != 1 || ++seq_len > 16)
                     {
                         final = 0; // truncated or runaway: give up on it
                         break;
@@ -215,7 +235,7 @@ Utf8Char* readUtf8Char(void) {
         new_char->length = 4;
 
     if (new_char->length > 1)
-        read(STDIN_FILENO, &new_char->character[1], new_char->length - 1);
+        readKeyBytes(&new_char->character[1], new_char->length - 1);
 
     return new_char;
 }

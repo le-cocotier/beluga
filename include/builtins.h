@@ -175,6 +175,13 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx);
 Lisp l_fileAttributes(Lisp args, LispError *e, LispContext ctx);
 // (process-run "program" "arg" ...) — no shell; returns (exit-code . "output").
 Lisp l_processRun(Lisp args, LispError *e, LispContext ctx);
+Lisp l_systemType(Lisp args, LispError *e, LispContext ctx);
+Lisp l_shellQuote(Lisp args, LispError *e, LispContext ctx);
+Lisp l_shellRun(Lisp args, LispError *e, LispContext ctx);
+Lisp l_deletePath(Lisp args, LispError *e, LispContext ctx);
+Lisp l_movePaths(Lisp args, LispError *e, LispContext ctx);
+Lisp l_copyPaths(Lisp args, LispError *e, LispContext ctx);
+Lisp l_makeDirectories(Lisp args, LispError *e, LispContext ctx);
 // (process-start callback "program" "arg" ...) — background process-run;
 // callback gets (exit-code . "output") from the main loop when it exits.
 Lisp l_processStart(Lisp args, LispError *e, LispContext ctx);

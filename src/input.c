@@ -9,12 +9,9 @@
 #include "../include/output.h"
 #include "../include/split_screen.h"
 #include <ctype.h>
-#include <dirent.h>
-#include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 
 #include "../include/buffer_switcher.h"
 #include "../include/file_finder.h"
@@ -86,8 +83,9 @@ extern EditorConfig E;
  * @note Uses static buffer internally; may return stale pointers across calls
  */
 Utf8Char *fileCompletion(Utf8Char *path) {
-  DIR *dir;
-  struct dirent *entry;
+  OsDirEntry *entries;
+  int count = 0;
+  int i;
   Utf8Char directory[PATH_MAX] = {0};
   Utf8Char predict[PATH_MAX] = {0};
   const Utf8Char *last_slash = lastSlashUtf8(path);
@@ -95,9 +93,6 @@ Utf8Char *fileCompletion(Utf8Char *path) {
   Utf8Char *entry_name_utf8 = NULL;
   int predict_len = 0;
   char *dir_path = NULL;
-  char *entry_name = NULL;
-  char *full_path_str = NULL;
-  struct stat st;
 
   if (*(last_slash + 1)->character == '\0') {
     // path is a directory
@@ -109,41 +104,30 @@ Utf8Char *fileCompletion(Utf8Char *path) {
   }
 
   dir_path = (char *) utf8ToString(directory);
-  dir = opendir(dir_path);
+  entries = os_list_dir(dir_path, &count);
   gfree(dir_path);
-  if (!dir)
+  if (!entries) {
+    gfree(full_path);
     return path;
+  }
 
-  // skip . and .. — every directory has both, so NULL here would mean
-  // opendir() handed back something that isn't a real directory listing.
-  (void) readdir(dir);
-  (void) readdir(dir);
-
-  while ((entry = readdir(dir)) != NULL) {
-    entry_name = entry->d_name;
-    entry_name_utf8 = stringToUtf8((unsigned char *) entry_name);
+  for (i = 0; i < count; i++) {
+    entry_name_utf8 = stringToUtf8((unsigned char *) entries[i].name);
     if ((predict_len == 0) ||
         (utf8StringNCmp(entry_name_utf8, predict, predict_len) == 0)) {
       utf8Printf(full_path, PATH_MAX, "%u/%u", directory, entry_name_utf8);
       gfree(entry_name_utf8);
-
-      full_path_str = (char *) utf8ToString(full_path);
-      if (stat(full_path_str, &st) == 0 && S_ISDIR(st.st_mode)) {
+      if (entries[i].is_dir) {
         full_path[utf8StringLen(full_path) - 1].character[0] = '/';
         full_path[utf8StringLen(full_path) - 1].length = 1;
       }
-      gfree(full_path_str);
-      closedir(dir);
-
+      os_free_dir(entries, count);
       return full_path;
     }
     gfree(entry_name_utf8);
   }
 
-  // Cleanup when no more entries
-  closedir(dir);
-  dir = NULL;
-  gfree(entry);
+  os_free_dir(entries, count);
   gfree(full_path);
   appDebug("[FILE COMP] no entries\n");
   return path;
@@ -170,6 +154,8 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode
   Utf8Char *full_path = NULL;
   Utf8Char path[PATH_MAX];
   char *pwd;
+  char *buf_str;
+  int absolute;
   if (placeHolder != NULL) {
     buf_len = utf8Printf(buf, PATH_MAX, "%u",
                          placeHolder); // zero not counted by snprintf
@@ -202,11 +188,15 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode
     } else if (bPathMode && *c->character == '\t') {
       // Completion of first path
        // getenv is allocating memory
-      if (*buf[0].character != '/') {
-        pwd = getenv("PWD");
-        appDebug("%s\n", pwd);
+      buf_str = (char *)utf8ToString(buf);
+      absolute = os_path_is_absolute(buf_str);
+      gfree(buf_str);
+      if (!absolute) {
+        pwd = os_getcwd(); // not $PWD: Windows shells don't set it
+        appDebug("%s\n", pwd ? pwd : "");
         // Replace path by pwd + last word
-        utf8Printf(path, PATH_MAX, "%s/%u", pwd, buf);
+        utf8Printf(path, PATH_MAX, "%s/%u", pwd ? pwd : ".", buf);
+        free(pwd);
       } else {
         // already absolute path
         utf8Printf(path, PATH_MAX, "%u", buf);

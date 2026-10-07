@@ -4,12 +4,12 @@
 
 #include "../include/data.h"
 #include "../include/define.h"
+#include "../include/os.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "../include/buffer.h"
 #include "../include/split_screen.h"
@@ -32,8 +32,9 @@ extern EditorConfig E;
 
 void die(const char* s)
 {
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, CURSOR_TOP_LEFT, 3);
+    os_term_write("\x1b[2J", 4);
+    os_term_write(CURSOR_TOP_LEFT, 3);
+    os_term_leave_raw();
     lisp_shutdown(E.ctx);
     perror(s);
     exit(1);
@@ -41,10 +42,7 @@ void die(const char* s)
 
 void disableRawMode()
 {
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1)
-    {
-        die("tcsetattr");
-    }
+    os_term_leave_raw();
 }
 
 /**
@@ -57,32 +55,21 @@ void disableRawMode()
  */
 void terminalRestore(void)
 {
-    write(STDOUT_FILENO, "\x1b[0m", 4);   // reset colors/attributes
-    write(STDOUT_FILENO, "\x1b[2J", 4);   // clear screen
-    write(STDOUT_FILENO, CURSOR_TOP_LEFT, 3);
-    write(STDOUT_FILENO, SHOW_CURSOR, 6);
+    os_term_write("\x1b[0m", 4);   // reset colors/attributes
+    os_term_write("\x1b[2J", 4);   // clear screen
+    os_term_write(CURSOR_TOP_LEFT, 3);
+    os_term_write(SHOW_CURSOR, 6);
     disableRawMode();
 }
 
 void enableRawMode()
 {
-    struct termios raw;
-    if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1)
+    if (os_term_enter_raw() == -1)
     {
-        die("tcgetattr");
-    }
-
-    raw = E.orig_termios;
-    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-    raw.c_oflag &= ~(OPOST);
-    raw.c_cflag |= (CS8);
-    raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
-    raw.c_cc[VMIN] = 0;
-    raw.c_cc[VTIME] = 1;
-
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1)
-    {
-        die("tcgetattr");
+        // Not a terminal, or (Windows) one too old for VT sequences.
+        fprintf(stderr, "beluga: this terminal can't be put in raw mode%s\n",
+                strcmp(os_name(), "windows") == 0 ? " (Windows 10 1809 or later needed)" : "");
+        exit(1);
     }
 }
 
@@ -165,60 +152,23 @@ Utf8Char * editorReadKey()
     return c;
 }
 
-int getCursorPosition(int* rows, int* cols)
-{
-    char buf[32];
-    unsigned int i = 0;
-
-    if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4)
-    {
-        return -1;
-    }
-
-    while (i < sizeof(buf) - 1)
-    {
-        if (read(STDIN_FILENO, &buf[i], 1) != 1)
-        {
-            break;
-        }
-        if (buf[i] == 'R')
-        {
-            break;
-        }
-        ++i;
-    }
-    buf[i] = '\0';
-
-    if (buf[0] != '\x1b' || buf[1] != '[')
-    {
-        return -1;
-    }
-    if (sscanf(&buf[2], "%d;%d", rows, cols) != 2)
-    {
-        return -1;
-    }
-
-    return 0;
-}
-
 int getWindowSize(int* rows, int* cols)
 {
-    struct winsize ws;
-
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
-    {
-        if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12)
-        {
-            return -1;
-        }
-        return getCursorPosition(rows, cols);
-    }
-    *cols = ws.ws_col;
-    *rows = ws.ws_row;
-    return 0;
+    return os_term_size(rows, cols);
 }
 
 #ifdef APP_DEBUG
+/**
+ * @brief ~/.beluga/debug.log, where appDebug() writes.
+ */
+static const char *debugLogPath(void)
+{
+    static char path[PATH_MAX];
+    if (!path[0])
+        snprintf(path, sizeof(path), "%s/.beluga/debug.log", os_home_dir());
+    return path;
+}
+
 /**
  * @brief Opens (once) and returns the debug log file at ~/.beluga/debug.log.
  * @details Never stderr: this process's stderr is the same raw terminal
@@ -235,17 +185,10 @@ static FILE *debugLogFile(void)
 {
     static FILE *f = NULL;
     static int tried = 0;
-    const char *home;
-    char path[PATH_MAX];
     if (!tried)
     {
         tried = 1;
-        home = getenv("HOME");
-        if (home)
-            snprintf(path, sizeof(path), "%s/.beluga/debug.log", home);
-        else
-            snprintf(path, sizeof(path), "beluga_debug.log");
-        f = fopen(path, "w");
+        f = fopen(debugLogPath(), "w");
         if (f)
             setvbuf(f, NULL, _IOLBF, 0);
     }
@@ -253,13 +196,12 @@ static FILE *debugLogFile(void)
 }
 #endif
 
-int appDebugFd(void)
+const char *appDebugLogPath(void)
 {
 #ifdef APP_DEBUG
-    FILE *f = debugLogFile();
-    return f ? fileno(f) : -1;
+    return debugLogFile() ? debugLogPath() : NULL;
 #else
-    return -1;
+    return NULL;
 #endif
 }
 
@@ -267,13 +209,13 @@ void appDebug(const char* fmt, ...)
 {
 #ifdef APP_DEBUG
     FILE *f = debugLogFile();
-    struct timespec ts;
+    long long ms;
     va_list ap;
     if (!f)
         return;
 
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    fprintf(f, "[%6ld.%03ld] ", (long) ts.tv_sec, ts.tv_nsec / 1000000);
+    ms = os_monotonic_ms();
+    fprintf(f, "[%6lld.%03lld] ", ms / 1000, ms % 1000);
 
     va_start(ap, fmt);
     vfprintf(f, fmt, ap);

@@ -12,8 +12,16 @@
 ;; The scan itself is a simple heuristic, not a real parser: a line counts
 ;; as a definition if it doesn't start with leading whitespace and, once
 ;; trailing whitespace is stripped, ends in "{". That catches top-level
-;; function bodies and struct/enum blocks in most C-like languages. Good
-;; enough as a first pass — a language server integration could build the
+;; function bodies and struct/enum blocks in most C-like languages. When
+;; the brace stands on a line of its own (Allman style), the definition is
+;; the nearest unindented line above it — the indented lines in between
+;; being a long parameter list:
+;;
+;;   static int add(int a,      <- listed
+;;                  int b)
+;;   {
+;;
+;; Good enough as a first pass — a language server integration could build the
 ;; exact same (label . line) list from LSP's textDocument/documentSymbol
 ;; instead and hand it to this same (editor-list-popup ...) call.
 
@@ -39,6 +47,31 @@
          (not (outline--indented? line))
          (char=? (string-ref trimmed (- (string-length trimmed) 1)) #\{))))
 
+;; A "{" alone at the start of a line: Allman style.
+(define (outline--lone-brace? line)
+  (and (not (outline--indented? line))
+       (string=? (outline--rtrim line) "{")))
+
+;; Where the definition opened by a lone "{" on the line below `row`
+;; starts: going up from `row`, past indented lines (a parameter list
+;; continued over several lines), to the first unindented one — or -1 if
+;; there's none within `limit` lines, a blank line comes first, or that
+;; line ends a statement or a block (";" or "}"), so isn't a signature.
+(define (outline--signature-row row limit)
+  (if (or (< row 0) (= limit 0))
+      -1
+      (let* ((text (line-text row))
+             (trimmed (outline--rtrim text)))
+        (cond ((string=? trimmed "") -1)
+              ((outline--indented? text) (outline--signature-row (- row 1) (- limit 1)))
+              ((member (substring trimmed (- (string-length trimmed) 1) (string-length trimmed))
+                       (list ";" "}"))
+               -1)
+              (else row)))))
+
+(define (outline--entry-at row)
+  (cons (string-append (number->string row) ": " (outline--rtrim (line-text row))) row))
+
 ;; Walks every row of the current buffer, collecting one (label . row) pair
 ;; per definition found, in file order.
 (define (outline--entries row acc)
@@ -47,10 +80,11 @@
       (let ((text (line-text row)))
         (outline--entries
          (+ row 1)
-         (if (outline--definition? text)
-             (cons (cons (string-append (number->string row) ": " (outline--rtrim text)) row)
-                   acc)
-             acc)))))
+         (cond ((outline--lone-brace? text)
+                (let ((start (outline--signature-row (- row 1) 10)))
+                  (if (>= start 0) (cons (outline--entry-at start) acc) acc)))
+               ((outline--definition? text) (cons (outline--entry-at row) acc))
+               (else acc))))))
 
 ;; #t at the end asks for a live-filtering popup — type to narrow the list
 ;; by substring, same as CTRL-P's file finder. See Builtins.md /

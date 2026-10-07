@@ -9,8 +9,8 @@ int lspStart(LspClient* lsp, const char* project_root, char* const server_argv[]
 void lspShutdown(LspClient* lsp);
 void lspCleanup(LspClient* lsp);
 
-// ── Non-blocking I/O — call from editorRunLoop's select() when
-// lsp->read_from_server_fd is readable ─────────────────────────────────────
+// ── Non-blocking I/O — call from editorRunLoop() when the server's output
+// stream is ready ───────────────────────────────────────────────────────────
 void lspPoll(LspClient* lsp);
 
 // ── Message dispatch (internal to completion.c's lspPoll, but exposed

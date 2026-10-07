@@ -25,12 +25,14 @@
 (define dired-show-hidden #f)     ; list dotfiles?
 (define dired-sort-mode "name")   ; "name" (directories first), "date", "size"
 
-;; Built on: list-directory, file-attributes, process-run (runs rm/mv/cp/
-;; mkdir directly, no shell, so names need no quoting), expand-path,
-;; editor-prompt, editor-message, and the scratch-buffer primitives.
+;; Built on: list-directory, file-attributes, delete-path, move-paths,
+;; copy-paths, make-directories (the editor's own file operations — the
+;; same on every platform, no rm/mv/cp/mkdir involved), shell-run (for !),
+;; expand-path, editor-prompt, editor-message, and the scratch-buffer
+;; primitives.
 ;;
 ;; Every operation runs synchronously: copying a large tree blocks the
-;; editor until cp finishes (process-run gives up after 60 s).
+;; editor until it's done.
 
 ;; ─── state ──────────────────────────────────────────────────────────────────
 
@@ -368,12 +370,26 @@
           (if (and e (not (dired--parent-entry? e))) (list e) '()))
         marked)))
 
-;; Runs (argv-of entry) for each entry, collecting "name: error" strings.
-(define (dired--run-each argv-of entries failures)
+;; ─── file operations ────────────────────────────────────────────────────────
+;; Each returns (exit-code . message): (0 . "") on success.
+
+(define (dired--join-spaced strings)
+  (cond ((null? strings) "")
+        ((null? (cdr strings)) (car strings))
+        (else (string-append (car strings) " " (dired--join-spaced (cdr strings))))))
+
+;; ! — `command` run in the platform's shell (sh, or PowerShell on Windows)
+;; from `dir`, with `names` appended as arguments, each quoted for it.
+(define (dired--shell command dir names)
+  (shell-run (string-append command " " (dired--join-spaced (map1 shell-quote names))) dir))
+
+;; Runs (run entry) — which returns (exit-code . output) — for each entry,
+;; collecting "name: error" strings.
+(define (dired--run-each run entries failures)
   (if (null? entries)
       (reverse failures)
-      (let ((result (apply process-run (argv-of (car entries)))))
-        (dired--run-each argv-of (cdr entries)
+      (let ((result (run (car entries))))
+        (dired--run-each run (cdr entries)
                          (if (= (car result) 0)
                              failures
                              (cons (string-append (dired--name (car entries)) ": "
@@ -390,7 +406,7 @@
                                               "?"
                                               ", directories recursively?")))
           (let ((failures (dired--run-each
-                           (lambda (e) (list "rm" "-rf" "--" (dired--path e)))
+                           (lambda (e) (delete-path (dired--path e)))
                            entries '())))
             (begin
               (dired--load dired-dir "" (dired--index))
@@ -403,8 +419,8 @@
 (define (dired-do-flagged-delete) (dired--delete (dired--with-mark "D")))
 
 ;; Rename and copy: one entry asks for its new path, several ask for a
-;; destination directory. `program` gets "--", the sources, then the target.
-(define (dired--transfer verb past program flags)
+;; destination directory. `transfer` is move-paths or copy-paths.
+(define (dired--transfer verb past transfer)
   (let ((entries (dired--targets)))
     (if (null? entries)
         (editor-message (string-append "Nothing to " verb))
@@ -417,9 +433,7 @@
                                       #t)))
           (if answer
               (let* ((dest (expand-path answer dired-dir))
-                     (result (apply process-run
-                                    (append (list program) flags (list "--")
-                                            (map1 dired--path entries) (list dest)))))
+                     (result (transfer (map1 dired--path entries) dest)))
                 (begin
                   (dired--load dired-dir (if single (dired--basename dest) "") (dired--index))
                   (editor-message (if (= (car result) 0)
@@ -427,19 +441,19 @@
                                       (string-append verb " failed — " (dired--first-line (cdr result)))))))
               (editor-message (string-append verb " cancelled")))))))
 
-(define (dired-do-rename) (dired--transfer "Rename" "Moved" "mv" '()))
-(define (dired-do-copy) (dired--transfer "Copy" "Copied" "cp" (list "-R")))
+(define (dired-do-rename) (dired--transfer "Rename" "Moved" move-paths))
+(define (dired-do-copy) (dired--transfer "Copy" "Copied" copy-paths))
 
 (define (dired-create-directory)
   (let ((answer (editor-prompt "Create directory: %u" (dired--dir-slash) #t)))
     (if answer
         (let* ((path (expand-path answer dired-dir))
-               (result (process-run "mkdir" "-p" "--" path)))
+               (result (make-directories path)))
           (if (= (car result) 0)
               (begin
                 (dired--load dired-dir (dired--basename path) (dired--index))
                 (editor-message (string-append "Created " path)))
-              (editor-message (string-append "mkdir failed — " (dired--first-line (cdr result))))))
+              (editor-message (string-append "Create directory failed — " (dired--first-line (cdr result))))))
         '())))
 
 ;; Runs a shell command from the listed directory with the target files as
@@ -451,12 +465,7 @@
         (let ((command (editor-prompt (string-append "! on " (dired--prompt-safe (dired--describe entries)) ": %u")
                                       "" #f)))
           (if (and command (not (string=? command "")))
-              (let ((result (apply process-run
-                                   (append (list "sh" "-c"
-                                                 (string-append "cd -- \"$1\" || exit; shift; "
-                                                                command " \"$@\"")
-                                                 "dired-sh" dired-dir)
-                                           (map1 dired--name entries)))))
+              (let ((result (dired--shell command dired-dir (map1 dired--name entries))))
                 (begin
                   (dired--load dired-dir "" (dired--index))
                   (editor-message

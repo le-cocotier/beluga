@@ -360,7 +360,7 @@ void lisp_promise_store(Lisp p, Lisp x);
 #include <time.h>
 #include <assert.h>
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(LISP_NO_MMAP)
 #define LISP_NO_MMAP
 #endif
 
@@ -1337,7 +1337,9 @@ static Lisp symbol_intern_(Lisp table, const char* string, size_t length, LispCo
 Lisp lisp_make_symbol(const char* string, LispContext ctx)
 {
     assert(string);
-    int length = strnlen(string, LISP_IDENTIFIER_MAX);
+    // strnlen() isn't standard C (beluga's core is plain C99).
+    int length = 0;
+    while (length < LISP_IDENTIFIER_MAX && string[length]) ++length;
     return symbol_intern_(ctx.p->symbols, string, length, ctx);
 }
 
@@ -2186,11 +2188,18 @@ Lisp lisp_read_path(const char *path, LispError* out_error, LispContext ctx)
 
     return l;
 #else
-    FILE* file = fopen(path);
-    lisp_read_file(file, out_error, ctx);
-    fclose(path);
+    // No mmap (Windows): read it through stdio instead. This branch had
+    // never been compiled before the Windows port — it called fopen()
+    // without a mode, fclose()d the path, and threw the result away.
+    FILE* file = fopen(path, "rb");
+    if (!file) {
+        *out_error = LISP_ERROR_FILE_OPEN;
+        return lisp_eof();
+    }
+    Lisp l = lisp_read_file(file, out_error, ctx);
+    fclose(file);
+    return l;
 #endif
-    return lisp_eof();
 }
 
 Lisp lisp_env_extend(Lisp l, Lisp table, LispContext ctx) { return lisp_cons(table, l, ctx); }
@@ -2283,8 +2292,8 @@ static void lisp_print_r(FILE* file, Lisp l, int human_readable, int is_cdr)
         case LISP_LAMBDA: fputs("<lambda>", file); break;
         case LISP_PROMISE: fputs("<promise>", file); break;
         case LISP_PTR: fprintf(file, "<ptr-%p>", l.val.ptr_val); break;
-        case LISP_PORT_IN: fprintf(file, "<input port-%d>", fileno((FILE*)l.val.ptr_val)); break;
-        case LISP_PORT_OUT: fprintf(file, "<output port-%d>", fileno((FILE*)l.val.ptr_val)); break;
+        case LISP_PORT_IN: fprintf(file, "<input port-%p>", l.val.ptr_val); break; // fileno() isn't standard C
+        case LISP_PORT_OUT: fprintf(file, "<output port-%p>", l.val.ptr_val); break;
         case LISP_FUNC: fprintf(file, "<c-func-%p>", l.val.ptr_val); break;
         case LISP_TABLE:
         {

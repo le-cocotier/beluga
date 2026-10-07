@@ -81,13 +81,6 @@
 
 #define BELUGA_VERSION "3.2"
 
-#ifdef __APPLE__
-#define CLIPBOARD_COPY_CMD  "pbcopy"
-#define CLIPBOARD_PASTE_CMD "pbpaste"
-#else
-#define CLIPBOARD_COPY_CMD  "xclip -selection clipboard"
-#define CLIPBOARD_PASTE_CMD "xclip -selection clipboard -o"
-#endif
 
 
 #define CSI_MAX_PARAMS 16

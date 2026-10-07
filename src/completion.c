@@ -6,14 +6,10 @@
 #include "../include/completion.h"
 #include "../include/galloc.h"
 
-#include <signal.h>
+#include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <sys/select.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <time.h>
 
 #include "../include/append_buffer.h"
@@ -26,6 +22,7 @@
 #include "../include/buffer.h"
 #include "../include/builtins.h"
 #include "../include/editor_op.h"
+#include "../include/utils.h"
 
 extern EditorConfig E;
 
@@ -37,9 +34,7 @@ extern EditorConfig E;
  */
 static long monotonic_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    return (long) os_monotonic_ms();
 }
 
 static void lsp_send(const LspClient *lsp, const char *json)
@@ -49,8 +44,8 @@ static void lsp_send(const LspClient *lsp, const char *json)
     const int header_len = snprintf(header, sizeof(header),
                               "Content-Length: %d\r\n\r\n", body_len);
 
-    write(lsp->write_to_server_fd, header, header_len);
-    write(lsp->write_to_server_fd, json, body_len);
+    os_proc_write(lsp->proc, header, (size_t) header_len);
+    os_proc_write(lsp->proc, json, (size_t) body_len);
 
     appDebug("[LSP →] Content-Length: %d | %s\n", body_len, json);
 }
@@ -231,7 +226,7 @@ static void lsp_feed(LspClient *lsp, const char *data, size_t len)
     // Try to extract as many complete messages as are currently buffered
     while (1)
     {
-        header_end = memmem(lsp->recv_buf, lsp->recv_len, "\r\n\r\n", 4);
+        header_end = utilMemmem(lsp->recv_buf, lsp->recv_len, "\r\n\r\n", 4);
         if (!header_end) break; // headers not fully arrived yet
 
         header_len = (int)(header_end - lsp->recv_buf);
@@ -298,6 +293,72 @@ static void lsp_on_completion_response(LspClient *lsp, const char *result_json)
 }
 
 /**
+ * @brief A file's URI, as sent to the server: file:// + the path — with a
+ * third slash before a drive letter ("C:/dir/f.c" -> file:///C:/dir/f.c).
+ */
+static void lspPathToUri(const char *path, char *uri, const size_t uri_size)
+{
+    snprintf(uri, uri_size, "file://%s%s", path[0] == '/' ? "" : "/", path);
+}
+
+static int hexDigitValue(const char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/**
+ * @brief The local path a `file://` URI from the server names.
+ * @details Percent-escapes are decoded — servers escape spaces as %20, and
+ * on Windows many send the drive as "c%3A" — and on Windows the leading
+ * slash before the drive is dropped and the drive letter upper-cased, to
+ * match the paths realpath() gives the editor's own buffers.
+ * @return 1 on success, 0 if `uri` isn't a file:// URI.
+ */
+static int lspUriToPath(const char *uri, char *out, const size_t out_size)
+{
+    const char *p;
+    size_t n = 0;
+    int hi;
+    int lo;
+
+    if (!uri || strncmp(uri, "file://", 7) != 0 || out_size == 0)
+        return 0;
+    p = uri + 7;
+    while (*p && n + 1 < out_size)
+    {
+        hi = p[0] == '%' ? hexDigitValue(p[1]) : -1;
+        lo = hi >= 0 ? hexDigitValue(p[2]) : -1;
+        if (hi >= 0 && lo >= 0)
+        {
+            out[n++] = (char) (hi * 16 + lo);
+            p += 3;
+        }
+        else
+            out[n++] = *p++;
+    }
+    out[n] = '\0';
+    // "/C:/dir" -> "C:/dir", with the drive letter upper-cased as the
+    // editor's own paths have it (only where drive letters exist).
+    if (out[0] == '/' && os_path_drive_length(out + 1) > 0)
+        memmove(out, out + 1, strlen(out));
+    if (os_path_drive_length(out) > 0)
+        out[0] = (char) toupper((unsigned char) out[0]);
+    return 1;
+}
+
+/**
+ * @brief Do two paths name the same file? (Case-insensitively on Windows,
+ * where file names are.)
+ */
+static int lspSamePath(const char *a, const char *b)
+{
+    return os_path_equal(a, b);
+}
+
+/**
  * @brief Maps a `file://...` URI (as sent back by the server in
  * publishDiagnostics) to the buffer_id of the matching open buffer, or -1.
  */
@@ -305,20 +366,21 @@ static int lsp_find_buffer_id_by_uri(const char *uri)
 {
     int first_buffer_id;
     struct buffer_t *b;
-    char buf_uri[PATH_MAX + 8];
+    char path[PATH_MAX];
     char *fullname_str;
-    if (E.buffers == NULL) return -1;
+    int same;
+    if (E.buffers == NULL || !lspUriToPath(uri, path, sizeof(path))) return -1;
     first_buffer_id = E.buffers->buffer_id;
     b = E.buffers;
     do
     {
-        if (b->type == FILE_BUFF)
+        if (b->type == FILE_BUFF && b->fullname)
         {
             fullname_str = (char*) utf8ToString(b->fullname);
-            snprintf(buf_uri, sizeof(buf_uri), "file://%s", fullname_str);
+            same = fullname_str && lspSamePath(fullname_str, path);
             gfree(fullname_str);
 
-            if (strcmp(buf_uri, uri) == 0)
+            if (same)
                 return b->buffer_id;
         }
         b = b->next;
@@ -342,18 +404,19 @@ static void lspJumpToUri(const char *uri, const int line, const int character)
     int buffer_id;
     Utf8Char *path;
     struct buffer_t *buf;
-    if (strncmp(uri, "file://", 7) != 0)
+    char local[PATH_MAX];
+    if (!lspUriToPath(uri, local, sizeof(local)))
         return; // not a local file — nothing this editor can open
 
     buffer_id = lsp_find_buffer_id_by_uri(uri);
     if (buffer_id < 0)
     {
-        path = stringToUtf8((unsigned char *) uri + 7);
+        path = stringToUtf8((unsigned char *) local);
         buffer_id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
         gfree(path);
         if (buffer_id < 0)
         {
-            editorSetStatusMessage("Couldn't open %s", uri + 7);
+            editorSetStatusMessage("Couldn't open %s", local);
             return;
         }
     }
@@ -511,7 +574,8 @@ static void applyTextEditsToUri(const char *uri, const cJSON *edits_array)
     int buffer_id;
     Utf8Char *path;
     struct buffer_t *buf;
-    if (strncmp(uri, "file://", 7) != 0) return;
+    char local[PATH_MAX];
+    if (!lspUriToPath(uri, local, sizeof(local))) return;
     count = cJSON_GetArraySize(edits_array);
     if (count <= 0) return;
 
@@ -531,7 +595,7 @@ static void applyTextEditsToUri(const char *uri, const cJSON *edits_array)
         edits[n].start_col = cJSON_GetObjectItem(start, "character")->valueint;
         edits[n].end_line = cJSON_GetObjectItem(end, "line")->valueint;
         edits[n].end_col = cJSON_GetObjectItem(end, "character")->valueint;
-        edits[n].new_text = strdup(new_text->valuestring);
+        edits[n].new_text = utilStrdup(new_text->valuestring);
         n++;
     }
     qsort(edits, (size_t) n, sizeof(FlatTextEdit), flatTextEditCmpDescending);
@@ -539,7 +603,7 @@ static void applyTextEditsToUri(const char *uri, const cJSON *edits_array)
     buffer_id = lsp_find_buffer_id_by_uri(uri);
     if (buffer_id < 0)
     {
-        path = stringToUtf8((unsigned char *) uri + 7);
+        path = stringToUtf8((unsigned char *) local);
         buffer_id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
         gfree(path);
     }
@@ -658,7 +722,7 @@ static void lsp_on_formatting_response(LspClient *lsp, const char *result_json)
                 edits[n].start_col = cJSON_GetObjectItem(start, "character")->valueint;
                 edits[n].end_line = cJSON_GetObjectItem(end, "line")->valueint;
                 edits[n].end_col = cJSON_GetObjectItem(end, "character")->valueint;
-                edits[n].new_text = strdup(new_text->valuestring);
+                edits[n].new_text = utilStrdup(new_text->valuestring);
                 n++;
             }
             qsort(edits, (size_t) n, sizeof(FlatTextEdit), flatTextEditCmpDescending);
@@ -722,10 +786,8 @@ void lspHandleMessage(LspClient *lsp, const char *json)
 
 int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[])
 {
-    int stdin_pipe[2];
-    int stdout_pipe[2];
-    pid_t pid;
-    int flags;
+    OsSpawn spawn;
+    const char *debug_log;
     char root_uri[PATH_MAX + 8];
     int init_id;
     cJSON *req;
@@ -737,62 +799,23 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
     cJSON *general;
     cJSON *encodings;
     char *msg;
-#ifdef APP_DEBUG
-    int dbg_fd;
-#else
-    int devnull;
-#endif
     if (!lsp || !project_root || !server_argv || !server_argv[0])
         return -1;
 
-    if (pipe(stdin_pipe) == -1 || pipe(stdout_pipe) == -1)
-        return -1;
-
-    pid = fork();
-    if (pid == 0)
+    // stdin/stdout carry the JSON-RPC transport. stderr would otherwise
+    // land on the terminal we're drawing on, and language servers log to
+    // it freely (clangd emits a line per request at its default level): a
+    // normal build discards it, an APP_DEBUG one appends it to the same
+    // ~/.beluga/debug.log appDebug() writes to, where it's readable.
+    memset(&spawn, 0, sizeof(spawn));
+    spawn.argv = (const char *const *) server_argv;
+    spawn.stdin_pipe = 1;
+    debug_log = appDebugLogPath();
+    spawn.stderr_mode = debug_log ? OS_STDERR_FILE : OS_STDERR_DISCARD;
+    spawn.stderr_file = debug_log;
+    lsp->proc = os_proc_spawn(&spawn);
+    if (lsp->proc)
     {
-        close(stdin_pipe[1]);
-        close(stdout_pipe[0]);
-
-        dup2(stdin_pipe[0], STDIN_FILENO);
-        dup2(stdout_pipe[1], STDOUT_FILENO);
-
-        // Only stdin/stdout carry the JSON-RPC transport; stderr would
-        // otherwise stay pointed at the terminal we're drawing on, and
-        // language servers log to it freely (clangd emits a line per
-        // request at its default level) — a normal build sends it to
-        // /dev/null, an APP_DEBUG one to the same ~/.beluga/debug.log
-        // appDebug() writes to (see appDebugFd() in terminal.c), so the
-        // server's own logging lands somewhere readable instead of
-        // corrupting the screen it used to be left attached to directly.
-#ifdef APP_DEBUG
-        dbg_fd = appDebugFd();
-        if (dbg_fd >= 0)
-            dup2(dbg_fd, STDERR_FILENO);
-#else
-        devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0)
-        {
-            dup2(devnull, STDERR_FILENO);
-            if (devnull > STDERR_FILENO)
-                close(devnull);
-        }
-#endif
-
-        close(stdin_pipe[0]);
-        close(stdout_pipe[1]);
-
-        execvp(server_argv[0], server_argv);
-        _exit(127);
-    }
-    else if (pid > 0)
-    {
-        close(stdin_pipe[0]);
-        close(stdout_pipe[1]);
-
-        lsp->write_to_server_fd = stdin_pipe[1];
-        lsp->read_from_server_fd = stdout_pipe[0];
-        lsp->pid = pid;
         lsp->next_id = 1;
         lsp->state = LSP_INITIALIZING;
         lsp->pending_count = 0;
@@ -803,11 +826,7 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
         lsp->completion_debounce_deadline_ms = 0;
         lsp->completion_latest_request_id = 0;
 
-        // Make the read side non-blocking — it'll be driven by select()
-        flags = fcntl(lsp->read_from_server_fd, F_GETFL, 0);
-        fcntl(lsp->read_from_server_fd, F_SETFL, flags | O_NONBLOCK);
-
-        snprintf(root_uri, sizeof(root_uri), "file://%s", project_root);
+        lspPathToUri(project_root, root_uri, sizeof(root_uri));
 
         init_id = lsp->next_id++;
 
@@ -817,7 +836,7 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
         cJSON_AddStringToObject(req, "method", "initialize");
 
         params = cJSON_CreateObject();
-        cJSON_AddNumberToObject(params, "processId", getpid());
+        cJSON_AddNumberToObject(params, "processId", (double) os_getpid());
         cJSON_AddStringToObject(params, "rootUri", root_uri);
 
         caps = cJSON_CreateObject();
@@ -885,7 +904,7 @@ static int lspBufferUri(const struct buffer_t *buf, char *uri, size_t uri_size)
     if (!full)
         return 0;
 
-    snprintf(uri, uri_size, "file://%s", full);
+    lspPathToUri(full, uri, uri_size);
     gfree(full);
     return 1;
 }
@@ -1271,14 +1290,13 @@ int lspAwaitResponse(LspClient *lsp, const int request_id, const int timeout_ms)
     long deadline;
     int still_pending;
     int i;
-    fd_set fds;
-    struct timeval tv;
+    OsStream *out[1];
     int ready;
-    if (!lsp || lsp->read_from_server_fd < 0)
+    if (!lsp || !lsp->proc)
         return 0;
 
     deadline = monotonic_ms() + timeout_ms;
-    while (monotonic_ms() < deadline)
+    while (monotonic_ms() < deadline && lsp->proc)
     {
         still_pending = 0;
         for (i = 0; i < lsp->pending_count; i++)
@@ -1288,11 +1306,8 @@ int lspAwaitResponse(LspClient *lsp, const int request_id, const int timeout_ms)
         if (!still_pending)
             return 1;
 
-        FD_ZERO(&fds);
-        FD_SET(lsp->read_from_server_fd, &fds);
-        tv = (struct timeval){ .tv_sec = 0, .tv_usec = 50000 }; // 50ms
-        ready = select(lsp->read_from_server_fd + 1, &fds, NULL, NULL, &tv);
-        if (ready > 0)
+        out[0] = os_proc_output(lsp->proc);
+        if (os_wait(out, 1, 50, &ready) > 0)
             lspPoll(lsp);
     }
     return 0;
@@ -1411,22 +1426,29 @@ void lspSyncDebounceTick(void)
 }
 
 /**
- * @brief Called from editorRunLoop's select() when data is available on
- * lsp->read_from_server_fd. Non-blocking: drains whatever's currently
- * available and feeds it to the incremental parser.
+ * @brief Called from editorRunLoop() when the server has written something:
+ * drains whatever's available, without waiting, into the incremental
+ * parser.
  */
 void lspPoll(LspClient *lsp)
 {
     char chunk[4096];
-    ssize_t n;
-    if (!lsp || lsp->read_from_server_fd < 0)
+    long n;
+    if (!lsp || !lsp->proc)
         return;
 
-    while ((n = read(lsp->read_from_server_fd, chunk, sizeof(chunk))) > 0)
+    while ((n = os_stream_read(os_proc_output(lsp->proc), chunk, sizeof(chunk), 0)) > 0)
         lsp_feed(lsp, chunk, (size_t) n);
-    // n <= 0: EAGAIN (nothing more right now) or EOF/error — either way,
-    // nothing further to do this cycle. EOF-triggered process-death
-    // detection would need a waitpid check here, mirroring ptySessionIsAlive.
+    if (n < 0)
+    {
+        // Its output has ended: the server exited (or crashed). Release it,
+        // so the main loop stops waiting on a stream that will never
+        // produce anything again.
+        os_proc_free(lsp->proc);
+        lsp->proc = NULL;
+        lsp->state = LSP_SHUTDOWN;
+        appDebug("[LSP] server exited\n");
+    }
 }
 
 void lspShutdown(LspClient *lsp)
@@ -1436,8 +1458,6 @@ void lspShutdown(LspClient *lsp)
     cJSON *root;
     char *msg;
     int timeout;
-    int status;
-    pid_t result;
     if (!lsp)
         return;
 
@@ -1480,7 +1500,7 @@ void lspShutdown(LspClient *lsp)
         timeout = 1000;
         while (lsp->state == LSP_SHUTTING_DOWN && timeout > 0)
         {
-            usleep(10000);
+            os_sleep_ms(10);
             timeout -= 10;
             lspPoll(lsp);
         }
@@ -1497,24 +1517,16 @@ void lspShutdown(LspClient *lsp)
 
     lsp->state = LSP_SHUTDOWN;
 
-    if (lsp->write_to_server_fd > 0) { close(lsp->write_to_server_fd); lsp->write_to_server_fd = -1; }
-    if (lsp->read_from_server_fd > 0) { close(lsp->read_from_server_fd); lsp->read_from_server_fd = -1; }
-
     // gfree(lsp->recv_buf);
     lsp->recv_buf = NULL;
 
-    if (lsp->pid > 0)
+    if (lsp->proc)
     {
-        kill(lsp->pid, SIGTERM);
-        usleep(100000);
-
-        result = waitpid(lsp->pid, &status, WNOHANG);
-        if (result == 0)
-        {
-            kill(lsp->pid, SIGKILL);
-            waitpid(lsp->pid, NULL, 0);
-        }
-        lsp->pid = -1;
+        // It was just told to exit: give it 100ms to do so on its own;
+        // os_proc_free() kills it if it's still running.
+        os_proc_wait(lsp->proc, 100, NULL);
+        os_proc_free(lsp->proc);
+        lsp->proc = NULL;
     }
 }
 

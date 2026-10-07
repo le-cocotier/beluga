@@ -17,6 +17,7 @@
  */
 
 #include "../include/project_search.h"
+#include "../include/define.h"
 #include "../include/galloc.h"
 
 #include "../include/buffer.h"
@@ -25,7 +26,9 @@
 #include "../include/editor_op.h"
 #include "../include/input.h"
 #include "../include/split_screen.h"
+#include "../include/project_files.h"
 #include "../include/subprocess.h"
+#include "../include/utils.h"
 #include "../include/utf8.h"
 
 #include <ctype.h>
@@ -33,7 +36,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 extern EditorConfig E;
 
@@ -92,56 +94,128 @@ void projectSearchFree(void) { clearHits(); }
 
 // ─── Building the command ───────────────────────────────────────────────────
 
-/**
- * @brief Is `root` inside a git work tree?
- * @details Decides between `git grep` (tracked files only, .gitignore
- * honored, binaries skipped) and plain `grep -r`. Cheap enough to ask git
- * directly rather than looking for a .git directory ourselves, which would
- * get worktrees and submodules wrong.
- */
-static int rootIsGitRepo(const char *root) {
-  char qroot[PATH_MAX + 4];
-  char cmd[PATH_MAX + 96];
-  char *out;
-  int yes;
-  shellQuote(root, qroot, sizeof(qroot));
+// ─── Searching without git ──────────────────────────────────────────────────
 
-  snprintf(cmd, sizeof(cmd),
-           "git -C %s rev-parse --is-inside-work-tree 2>/dev/null", qroot);
+typedef struct {
+  const char *pattern;
+  size_t pattern_len;
+  long long deadline;
+  char *out;   // "path:line:text\n"..., galloc'd
+  size_t len;
+  size_t cap;
+  int stop;    // cap or deadline reached
+} PlainSearch;
 
-  out = runCommandCapture(cmd, 1000, 64);
-  if (!out)
-    return 0;
-  yes = (strncmp(out, "true", 4) == 0);
-  gfree(out);
-  return yes;
+static void plainSearchAppend(PlainSearch *ps, const char *rel, const int line_no,
+                              const char *text, const size_t text_len) {
+  char prefix[OS_PATH_MAX + 32];
+  const int prefix_len = snprintf(prefix, sizeof(prefix), "%s:%d:", rel, line_no);
+  const size_t need = (size_t)prefix_len + text_len + 2;
+  char *grown;
+  size_t cap;
+
+  if (ps->len + need > SEARCH_MAX_OUTPUT) {
+    ps->stop = 1;
+    return;
+  }
+  if (ps->len + need > ps->cap) {
+    cap = ps->cap ? ps->cap : 4096;
+    while (ps->len + need > cap)
+      cap *= 2;
+    grown = grealloc(ps->out, cap);
+    if (!grown) {
+      ps->stop = 1;
+      return;
+    }
+    ps->out = grown;
+    ps->cap = cap;
+  }
+  memcpy(ps->out + ps->len, prefix, (size_t)prefix_len);
+  ps->len += (size_t)prefix_len;
+  memcpy(ps->out + ps->len, text, text_len);
+  ps->len += text_len;
+  ps->out[ps->len++] = '\n';
+  ps->out[ps->len] = '\0';
 }
 
 /**
- * @brief Runs the search and returns grep's raw "path:line:text" output.
- * @details -F searches for the pattern literally: someone typing "a[0]"
- * into a search prompt means those four characters, not a regex character
- * class. -I skips binary files in both tools.
+ * @brief Searches one file: every line containing the pattern, literally.
+ * Files with a NUL byte in their first 8 KiB are binary and skipped, as
+ * grep -I and git grep -I do.
  */
-static char *runSearch(const char *pattern, const char *root) {
-  char qpat[SEARCH_MAX_PATTERN * 4 + 8];
-  char qroot[PATH_MAX + 4];
-  char cmd[PATH_MAX * 2 + SEARCH_MAX_PATTERN * 4 + 256];
-  shellQuote(pattern, qpat, sizeof(qpat));
-  shellQuote(root, qroot, sizeof(qroot));
+static int plainSearchFile(const char *rel, const char *full, void *ctx) {
+  PlainSearch *ps = ctx;
+  FILE *f;
+  char *data;
+  long size;
+  size_t got;
+  const char *line;
+  const char *end;
+  const char *stop;
+  size_t line_len;
+  int line_no = 0;
 
-  if (rootIsGitRepo(root)) {
-    snprintf(cmd, sizeof(cmd),
-             "git -C %s grep -I -n --no-color -F -e %s 2>/dev/null", qroot,
-             qpat);
-  } else {
-    snprintf(cmd, sizeof(cmd),
-             "grep -rnI --exclude-dir=.git --exclude-dir=build "
-             "--exclude-dir=node_modules -F -e %s %s 2>/dev/null",
-             qpat, qroot);
+  if (os_monotonic_ms() > ps->deadline) {
+    ps->stop = 1;
+    return 1;
+  }
+  f = fopen(full, "rb");
+  if (!f)
+    return 0;
+  if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) <= 0 || size > 64L * 1024 * 1024 ||
+      fseek(f, 0, SEEK_SET) != 0) {
+    fclose(f);
+    return 0;
+  }
+  data = malloc((size_t)size);
+  got = data ? fread(data, 1, (size_t)size, f) : 0;
+  fclose(f);
+  if (!data || memchr(data, '\0', got < 8192 ? got : 8192)) {
+    free(data);
+    return 0;
   }
 
-  return runCommandCapture(cmd, SEARCH_TIMEOUT_MS, SEARCH_MAX_OUTPUT);
+  stop = data + got;
+  for (line = data; line < stop && !ps->stop; line = end + 1) {
+    end = memchr(line, '\n', (size_t)(stop - line));
+    if (!end)
+      end = stop;
+    line_no++;
+    line_len = (size_t)(end - line);
+    if (line_len > 0 && line[line_len - 1] == '\r')
+      line_len--;
+    if (utilMemmem(line, line_len, ps->pattern, ps->pattern_len))
+      plainSearchAppend(ps, rel, line_no, line, line_len);
+  }
+  free(data);
+  return ps->stop;
+}
+
+/**
+ * @brief Runs the search and returns raw "path:line:text" output, paths
+ * relative to `root`.
+ * @details The pattern is literal: someone typing "a[0]" into a search
+ * prompt means those four characters, not a regex character class. In a
+ * git repository, git grep: tracked files only, .gitignore honored,
+ * binaries skipped (-I). Elsewhere, the same search done here, over every
+ * file the project walker visits.
+ */
+static char *runSearch(const char *pattern, const char *root) {
+  char *argv[] = {"git", "-C", (char *)root, "grep", "-I", "-n", "--no-color",
+                  "-F", "-e", (char *)pattern, NULL};
+  PlainSearch ps;
+
+  if (projectIsGitRepo(root))
+    return runArgvCaptureQuiet(argv, SEARCH_TIMEOUT_MS, SEARCH_MAX_OUTPUT, NULL);
+
+  memset(&ps, 0, sizeof(ps));
+  ps.pattern = pattern;
+  ps.pattern_len = strlen(pattern);
+  ps.deadline = os_monotonic_ms() + SEARCH_TIMEOUT_MS;
+  if (ps.pattern_len == 0)
+    return NULL;
+  projectWalkFiles(root, plainSearchFile, &ps);
+  return ps.out;
 }
 
 // ─── Parsing ────────────────────────────────────────────────────────────────
@@ -227,8 +301,8 @@ static int parseResults(char *output, const char *root) {
   const char *rel;
   SearchHit *grown;
   SearchHit *hit;
-  for (line = strtok_r(output, "\n", &saveptr); line;
-       line = strtok_r(NULL, "\n", &saveptr)) {
+  for (line = utilStrtok(output, "\n", &saveptr); line;
+       line = utilStrtok(NULL, "\n", &saveptr)) {
     if (s_hit_count >= SEARCH_MAX_HITS) {
       s_truncated = 1;
       break;
@@ -243,7 +317,7 @@ static int parseResults(char *output, const char *root) {
     // relative to (or under) whatever root it was handed. Store both
     // forms: absolute is what opens the file, relative is what reads
     // well in a narrow pane.
-    if (path[0] == '/')
+    if (os_path_is_absolute(path))
       snprintf(abs, sizeof(abs), "%s", path);
     else
       snprintf(abs, sizeof(abs), "%s/%s", root, path);
@@ -258,8 +332,8 @@ static int parseResults(char *output, const char *root) {
     s_hits = grown;
 
     hit = &s_hits[s_hit_count];
-    hit->abs_path = strdup(abs);
-    hit->rel_path = strdup(rel);
+    hit->abs_path = utilStrdup(abs);
+    hit->rel_path = utilStrdup(rel);
     hit->line = line_no;
     hit->text = cleanText(text);
 
@@ -383,6 +457,7 @@ static Buffer *openResultsBuffer(void) {
 
 int projectSearchRun(const char *pattern, const char *root) {
   char resolved[PATH_MAX];
+  char *cwd;
   size_t rlen;
   char *output;
   Buffer *buf;
@@ -393,8 +468,13 @@ int projectSearchRun(const char *pattern, const char *root) {
 
   if (root && *root)
     snprintf(resolved, sizeof(resolved), "%s", root);
-  else if (!getcwd(resolved, sizeof(resolved)))
-    return -1;
+  else {
+    cwd = os_getcwd();
+    if (!cwd)
+      return -1;
+    snprintf(resolved, sizeof(resolved), "%s", cwd);
+    free(cwd);
+  }
 
   // Strip a trailing slash so the "is this path under the root" prefix
   // test below (and the rel_path it produces) doesn't double up on it.
