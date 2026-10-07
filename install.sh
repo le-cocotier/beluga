@@ -24,6 +24,7 @@ ASSUME_YES=0
 SKIP_PACKAGES=0
 DEV_MODE=0
 DEBUG_BUILD=0
+UPDATE=0
 PREFIX="/usr/local/bin"
 
 usage() {
@@ -40,6 +41,7 @@ Usage: ./install.sh [options]
       --dev             Symlink the bundled packages to this checkout instead
                         of copying them, for working on them: edits there are
                         live in the editor and tracked by this repo's git.
+      --update          Pull the new version.
       --debug           Build an unoptimized debug build with APP_DEBUG logging
                         enabled, instead of the default optimized release
                         build. Logs (the editor's own trace calls, plus the
@@ -67,12 +69,22 @@ while [ $# -gt 0 ]; do
         --prefix=*) PREFIX="${1#*=}" ;;
         --skip-packages) SKIP_PACKAGES=1 ;;
         --dev) DEV_MODE=1 ;;
+        --update) UPDATE=1 ;;
         --debug) DEBUG_BUILD=1 ;;
         -h|--help) usage; exit 0 ;;
         *) die "Unknown option: $1 (see --help)" ;;
     esac
     shift
 done
+
+update() {
+    # update the repo
+    git pull
+}
+
+if [ "$UPDATE" -eq 1 ]; then
+  update
+fi
 
 confirm() {
     # confirm "question" — returns success (0) for yes.
