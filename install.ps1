@@ -20,6 +20,10 @@
     Run it with:
         powershell -ExecutionPolicy Bypass -File .\install.ps1
 
+    It works from a clone of the repository (it builds beluga.exe) and from
+    an unzipped release package (it installs the beluga.exe that comes with
+    it).
+
 .PARAMETER Yes
     Don't prompt; assume "yes" (and never overwrite an existing config).
 .PARAMETER Prefix
@@ -34,7 +38,8 @@
     to ~/.beluga/debug.log.
 .PARAMETER Binary
     Install this prebuilt beluga.exe (e.g. from a CI artifact) instead of
-    building one. No compiler needed then.
+    building one. No compiler needed then. Run from an unzipped release
+    package, the script does this by itself with the beluga.exe next to it.
 #>
 [CmdletBinding()]
 param(
@@ -83,9 +88,17 @@ function Test-Command($name) {
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
-if (-not (Test-Path (Join-Path $ScriptDir 'meson.build')) -or
-    -not (Test-Path (Join-Path $ScriptDir 'assets\beluga.txt'))) {
-    Die "This doesn't look like a beluga checkout ($ScriptDir). Run this script from inside the cloned repo."
+if (-not (Test-Path (Join-Path $ScriptDir 'assets\beluga.txt'))) {
+    Die "This doesn't look like beluga ($ScriptDir). Run this script from the cloned repo, or from the unzipped release."
+}
+# Run from an unzipped release (beluga.exe next to this script, no source
+# to build): install that beluga.exe, as -Binary would.
+$PackagedExe = Join-Path $ScriptDir 'beluga.exe'
+if (-not $Binary -and -not (Test-Path (Join-Path $ScriptDir 'meson.build'))) {
+    if (-not (Test-Path $PackagedExe)) {
+        Die "Neither beluga.exe nor the sources (meson.build) are in $ScriptDir."
+    }
+    $Binary = $PackagedExe
 }
 if ($Binary -and -not (Test-Path $Binary)) {
     Die "No such file: $Binary"

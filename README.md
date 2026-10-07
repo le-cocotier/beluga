@@ -22,7 +22,14 @@ Run `./install.sh --help` to see its options (custom install location, non-inter
 ### Windows
 
 Beluga runs natively on Windows 10 (1809 or later) and 11, in Windows Terminal or any
-Windows console — no WSL needed. From PowerShell, in a clone of the repo:
+Windows console — no WSL needed.
+
+The simplest way: download `beluga-<version>-windows-x64.zip` from the
+[Releases](https://git.giorgio-nas.fr/arthur/beluga/releases) page, unzip it, and run
+`install.ps1` in it (right-click → *Run with PowerShell*). No compiler needed; `README.txt`
+in the zip has the details.
+
+To build it yourself instead, from PowerShell in a clone of the repo:
 
 ```
 powershell -ExecutionPolicy Bypass -File .\install.ps1
@@ -45,6 +52,10 @@ Things that work differently on Windows:
   Without it, project search and the file finder still work, on plain directories.
 - **Language servers** installed with npm (`typescript-language-server`, `pyright-langserver`, ...)
   are found as usual: their `.cmd` launchers work.
+
+**Publishing a Windows release** (maintainers): push a tag starting with `v`
+(`git tag v3.3 && git push origin v3.3`). CI cross-compiles `beluga.exe` and attaches the zip
+to a release for that tag (`.gitea/workflows/release-windows.yml`).
 
 To cross-compile `beluga.exe` from Linux: `meson setup --cross-file cross/mingw-w64.ini build-windows && meson compile -C build-windows`
 (needs the `mingw-w64` package).
