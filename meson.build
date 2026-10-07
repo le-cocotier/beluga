@@ -64,8 +64,39 @@ src_files = files(
   'src/file_finder.c'
 )
 
+# Windows (native, built with MinGW-w64 gcc). The Unix sources compile
+# unchanged against compat/win32/ — stand-ins for termios.h, sys/select.h,
+# poll.h, ... — and include/platform_win32.h, force-included into every
+# file; src/platform_win32.c implements them. See platform_win32.h.
+inc_dirs = []
+extra_sources = []
+link_args = []
+extra_deps = []
+if host_machine.system() == 'windows'
+  if cc.get_id() != 'gcc'
+    error('Windows builds need MinGW-w64 gcc (MSYS2 UCRT64, WinLibs, or a cross-compiler); MSVC is not supported.')
+  endif
+  inc_dirs += include_directories('compat/win32')
+  add_project_arguments(
+    '-include', meson.current_source_dir() / 'include' / 'platform_win32.h',
+    '-D_WIN32_WINNT=0x0A00',
+    # C99 printf (%zu, %lld, ...) instead of msvcrt.dll's, which lacks them.
+    '-D__USE_MINGW_ANSI_STDIO=1',
+    language : 'c')
+  extra_sources += files('src/platform_win32.c')
+  # The manifest sets the process code page to UTF-8 (see windows/beluga.manifest).
+  extra_sources += import('windows').compile_resources('windows/beluga.rc',
+    depend_files : files('windows/beluga.manifest'))
+  extra_deps += cc.find_library('user32') # clipboard
+  extra_deps += cc.find_library('shell32') # file operations (dired)
+  # One self-contained beluga.exe: no libgcc/libwinpthread DLLs to ship next to it.
+  link_args += ['-static']
+endif
+
 # Executable
 executable('beluga',
-  src_files,
-  dependencies: [m, thread_dep, util_dep]
+  src_files + extra_sources,
+  include_directories : inc_dirs,
+  dependencies : [m, thread_dep, util_dep] + extra_deps,
+  link_args : link_args
 )

@@ -170,6 +170,10 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode
   Utf8Char *full_path = NULL;
   Utf8Char path[PATH_MAX];
   char *pwd;
+  int absolute;
+#ifdef _WIN32
+  char cwd[PATH_MAX];
+#endif
   if (placeHolder != NULL) {
     buf_len = utf8Printf(buf, PATH_MAX, "%u",
                          placeHolder); // zero not counted by snprintf
@@ -202,8 +206,19 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode
     } else if (bPathMode && *c->character == '\t') {
       // Completion of first path
        // getenv is allocating memory
-      if (*buf[0].character != '/') {
+#ifdef _WIN32
+      // "C:/..." is absolute too; and Windows shells don't export PWD.
+      absolute = *buf[0].character == '/' ||
+                 (isalpha((unsigned char)*buf[0].character) && *buf[1].character == ':');
+#else
+      absolute = *buf[0].character == '/';
+#endif
+      if (!absolute) {
+#ifdef _WIN32
+        pwd = getcwd(cwd, sizeof(cwd));
+#else
         pwd = getenv("PWD");
+#endif
         appDebug("%s\n", pwd);
         // Replace path by pwd + last word
         utf8Printf(path, PATH_MAX, "%s/%u", pwd, buf);

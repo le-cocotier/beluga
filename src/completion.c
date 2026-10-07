@@ -6,6 +6,7 @@
 #include "../include/completion.h"
 #include "../include/galloc.h"
 
+#include <ctype.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -297,6 +298,75 @@ static void lsp_on_completion_response(LspClient *lsp, const char *result_json)
     lsp->completion_requested = 0;
 }
 
+// A file's URI, as sent to the server. A Windows path ("C:/dir/f.c") needs
+// the third slash: file:///C:/dir/f.c.
+#ifdef _WIN32
+#define LSP_FILE_URI_FMT "file:///%s"
+#else
+#define LSP_FILE_URI_FMT "file://%s"
+#endif
+
+static int hexDigitValue(const char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/**
+ * @brief The local path a `file://` URI from the server names.
+ * @details Percent-escapes are decoded — servers escape spaces as %20, and
+ * on Windows many send the drive as "c%3A" — and on Windows the leading
+ * slash before the drive is dropped and the drive letter upper-cased, to
+ * match the paths realpath() gives the editor's own buffers.
+ * @return 1 on success, 0 if `uri` isn't a file:// URI.
+ */
+static int lspUriToPath(const char *uri, char *out, const size_t out_size)
+{
+    const char *p;
+    size_t n = 0;
+    int hi;
+    int lo;
+
+    if (!uri || strncmp(uri, "file://", 7) != 0 || out_size == 0)
+        return 0;
+    p = uri + 7;
+    while (*p && n + 1 < out_size)
+    {
+        hi = p[0] == '%' ? hexDigitValue(p[1]) : -1;
+        lo = hi >= 0 ? hexDigitValue(p[2]) : -1;
+        if (hi >= 0 && lo >= 0)
+        {
+            out[n++] = (char) (hi * 16 + lo);
+            p += 3;
+        }
+        else
+            out[n++] = *p++;
+    }
+    out[n] = '\0';
+#ifdef _WIN32
+    if (out[0] == '/' && isalpha((unsigned char) out[1]) && out[2] == ':')
+        memmove(out, out + 1, strlen(out)); // "/C:/dir" -> "C:/dir"
+    if (isalpha((unsigned char) out[0]) && out[1] == ':')
+        out[0] = (char) toupper((unsigned char) out[0]);
+#endif
+    return 1;
+}
+
+/**
+ * @brief Do two paths name the same file? (Case-insensitively on Windows,
+ * where file names are.)
+ */
+static int lspSamePath(const char *a, const char *b)
+{
+#ifdef _WIN32
+    return _stricmp(a, b) == 0;
+#else
+    return strcmp(a, b) == 0;
+#endif
+}
+
 /**
  * @brief Maps a `file://...` URI (as sent back by the server in
  * publishDiagnostics) to the buffer_id of the matching open buffer, or -1.
@@ -305,20 +375,21 @@ static int lsp_find_buffer_id_by_uri(const char *uri)
 {
     int first_buffer_id;
     struct buffer_t *b;
-    char buf_uri[PATH_MAX + 8];
+    char path[PATH_MAX];
     char *fullname_str;
-    if (E.buffers == NULL) return -1;
+    int same;
+    if (E.buffers == NULL || !lspUriToPath(uri, path, sizeof(path))) return -1;
     first_buffer_id = E.buffers->buffer_id;
     b = E.buffers;
     do
     {
-        if (b->type == FILE_BUFF)
+        if (b->type == FILE_BUFF && b->fullname)
         {
             fullname_str = (char*) utf8ToString(b->fullname);
-            snprintf(buf_uri, sizeof(buf_uri), "file://%s", fullname_str);
+            same = fullname_str && lspSamePath(fullname_str, path);
             gfree(fullname_str);
 
-            if (strcmp(buf_uri, uri) == 0)
+            if (same)
                 return b->buffer_id;
         }
         b = b->next;
@@ -342,18 +413,19 @@ static void lspJumpToUri(const char *uri, const int line, const int character)
     int buffer_id;
     Utf8Char *path;
     struct buffer_t *buf;
-    if (strncmp(uri, "file://", 7) != 0)
+    char local[PATH_MAX];
+    if (!lspUriToPath(uri, local, sizeof(local)))
         return; // not a local file — nothing this editor can open
 
     buffer_id = lsp_find_buffer_id_by_uri(uri);
     if (buffer_id < 0)
     {
-        path = stringToUtf8((unsigned char *) uri + 7);
+        path = stringToUtf8((unsigned char *) local);
         buffer_id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
         gfree(path);
         if (buffer_id < 0)
         {
-            editorSetStatusMessage("Couldn't open %s", uri + 7);
+            editorSetStatusMessage("Couldn't open %s", local);
             return;
         }
     }
@@ -511,7 +583,8 @@ static void applyTextEditsToUri(const char *uri, const cJSON *edits_array)
     int buffer_id;
     Utf8Char *path;
     struct buffer_t *buf;
-    if (strncmp(uri, "file://", 7) != 0) return;
+    char local[PATH_MAX];
+    if (!lspUriToPath(uri, local, sizeof(local))) return;
     count = cJSON_GetArraySize(edits_array);
     if (count <= 0) return;
 
@@ -539,7 +612,7 @@ static void applyTextEditsToUri(const char *uri, const cJSON *edits_array)
     buffer_id = lsp_find_buffer_id_by_uri(uri);
     if (buffer_id < 0)
     {
-        path = stringToUtf8((unsigned char *) uri + 7);
+        path = stringToUtf8((unsigned char *) local);
         buffer_id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);
         gfree(path);
     }
@@ -748,6 +821,26 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
     if (pipe(stdin_pipe) == -1 || pipe(stdout_pipe) == -1)
         return -1;
 
+#ifdef _WIN32
+    // The server's stdin/stdout are the JSON-RPC transport; its stderr goes
+    // where the Unix branch below sends it (the debug log, or nowhere).
+    // npm-installed servers are .cmd scripts: belugaSpawn() runs those too.
+#ifdef APP_DEBUG
+    dbg_fd = appDebugFd();
+    pid = belugaSpawn(server_argv, stdin_pipe[0], stdout_pipe[1], dbg_fd, 0);
+#else
+    (void) devnull;
+    pid = belugaSpawn(server_argv, stdin_pipe[0], stdout_pipe[1], -1, 0);
+#endif
+    if (pid < 0)
+    {
+        close(stdin_pipe[0]);
+        close(stdin_pipe[1]);
+        close(stdout_pipe[0]);
+        close(stdout_pipe[1]);
+        return -1;
+    }
+#else
     pid = fork();
     if (pid == 0)
     {
@@ -785,6 +878,7 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
         execvp(server_argv[0], server_argv);
         _exit(127);
     }
+#endif
     else if (pid > 0)
     {
         close(stdin_pipe[0]);
@@ -807,7 +901,7 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
         flags = fcntl(lsp->read_from_server_fd, F_GETFL, 0);
         fcntl(lsp->read_from_server_fd, F_SETFL, flags | O_NONBLOCK);
 
-        snprintf(root_uri, sizeof(root_uri), "file://%s", project_root);
+        snprintf(root_uri, sizeof(root_uri), LSP_FILE_URI_FMT, project_root);
 
         init_id = lsp->next_id++;
 
@@ -885,7 +979,7 @@ static int lspBufferUri(const struct buffer_t *buf, char *uri, size_t uri_size)
     if (!full)
         return 0;
 
-    snprintf(uri, uri_size, "file://%s", full);
+    snprintf(uri, uri_size, LSP_FILE_URI_FMT, full);
     gfree(full);
     return 1;
 }

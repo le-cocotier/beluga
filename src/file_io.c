@@ -184,6 +184,9 @@ void editorOpen(struct buffer_t* buffer) {
   int line_length;
   int expanded_len;
   Utf8Char* expanded;
+  int first_line;
+  int ends_with_cr;
+  buffer->crlf = 0;
   if (file_content == NULL)
   {
     // File doesn't exist yet: start with an empty, editable buffer, same
@@ -195,6 +198,7 @@ void editorOpen(struct buffer_t* buffer) {
 
   pFileContent = file_content;
   pEndLine = file_content;
+  first_line = 1;
   while (*pFileContent->character != '\0')
   {
     while (*pEndLine->character != '\n' && *pEndLine->character != '\0')
@@ -203,6 +207,17 @@ void editorOpen(struct buffer_t* buffer) {
       pEndLine++;
     }
     line_length = (int) (pEndLine - pFileContent);
+
+    // CRLF file (Windows, or a Git for Windows checkout): the first line
+    // decides, and every "\r\n" then loses its '\r' — kept, it showed up
+    // at the end of every line and was saved back doubled.
+    ends_with_cr = line_length > 0 && *pEndLine->character == '\n' &&
+                   *pFileContent[line_length - 1].character == '\r';
+    if (first_line)
+      buffer->crlf = ends_with_cr;
+    first_line = 0;
+    if (buffer->crlf && ends_with_cr)
+      line_length--;
 
     expanded_len = 0;
     expanded = expandTabsForLine(pFileContent, line_length, &expanded_len);
@@ -282,7 +297,10 @@ void editorSave() {
       }
       gfree(string_line);
       string_line = NULL;
-      fwrite("\n", 1, 1, fd);
+      if (buffer->crlf)
+        fwrite("\r\n", 1, 2, fd);
+      else
+        fwrite("\n", 1, 1, fd);
     }
     buffer->dirty = 0;
     fclose(fd);

@@ -161,6 +161,19 @@ char *runCommandCapture(const char *cmd, const long timeout_ms, const size_t max
     pid_t pid;
     if (pipe(pipefd) != 0) return NULL;
 
+#ifdef _WIN32
+    // cmd.exe stands in for /bin/sh, so `cmd` must be written for it —
+    // Windows callers build their commands as argv for runArgvCapture*()
+    // instead. stderr goes to NUL: there's no terminal it could reach.
+    pid = belugaSpawnShell(cmd, -1, pipefd[1], -1, BELUGA_SPAWN_NO_PROMPT);
+    close(pipefd[1]);
+    if (pid < 0)
+    {
+        close(pipefd[0]);
+        return NULL;
+    }
+    return captureChild(pid, pipefd[0], timeout_ms, max_bytes, NULL);
+#else
     pid = fork();
     if (pid < 0)
     {
@@ -185,10 +198,15 @@ char *runCommandCapture(const char *cmd, const long timeout_ms, const size_t max
 
     close(pipefd[1]);
     return captureChild(pid, pipefd[0], timeout_ms, max_bytes, NULL);
+#endif
 }
 
-char *runArgvCapture(char *const argv[], const long timeout_ms, const size_t max_bytes,
-                     int *exit_status)
+/**
+ * @brief runArgvCapture() and runArgvCaptureQuiet(): the same, except for
+ * where the child's stderr goes (into the captured output, or nowhere).
+ */
+static char *argvCapture(char *const argv[], const long timeout_ms, const size_t max_bytes,
+                         int *exit_status, const int keep_stderr)
 {
     int pipefd[2];
     pid_t pid;
@@ -196,6 +214,24 @@ char *runArgvCapture(char *const argv[], const long timeout_ms, const size_t max
     if (exit_status) *exit_status = -1;
     if (!argv || !argv[0] || pipe(pipefd) != 0) return NULL;
 
+#ifdef _WIN32
+    (void) devnull;
+    // stdin from NUL, output to the pipe, a hidden console of its own and
+    // GIT_TERMINAL_PROMPT=0: a password prompt fails instead of waiting
+    // for input that will never come (what setsid() achieves on Unix).
+    pid = belugaSpawn(argv, -1, pipefd[1], keep_stderr ? pipefd[1] : -1,
+                      BELUGA_SPAWN_NO_PROMPT);
+    close(pipefd[1]);
+    if (pid < 0)
+    {
+        // Report a program that doesn't exist the way a failed execvp()
+        // does on Unix: exit code 127, no output.
+        if (exit_status && errno == ENOENT) *exit_status = 127;
+        close(pipefd[0]);
+        return NULL;
+    }
+    return captureChild(pid, pipefd[0], timeout_ms, max_bytes, exit_status);
+#else
     pid = fork();
     if (pid < 0)
     {
@@ -216,12 +252,15 @@ char *runArgvCapture(char *const argv[], const long timeout_ms, const size_t max
         // which the kill(-pid) on timeout relies on, as setpgid did.)
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
-        dup2(pipefd[1], STDERR_FILENO);
+        if (keep_stderr)
+            dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
-        devnull = open("/dev/null", O_RDONLY);
+        devnull = open("/dev/null", O_RDWR);
         if (devnull >= 0)
         {
             dup2(devnull, STDIN_FILENO);
+            if (!keep_stderr)
+                dup2(devnull, STDERR_FILENO);
             close(devnull);
         }
         setsid();
@@ -231,6 +270,19 @@ char *runArgvCapture(char *const argv[], const long timeout_ms, const size_t max
 
     close(pipefd[1]);
     return captureChild(pid, pipefd[0], timeout_ms, max_bytes, exit_status);
+#endif
+}
+
+char *runArgvCapture(char *const argv[], const long timeout_ms, const size_t max_bytes,
+                     int *exit_status)
+{
+    return argvCapture(argv, timeout_ms, max_bytes, exit_status, 1);
+}
+
+char *runArgvCaptureQuiet(char *const argv[], const long timeout_ms, const size_t max_bytes,
+                          int *exit_status)
+{
+    return argvCapture(argv, timeout_ms, max_bytes, exit_status, 0);
 }
 
 void shellQuote(const char *s, char *out, const size_t out_size)

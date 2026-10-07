@@ -658,17 +658,33 @@ Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx) {
   char cmd[PATH_MAX + 64];
   char *out;
   Lisp result;
+#ifdef _WIN32
+  char *argv[6];
+#endif
   (void)args;
   (void)e;
   if (getcwd(cwd, sizeof(cwd)) == NULL)
     return lisp_make_string2("", ctx);
 
+#ifdef _WIN32
+  // No sh on Windows: the same git command, as argv.
+  (void)qdir;
+  (void)cmd;
+  argv[0] = "git";
+  argv[1] = "-C";
+  argv[2] = cwd;
+  argv[3] = "rev-parse";
+  argv[4] = "--show-toplevel";
+  argv[5] = NULL;
+  out = runArgvCaptureQuiet(argv, 1000, PATH_MAX, NULL);
+#else
   shellQuote(cwd, qdir, sizeof(qdir));
 
   snprintf(cmd, sizeof(cmd), "git -C %s rev-parse --show-toplevel 2>/dev/null",
            qdir);
 
   out = runCommandCapture(cmd, 1000, PATH_MAX);
+#endif
   if (!out)
     return lisp_make_string2("", ctx);
 
@@ -2105,16 +2121,28 @@ Lisp l_paneWidth(Lisp args, LispError *e, LispContext ctx) {
  * @brief Collapses "." / ".." / repeated slashes in an absolute path,
  * lexically — the path doesn't have to exist (a rename or mkdir target
  * usually doesn't yet), so realpath() isn't an option.
- * @param in Absolute path (starting with '/')
- * @param out Receives the normalized path, never empty ("/" at minimum)
+ * @param in Absolute path (starting with '/', or on Windows with a drive
+ * letter: "C:/...")
+ * @param out Receives the normalized path, never empty ("/" at minimum,
+ * "C:/" on Windows)
  */
 static void normalizePath(const char *in, char *out, const size_t out_size) {
   size_t len = 0;
+  size_t root = 0; // a drive prefix ("C:") is kept, and ".." stops at it
   const char *seg = in;
   const char *end;
   size_t seg_len;
 
   out[0] = '\0';
+#ifdef _WIN32
+  if (in[0] && in[1] == ':' && out_size > 3) {
+    out[0] = in[0];
+    out[1] = ':';
+    out[2] = '\0';
+    root = len = 2;
+    seg = in + 2;
+  }
+#endif
   while (*seg) {
     while (*seg == '/')
       seg++;
@@ -2126,9 +2154,9 @@ static void normalizePath(const char *in, char *out, const size_t out_size) {
     if (seg_len == 0 || (seg_len == 1 && seg[0] == '.')) {
       // empty (trailing slash) or "." — nothing to add
     } else if (seg_len == 2 && seg[0] == '.' && seg[1] == '.') {
-      while (len > 0 && out[len - 1] != '/')
+      while (len > root && out[len - 1] != '/')
         len--;
-      if (len > 0)
+      if (len > root)
         len--; // drop the slash too
       out[len] = '\0';
     } else if (len + 1 + seg_len + 1 <= out_size) {
@@ -2139,9 +2167,9 @@ static void normalizePath(const char *in, char *out, const size_t out_size) {
     }
     seg = end;
   }
-  if (len == 0 && out_size >= 2) {
-    out[0] = '/';
-    out[1] = '\0';
+  if (len == root && out_size >= root + 2) {
+    out[root] = '/';
+    out[root + 1] = '\0';
   }
 }
 
@@ -2160,6 +2188,9 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
   char cwd[PATH_MAX];
   char joined[PATH_MAX * 2];
   char out[PATH_MAX];
+#ifdef _WIN32
+  char *p;
+#endif
 
   if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
     *e = LISP_ERROR_ARG_TYPE;
@@ -2173,7 +2204,7 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
   home = getenv("HOME");
   if (path[0] == '~' && (path[1] == '/' || path[1] == '\0') && home) {
     snprintf(joined, sizeof(joined), "%s/%s", home, path + 1);
-  } else if (path[0] == '/') {
+  } else if (IS_ABS_PATH(path)) {
     snprintf(joined, sizeof(joined), "%s", path);
   } else {
     if (!base || base[0] == '\0') {
@@ -2184,6 +2215,12 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
     snprintf(joined, sizeof(joined), "%s/%s", base, path);
   }
 
+#ifdef _WIN32
+  // A path typed (or pasted) the Windows way: "C:\\dir\\file".
+  for (p = joined; *p; p++)
+    if (*p == '\\')
+      *p = '/';
+#endif
   normalizePath(joined, out, sizeof(out));
   return lisp_make_string2(out, ctx);
 }
@@ -2295,6 +2332,251 @@ Lisp l_fileAttributes(Lisp args, LispError *e, LispContext ctx) {
  * program couldn't be run, -1 if it was killed; output with trailing
  * newlines stripped, "" if none.
  */
+/**
+ * @brief Lisp function: which platform the editor runs on
+ * @details (system-type) — "windows", "darwin" (macOS), "linux", or
+ * "unix" for anything else. For packages whose commands differ by
+ * platform (dired, on Windows, has no rm/mv/cp to run).
+ * @return Lisp string
+ */
+Lisp l_systemType(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+#if defined(_WIN32)
+  return lisp_make_string2("windows", ctx);
+#elif defined(__APPLE__)
+  return lisp_make_string2("darwin", ctx);
+#elif defined(__linux__)
+  return lisp_make_string2("linux", ctx);
+#else
+  return lisp_make_string2("unix", ctx);
+#endif
+}
+
+/**
+ * @brief Lisp function: quote a string for shell-run
+ * @details (shell-quote "it's") — one literal argument for the platform's
+ * shell: 'it'\''s' for sh, 'it''s' for PowerShell.
+ * @return Lisp string
+ */
+Lisp l_shellQuote(Lisp args, LispError *e, LispContext ctx) {
+  const char *in;
+  char *out;
+  size_t size;
+  Lisp result;
+#ifdef _WIN32
+  const unsigned char *p;
+  size_t o = 0;
+#endif
+
+  if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  in = lisp_string(lisp_car(args));
+  size = strlen(in) * 4 + 3;
+  out = galloc(size);
+  if (!out)
+    return lisp_null();
+#ifdef _WIN32
+  // PowerShell single quotes: everything literal, ' doubled — and so are
+  // the typographic ones (U+2018-U+201B), which PowerShell also accepts
+  // as quote characters.
+  out[o++] = '\'';
+  for (p = (const unsigned char *)in; *p; p++) {
+    if (*p == '\'')
+      out[o++] = '\'';
+    else if (p[0] == 0xE2 && p[1] == 0x80 && p[2] >= 0x98 && p[2] <= 0x9B) {
+      memcpy(out + o, p, 3);
+      o += 3;
+    }
+    out[o++] = (char)*p;
+  }
+  out[o++] = '\'';
+  out[o] = '\0';
+#else
+  shellQuote(in, out, size);
+#endif
+  result = lisp_make_string2(out, ctx);
+  gfree(out);
+  return result;
+}
+
+/**
+ * @brief Lisp function: run a shell command and capture its output
+ * @details (shell-run "command") — like process-run, but through the
+ * platform's shell: /bin/sh -c on Unix, PowerShell on Windows (pwsh if
+ * installed). Same contract: stdout and stderr together, stdin empty, a
+ * 60s deadline, and (exit-code . "output").
+ * @return Lisp pair (exit-code . output)
+ */
+Lisp l_shellRun(Lisp args, LispError *e, LispContext ctx) {
+  const char *command;
+  char *argv[6];
+  char *out;
+  int status;
+  Lisp result;
+#ifdef _WIN32
+  static const char prologue[] =
+      "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+      "$OutputEncoding = [Text.Encoding]::UTF8\n";
+  // $? and $LASTEXITCODE of the user's command, as the process exit code:
+  // a failing program's own code, 1 for a failed cmdlet, else 0.
+  static const char epilogue[] =
+      "\n$__beluga_ok = $?; if ($LASTEXITCODE) { exit $LASTEXITCODE }; "
+      "if (-not $__beluga_ok) { exit 1 }";
+  char *script;
+  char *encoded;
+  size_t len;
+#endif
+
+  if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  command = lisp_string(lisp_car(args));
+
+#ifdef _WIN32
+  len = sizeof(prologue) + strlen(command) + sizeof(epilogue);
+  script = galloc(len);
+  if (!script)
+    return lisp_null();
+  snprintf(script, len, "%s%s%s", prologue, command, epilogue);
+  encoded = belugaPowerShellEncode(script);
+  gfree(script);
+  if (!encoded)
+    return lisp_null();
+  argv[0] = (char *)belugaPowerShell();
+  argv[1] = "-NoProfile";
+  argv[2] = "-NonInteractive";
+  argv[3] = "-EncodedCommand";
+  argv[4] = encoded;
+  argv[5] = NULL;
+  out = runArgvCapture(argv, 60000, 1 << 20, &status);
+  free(encoded);
+#else
+  argv[0] = "/bin/sh";
+  argv[1] = "-c";
+  argv[2] = (char *)command;
+  argv[3] = NULL;
+  out = runArgvCapture(argv, 60000, 1 << 20, &status);
+#endif
+
+  result = lisp_cons(lisp_make_int(status), lisp_make_string2(out ? out : "", ctx), ctx);
+  gfree(out);
+  return result;
+}
+
+#ifdef _WIN32
+/**
+ * @brief (code . message) for the file-operation builtins below — the
+ * same shape as process-run's (exit-code . output).
+ */
+static Lisp fileOpResult(const int code, const char *message, LispContext ctx) {
+  return lisp_cons(lisp_make_int(code), lisp_make_string2(message, ctx), ctx);
+}
+
+/**
+ * @brief The strings of a Lisp list, as a galloc'd array (NULL on a
+ * non-string element).
+ */
+static const char **stringList(Lisp list, int *count) {
+  Lisp it;
+  const char **out;
+  int n = 0;
+  for (it = list; lisp_is_pair(it); it = lisp_cdr(it)) {
+    if (lisp_type(lisp_car(it)) != LISP_STRING)
+      return NULL;
+    n++;
+  }
+  out = galloc((size_t)(n + 1) * sizeof(char *));
+  if (!out)
+    return NULL;
+  n = 0;
+  for (it = list; lisp_is_pair(it); it = lisp_cdr(it))
+    out[n++] = lisp_string(lisp_car(it));
+  out[n] = NULL;
+  *count = n;
+  return out;
+}
+
+/**
+ * @brief Lisp function (Windows only): delete a file or a directory tree
+ * @details (delete-path "path") — permanently, like rm -rf; there are no
+ * rm/mv/cp programs to run on Windows. Returns (0 . "") or
+ * (error-code . "message").
+ */
+Lisp l_deletePath(Lisp args, LispError *e, LispContext ctx) {
+  const char *path;
+  char err[256];
+  int code;
+  if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  path = lisp_string(lisp_car(args));
+  code = belugaFileOperation(BELUGA_FILEOP_DELETE, &path, 1, NULL, err, sizeof(err));
+  return fileOpResult(code, err, ctx);
+}
+
+/**
+ * @brief move-paths / copy-paths: (op '("src" ...) "dest").
+ */
+static Lisp transferPaths(const int op, Lisp args, LispError *e, LispContext ctx) {
+  const char **paths;
+  const char *dest;
+  char err[256];
+  int count = 0;
+  int code;
+  if (!lisp_is_pair(args) || !lisp_is_pair(lisp_cdr(args)) ||
+      lisp_type(lisp_car(lisp_cdr(args))) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  paths = stringList(lisp_car(args), &count);
+  if (!paths) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  dest = lisp_string(lisp_car(lisp_cdr(args)));
+  code = belugaFileOperation(op, paths, count, dest, err, sizeof(err));
+  gfree(paths);
+  return fileOpResult(code, err, ctx);
+}
+
+/**
+ * @brief Lisp function (Windows only): move or rename, like mv
+ * @details (move-paths '("a" "b") "dest") — into dest when it's an
+ * existing directory, else (one source) renamed to dest.
+ */
+Lisp l_movePaths(Lisp args, LispError *e, LispContext ctx) {
+  return transferPaths(BELUGA_FILEOP_MOVE, args, e, ctx);
+}
+
+/**
+ * @brief Lisp function (Windows only): copy, like cp -R
+ * @details (copy-paths '("a" "dir") "dest") — directories recursively.
+ */
+Lisp l_copyPaths(Lisp args, LispError *e, LispContext ctx) {
+  return transferPaths(BELUGA_FILEOP_COPY, args, e, ctx);
+}
+
+/**
+ * @brief Lisp function (Windows only): create a directory and its parents
+ * @details (make-directories "a/b/c") — like mkdir -p.
+ */
+Lisp l_makeDirectories(Lisp args, LispError *e, LispContext ctx) {
+  char err[256];
+  int code;
+  if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  code = belugaMakeDirectories(lisp_string(lisp_car(args)), err, sizeof(err));
+  return fileOpResult(code, err, ctx);
+}
+#endif
+
 Lisp l_processRun(Lisp args, LispError *e, LispContext ctx) {
   Lisp it;
   int argc = 0;

@@ -3,6 +3,7 @@
 #include "../include/galloc.h"
 
 #include <stdarg.h>
+#include <string.h>
 #include <stdlib.h>
 
 #include "../include/ansi_parser.h"
@@ -91,6 +92,28 @@ int editorMoveCursor(const int key) {
 
 // TODO(TODO.md): paste — CRLF, bulk insert (see editorPaste in builtins.c)
 
+#ifdef _WIN32
+// The Windows clipboard, through its own API (platform_win32.c) — no
+// helper program to run. Line endings are converted both ways there.
+char *editorGetClipboard(void) {
+  char *text = belugaClipboardGet();
+  size_t len;
+  char *buf;
+  if (!text)
+    return NULL;
+  len = strlen(text);
+  buf = galloc(len + 1); // callers gfree() it
+  if (buf)
+    memcpy(buf, text, len + 1);
+  free(text);
+  return buf;
+}
+
+void editorSetClipboard(const char *text, const int len) {
+  if (text && len > 0)
+    belugaClipboardSet(text, (size_t)len);
+}
+#else
 char *editorGetClipboard(void) {
   FILE *pipe = popen(CLIPBOARD_PASTE_CMD, "r");
   size_t cap;
@@ -134,6 +157,7 @@ void editorSetClipboard(const char *text, const int len) {
   fwrite(text, 1, len, pipe);
   pclose(pipe);
 }
+#endif
 
 void editorRunLoop(void) {
   // Polled every tick instead of driven by SIGWINCH: nothing ever actually

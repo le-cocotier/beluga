@@ -2186,11 +2186,18 @@ Lisp lisp_read_path(const char *path, LispError* out_error, LispContext ctx)
 
     return l;
 #else
-    FILE* file = fopen(path);
-    lisp_read_file(file, out_error, ctx);
-    fclose(path);
+    // No mmap (Windows): read it through stdio instead. This branch had
+    // never been compiled before the Windows port — it called fopen()
+    // without a mode, fclose()d the path, and threw the result away.
+    FILE* file = fopen(path, "rb");
+    if (!file) {
+        *out_error = LISP_ERROR_FILE_OPEN;
+        return lisp_eof();
+    }
+    Lisp l = lisp_read_file(file, out_error, ctx);
+    fclose(file);
+    return l;
 #endif
-    return lisp_eof();
 }
 
 Lisp lisp_env_extend(Lisp l, Lisp table, LispContext ctx) { return lisp_cons(table, l, ctx); }

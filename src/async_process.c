@@ -54,6 +54,18 @@ int asyncProcessStart(char *const argv[], const Lisp callback) {
   if (pipe(pipefd) != 0)
     return -1;
 
+#ifdef _WIN32
+  // Same contract as below: no shell, stdout+stderr into the pipe, stdin
+  // from NUL, and no way to prompt (hidden console of its own,
+  // GIT_TERMINAL_PROMPT=0).
+  (void)devnull;
+  pid = belugaSpawn(argv, -1, pipefd[1], pipefd[1], BELUGA_SPAWN_NO_PROMPT);
+  if (pid < 0) {
+    close(pipefd[0]);
+    close(pipefd[1]);
+    return -1;
+  }
+#else
   pid = fork();
   if (pid < 0) {
     close(pipefd[0]);
@@ -78,6 +90,7 @@ int asyncProcessStart(char *const argv[], const Lisp callback) {
     execvp(argv[0], argv);
     _exit(127);
   }
+#endif
 
   close(pipefd[1]);
   fcntl(pipefd[0], F_SETFL, O_NONBLOCK);

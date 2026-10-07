@@ -31,6 +31,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
 
 extern EditorConfig E;
 
@@ -51,12 +55,19 @@ static int rootIsGitRepo(const char *root) {
   char cmd[PATH_MAX + 96];
   char *out;
   int yes;
+#ifdef _WIN32
+  char *argv[] = {"git", "-C", (char *)root, "rev-parse", "--is-inside-work-tree", NULL};
+  (void)qroot;
+  (void)cmd;
+  out = runArgvCaptureQuiet(argv, 1000, 64, NULL);
+#else
   shellQuote(root, qroot, sizeof(qroot));
 
   snprintf(cmd, sizeof(cmd),
            "git -C %s rev-parse --is-inside-work-tree 2>/dev/null", qroot);
 
   out = runCommandCapture(cmd, 1000, 64);
+#endif
   if (!out)
     return 0;
   yes = (strncmp(out, "true", 4) == 0);
@@ -72,6 +83,150 @@ static int rootIsGitRepo(const char *root) {
  * find(1) from the root with the usual heavy directories pruned. Both are
  * run with cwd = root so every path comes back root-relative.
  */
+#ifdef _WIN32
+// ─── Windows: the same lists, without sh, tr, sort or find ──────────────────
+
+typedef struct {
+  char *text; // newline-separated, galloc'd
+  size_t len;
+  size_t cap;
+  int full;   // FF_MAX_OUTPUT reached
+} PathList;
+
+static void pathListAdd(PathList *l, const char *path) {
+  const size_t n = strlen(path);
+  char *grown;
+  size_t cap;
+  if (l->full)
+    return;
+  if (l->len + n + 2 > FF_MAX_OUTPUT) {
+    l->full = 1;
+    return;
+  }
+  if (l->len + n + 2 > l->cap) {
+    cap = l->cap ? l->cap : 4096;
+    while (l->len + n + 2 > cap)
+      cap *= 2;
+    grown = grealloc(l->text, cap);
+    if (!grown) {
+      l->full = 1;
+      return;
+    }
+    l->text = grown;
+    l->cap = cap;
+  }
+  memcpy(l->text + l->len, path, n);
+  l->len += n;
+  l->text[l->len++] = '\n';
+  l->text[l->len] = '\0';
+}
+
+static int comparePaths(const void *a, const void *b) {
+  return strcmp(*(char *const *)a, *(char *const *)b); // LC_ALL=C order
+}
+
+/**
+ * @brief Sorts the lines of `text` (separated by `sep`) byte-wise and drops
+ * duplicates — `LC_ALL=C sort -u`. Returns a galloc'd,
+ * newline-separated copy; consumes `text`.
+ */
+static char *sortUniqueLines(char *text, const char sep) {
+  size_t count = 0;
+  size_t cap = 1024;
+  char **lines = galloc(cap * sizeof(char *));
+  char **grown;
+  char *p = text;
+  char *end;
+  PathList out = {NULL, 0, 0, 0};
+  size_t i;
+
+  if (!lines) {
+    gfree(text);
+    return NULL;
+  }
+  while (*p) {
+    end = strchr(p, sep);
+    if (end)
+      *end = '\0';
+    if (*p) {
+      if (count == cap) {
+        cap *= 2;
+        grown = grealloc(lines, cap * sizeof(char *));
+        if (!grown)
+          break;
+        lines = grown;
+      }
+      lines[count++] = p;
+    }
+    if (!end)
+      break;
+    p = end + 1;
+  }
+  qsort(lines, count, sizeof(char *), comparePaths);
+  for (i = 0; i < count; i++)
+    if (i == 0 || strcmp(lines[i], lines[i - 1]) != 0)
+      pathListAdd(&out, lines[i]);
+  gfree(lines);
+  gfree(text);
+  return out.text;
+}
+
+/**
+ * @brief Adds every file under root/rel to `list`, pruning the same
+ * directories as the Unix find(1) branch.
+ */
+static void walkFiles(const char *root, const char *rel, PathList *list) {
+  char dir_path[PATH_MAX];
+  char child_rel[PATH_MAX];
+  char child_path[PATH_MAX];
+  struct stat st;
+  struct dirent *entry;
+  DIR *dir;
+  const char *name;
+
+  snprintf(dir_path, sizeof(dir_path), "%s%s%s", root, *rel ? "/" : "", rel);
+  dir = opendir(dir_path);
+  if (!dir)
+    return;
+  while (!list->full && (entry = readdir(dir)) != NULL) {
+    name = entry->d_name;
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+      continue;
+    snprintf(child_rel, sizeof(child_rel), "%s%s%s", rel, *rel ? "/" : "", name);
+    snprintf(child_path, sizeof(child_path), "%s/%s", root, child_rel);
+    if (stat(child_path, &st) != 0)
+      continue;
+    if (S_ISDIR(st.st_mode)) {
+      if (strcmp(name, ".git") == 0 || strcmp(name, "node_modules") == 0 ||
+          strcmp(name, "build") == 0 || strcmp(name, ".beluga") == 0 ||
+          strcmp(name, "dist") == 0)
+        continue;
+      walkFiles(root, child_rel, list);
+    } else if (S_ISREG(st.st_mode)) {
+      pathListAdd(list, child_rel);
+    }
+  }
+  closedir(dir);
+}
+
+static char *listProjectFiles(const char *root) {
+  // Newline-separated rather than -z: the captured output is a C string.
+  // Safe here — git only quotes names containing '"', '\\' or control
+  // characters, none of which Windows allows in a file name, and
+  // core.quotePath=false keeps non-ASCII names as they are.
+  char *argv[] = {"git", "-c", "core.quotePath=false", "-C", (char *)root, "ls-files",
+                  "--cached", "--others", "--exclude-standard", NULL};
+  PathList list = {NULL, 0, 0, 0};
+  char *out;
+
+  if (rootIsGitRepo(root)) {
+    out = runArgvCaptureQuiet(argv, FF_LIST_CMD_TIMEOUT_MS, FF_MAX_OUTPUT, NULL);
+    return out ? sortUniqueLines(out, '\n') : NULL;
+  }
+  walkFiles(root, "", &list);
+  return list.text ? sortUniqueLines(list.text, '\n') : NULL;
+}
+#else
 static char *listProjectFiles(const char *root) {
   char qroot[PATH_MAX + 4];
   char cmd[PATH_MAX * 2 + 512];
@@ -92,6 +247,7 @@ static char *listProjectFiles(const char *root) {
 
   return runCommandCapture(cmd, FF_LIST_CMD_TIMEOUT_MS, FF_MAX_OUTPUT);
 }
+#endif
 
 /**
  * @brief Splits `output` (newline-separated) into E.file_finder.paths,
@@ -304,7 +460,7 @@ static int findOpenBuffer(const char *rel_path) {
   if (E.buffers == NULL)
     return -1;
 
-  if (rel_path[0] == '/') {
+  if (IS_ABS_PATH(rel_path)) {
     snprintf(want, sizeof(want), "%s", rel_path);
   } else {
     if (!getcwd(cwd, sizeof(cwd)))

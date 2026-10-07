@@ -17,6 +17,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -493,14 +494,41 @@ void bufferApplyTextEdit(struct buffer_t *buf, int start_row, int start_col,
  * visible moment to appear) and no output cap, since git's own output
  * here is a branch name or one file's diff.
  */
+#ifndef _WIN32 // Windows: gitRunArgv() below
 static char *gitRunCommand(const char *cmd) {
   const long GIT_COMMAND_TIMEOUT_MS = 1000;
   return runCommandCapture(cmd, GIT_COMMAND_TIMEOUT_MS, 0);
 }
+#endif
 
 static void gitShellQuote(const char *path, char *out, size_t out_size) {
   shellQuote(path, out, out_size);
 }
+
+#ifdef _WIN32
+/**
+ * @brief Runs `git -C dir <args...>` (NULL-terminated), stdout only, with
+ * the same 1s deadline as gitRunCommand() — which can't be used on
+ * Windows, having no sh to hand its command string to.
+ */
+static char *gitRunArgv(const char *dir, ...) {
+  const long GIT_COMMAND_TIMEOUT_MS = 1000;
+  char *argv[16];
+  const char *arg;
+  int n = 0;
+  va_list ap;
+
+  argv[n++] = "git";
+  argv[n++] = "-C";
+  argv[n++] = (char *)dir;
+  va_start(ap, dir);
+  while (n < 15 && (arg = va_arg(ap, const char *)) != NULL)
+    argv[n++] = (char *)arg;
+  va_end(ap);
+  argv[n] = NULL;
+  return runArgvCaptureQuiet(argv, GIT_COMMAND_TIMEOUT_MS, 0, NULL);
+}
+#endif
 
 /**
  * @brief Parses a unified-diff hunk header ("@@ -old_start[,old_lines]
@@ -563,9 +591,14 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
   gitShellQuote(dir_str, qdir, sizeof(qdir));
   gitShellQuote(file_str, qfile, sizeof(qfile));
 
+#ifdef _WIN32
+  (void)cmd;
+  branch = gitRunArgv(dir_str, "rev-parse", "--abbrev-ref", "HEAD", (char *)NULL);
+#else
   snprintf(cmd, sizeof(cmd),
            "git -C %s rev-parse --abbrev-ref HEAD 2>/dev/null", qdir);
   branch = gitRunCommand(cmd);
+#endif
   if (!branch) {
     gfree(dir_str);
     gfree(file_str);
@@ -577,9 +610,13 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
   buf->git_available = 1;
   gfree(branch);
 
+#ifdef _WIN32
+  status = gitRunArgv(dir_str, "status", "--porcelain", "--", file_str, (char *)NULL);
+#else
   snprintf(cmd, sizeof(cmd), "git -C %s status --porcelain -- %s 2>/dev/null",
            qdir, qfile);
   status = gitRunCommand(cmd);
+#endif
   buf->git_dirty = status != NULL;
   gfree(status);
 
@@ -588,9 +625,13 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
     buf->git_lines_count = buf->git_lines ? buf->numrows : 0;
   }
 
+#ifdef _WIN32
+  diff = gitRunArgv(dir_str, "diff", "--no-color", "-U0", "--", file_str, (char *)NULL);
+#else
   snprintf(cmd, sizeof(cmd), "git -C %s diff --no-color -U0 -- %s 2>/dev/null",
            qdir, qfile);
   diff = gitRunCommand(cmd);
+#endif
   if (diff && buf->git_lines) {
     line = strtok(diff, "\n");
     while (line) {

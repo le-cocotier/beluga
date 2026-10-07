@@ -128,6 +128,16 @@ void initBuiltins(void) {
   registerBuiltin("expand-path", l_expandPath);
   registerBuiltin("file-attributes", l_fileAttributes);
   registerBuiltin("process-run", l_processRun);
+  registerBuiltin("system-type", l_systemType);
+  registerBuiltin("shell-quote", l_shellQuote);
+  registerBuiltin("shell-run", l_shellRun);
+#ifdef _WIN32
+  // dired's file operations: Windows has no rm/mv/cp/mkdir to run.
+  registerBuiltin("delete-path", l_deletePath);
+  registerBuiltin("move-paths", l_movePaths);
+  registerBuiltin("copy-paths", l_copyPaths);
+  registerBuiltin("make-directories", l_makeDirectories);
+#endif
   registerBuiltin("process-start", l_processStart);
   registerBuiltin("string-split", l_stringSplit);
   registerBuiltin("current-buffer-id", l_currentBufferId);

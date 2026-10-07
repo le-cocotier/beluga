@@ -17,6 +17,7 @@
  */
 
 #include "../include/project_search.h"
+#include "../include/define.h"
 #include "../include/galloc.h"
 
 #include "../include/buffer.h"
@@ -104,12 +105,19 @@ static int rootIsGitRepo(const char *root) {
   char cmd[PATH_MAX + 96];
   char *out;
   int yes;
+#ifdef _WIN32
+  char *argv[] = {"git", "-C", (char *)root, "rev-parse", "--is-inside-work-tree", NULL};
+  (void)qroot;
+  (void)cmd;
+  out = runArgvCaptureQuiet(argv, 1000, 64, NULL);
+#else
   shellQuote(root, qroot, sizeof(qroot));
 
   snprintf(cmd, sizeof(cmd),
            "git -C %s rev-parse --is-inside-work-tree 2>/dev/null", qroot);
 
   out = runCommandCapture(cmd, 1000, 64);
+#endif
   if (!out)
     return 0;
   yes = (strncmp(out, "true", 4) == 0);
@@ -123,6 +131,24 @@ static int rootIsGitRepo(const char *root) {
  * into a search prompt means those four characters, not a regex character
  * class. -I skips binary files in both tools.
  */
+#ifdef _WIN32
+/**
+ * @brief Windows: there's no grep, and no sh to run one. git grep does both
+ * jobs — in a repository as below, and outside one with --no-index, which
+ * searches plain directories (skipping what .gitignore excludes, plus the
+ * same directories the Unix grep skips). Output is "path:line:text" with
+ * root-relative paths, which the parser below already handles.
+ */
+static char *runSearch(const char *pattern, const char *root) {
+  char *in_repo[] = {"git", "-C", (char *)root, "grep", "-I", "-n", "--no-color",
+                     "-F", "-e", (char *)pattern, NULL};
+  char *no_repo[] = {"git", "-C", (char *)root, "grep", "--no-index", "--exclude-standard",
+                     "-I", "-n", "--no-color", "-F", "-e", (char *)pattern, "--", ".",
+                     ":(exclude).git", ":(exclude)build", ":(exclude)node_modules", NULL};
+  return runArgvCaptureQuiet(rootIsGitRepo(root) ? in_repo : no_repo, SEARCH_TIMEOUT_MS,
+                             SEARCH_MAX_OUTPUT, NULL);
+}
+#else
 static char *runSearch(const char *pattern, const char *root) {
   char qpat[SEARCH_MAX_PATTERN * 4 + 8];
   char qroot[PATH_MAX + 4];
@@ -143,6 +169,7 @@ static char *runSearch(const char *pattern, const char *root) {
 
   return runCommandCapture(cmd, SEARCH_TIMEOUT_MS, SEARCH_MAX_OUTPUT);
 }
+#endif
 
 // ─── Parsing ────────────────────────────────────────────────────────────────
 
@@ -243,7 +270,7 @@ static int parseResults(char *output, const char *root) {
     // relative to (or under) whatever root it was handed. Store both
     // forms: absolute is what opens the file, relative is what reads
     // well in a narrow pane.
-    if (path[0] == '/')
+    if (IS_ABS_PATH(path))
       snprintf(abs, sizeof(abs), "%s", path);
     else
       snprintf(abs, sizeof(abs), "%s/%s", root, path);

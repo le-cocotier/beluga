@@ -28,6 +28,10 @@
 ;; Built on: list-directory, file-attributes, process-run (runs rm/mv/cp/
 ;; mkdir directly, no shell, so names need no quoting), expand-path,
 ;; editor-prompt, editor-message, and the scratch-buffer primitives.
+;; On Windows, which has no rm/mv/cp/mkdir/sh to run, the file operations
+;; use the editor's own delete-path, move-paths, copy-paths and
+;; make-directories instead, and ! runs its command in PowerShell
+;; (shell-run).
 ;;
 ;; Every operation runs synchronously: copying a large tree blocks the
 ;; editor until cp finishes (process-run gives up after 60 s).
@@ -368,12 +372,52 @@
           (if (and e (not (dired--parent-entry? e))) (list e) '()))
         marked)))
 
-;; Runs (argv-of entry) for each entry, collecting "name: error" strings.
-(define (dired--run-each argv-of entries failures)
+;; ─── platform ───────────────────────────────────────────────────────────────
+;; Each returns process-run's (exit-code . output). On Windows the work is
+;; done by builtins that only exist there (no rm/mv/cp/mkdir programs);
+;; they're only ever called on that branch.
+(define dired--windows? (string=? (system-type) "windows"))
+
+(define (dired--rm path)
+  (if dired--windows?
+      (delete-path path)
+      (process-run "rm" "-rf" "--" path)))
+
+(define (dired--mkdir path)
+  (if dired--windows?
+      (make-directories path)
+      (process-run "mkdir" "-p" "--" path)))
+
+;; `program` is "mv" or "cp", `flags` its options on Unix.
+(define (dired--mv-cp program flags sources dest)
+  (if dired--windows?
+      ((if (string=? program "mv") move-paths copy-paths) sources dest)
+      (apply process-run (append (list program) flags (list "--") sources (list dest)))))
+
+(define (dired--join-spaced strings)
+  (cond ((null? strings) "")
+        ((null? (cdr strings)) (car strings))
+        (else (string-append (car strings) " " (dired--join-spaced (cdr strings))))))
+
+;; ! — `command` run from `dir` with `names` appended as arguments.
+(define (dired--shell command dir names)
+  (if dired--windows?
+      (shell-run (string-append "Set-Location -LiteralPath " (shell-quote dir) "; "
+                                command " " (dired--join-spaced (map1 shell-quote names))))
+      (apply process-run
+             (append (list "sh" "-c"
+                           (string-append "cd -- \"$1\" || exit; shift; "
+                                          command " \"$@\"")
+                           "dired-sh" dir)
+                     names))))
+
+;; Runs (run entry) — which returns (exit-code . output) — for each entry,
+;; collecting "name: error" strings.
+(define (dired--run-each run entries failures)
   (if (null? entries)
       (reverse failures)
-      (let ((result (apply process-run (argv-of (car entries)))))
-        (dired--run-each argv-of (cdr entries)
+      (let ((result (run (car entries))))
+        (dired--run-each run (cdr entries)
                          (if (= (car result) 0)
                              failures
                              (cons (string-append (dired--name (car entries)) ": "
@@ -390,7 +434,7 @@
                                               "?"
                                               ", directories recursively?")))
           (let ((failures (dired--run-each
-                           (lambda (e) (list "rm" "-rf" "--" (dired--path e)))
+                           (lambda (e) (dired--rm (dired--path e)))
                            entries '())))
             (begin
               (dired--load dired-dir "" (dired--index))
@@ -417,9 +461,7 @@
                                       #t)))
           (if answer
               (let* ((dest (expand-path answer dired-dir))
-                     (result (apply process-run
-                                    (append (list program) flags (list "--")
-                                            (map1 dired--path entries) (list dest)))))
+                     (result (dired--mv-cp program flags (map1 dired--path entries) dest)))
                 (begin
                   (dired--load dired-dir (if single (dired--basename dest) "") (dired--index))
                   (editor-message (if (= (car result) 0)
@@ -434,7 +476,7 @@
   (let ((answer (editor-prompt "Create directory: %u" (dired--dir-slash) #t)))
     (if answer
         (let* ((path (expand-path answer dired-dir))
-               (result (process-run "mkdir" "-p" "--" path)))
+               (result (dired--mkdir path)))
           (if (= (car result) 0)
               (begin
                 (dired--load dired-dir (dired--basename path) (dired--index))
@@ -451,12 +493,7 @@
         (let ((command (editor-prompt (string-append "! on " (dired--prompt-safe (dired--describe entries)) ": %u")
                                       "" #f)))
           (if (and command (not (string=? command "")))
-              (let ((result (apply process-run
-                                   (append (list "sh" "-c"
-                                                 (string-append "cd -- \"$1\" || exit; shift; "
-                                                                command " \"$@\"")
-                                                 "dired-sh" dired-dir)
-                                           (map1 dired--name entries)))))
+              (let ((result (dired--shell command dired-dir (map1 dired--name entries))))
                 (begin
                   (dired--load dired-dir "" (dired--index))
                   (editor-message

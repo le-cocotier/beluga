@@ -32,6 +32,13 @@ char *runCommandCapture(const char *cmd, long timeout_ms, size_t max_bytes);
 char *runArgvCapture(char *const argv[], long timeout_ms, size_t max_bytes,
                      int *exit_status);
 
+// runArgvCapture(), but only stdout is captured; stderr is discarded. The
+// argv counterpart of runCommandCapture(".. 2>/dev/null"), with no shell
+// involved — which is how the Windows build runs git and friends, as
+// there is no sh to hand a command string to.
+char *runArgvCaptureQuiet(char *const argv[], long timeout_ms, size_t max_bytes,
+                          int *exit_status);
+
 // Wraps `s` in single quotes for safe use inside a shell command string,
 // escaping any embedded single quotes. Always NUL-terminates, and truncates
 // rather than overflowing if `out_size` is too small.

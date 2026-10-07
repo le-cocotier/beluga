@@ -498,6 +498,10 @@ typedef struct buffer_t
 
     enum bufferStatus_e state;
     int dirty; /**< Has this buffer been modified since last save */
+    // The file was loaded with CRLF line endings: the rows hold the lines
+    // without their '\r', and editorSave() writes "\r\n" back. New files
+    // and LF files are written with "\n" (on Windows too).
+    int crlf;
     // Value of `dirty` as of the last didChange (or didOpen) sent for this
     // buffer. lspSyncDebounceTick() compares the two to notice ANY edit —
     // typing, deleting, undo/redo, paste, kill-region, LSP-applied edits —

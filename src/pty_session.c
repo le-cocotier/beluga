@@ -19,6 +19,21 @@
 
 int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, const int rows, const int cols)
 {
+#ifdef _WIN32
+    pid_t pid = -1;
+    int flags;
+
+    // ConPTY instead of forkpty() (belugaPtySpawn(), platform_win32.c):
+    // the descriptor reads the shell's output and takes write() and
+    // ioctl(TIOCSWINSZ) like a pty master. With no shell_path it starts
+    // $BELUGA_SHELL, else PowerShell (pwsh, then Windows PowerShell).
+    buf->pty_master_fd = belugaPtySpawn(shell_path, rows, cols, &pid);
+    if (buf->pty_master_fd < 0)
+    {
+        appDebug("ConPTY spawn failed: %s", strerror(errno));
+        return -1;
+    }
+#else
     struct winsize ws = { .ws_row = rows, .ws_col = cols, .ws_xpixel = 0, .ws_ypixel = 0 };
 
     const pid_t pid = forkpty(&buf->pty_master_fd, NULL, NULL, &ws);
@@ -39,6 +54,7 @@ int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, const int rows
         execl(shell, shell, "-i", (char*) NULL);
         _exit(127); // execl only returns on failure
     }
+#endif
 
     // Parent process
     buf->child_pid = pid;
