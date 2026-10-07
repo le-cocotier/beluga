@@ -7,16 +7,8 @@ project('beluga', 'c',
 
 cc = meson.get_compiler('c')
 m = cc.find_library('m', required: false)
-thread_dep = dependency('threads')
+is_windows = host_machine.system() == 'windows'
 
-# glibc hides POSIX/GNU declarations when __STRICT_ANSI__ is set, which
-# -std=c99 does. The editor leans on memmem, asprintf, strdup, getline,
-# popen, realpath, kill, usleep, setenv and forkpty — all of which would
-# fall back to implicit declarations on Linux, and implicit declarations
-# are hard errors in modern gcc/clang, so the build simply fails there.
-# Darwin exposes these regardless, so defining this unconditionally costs
-# nothing on macOS.
-add_project_arguments('-D_GNU_SOURCE', language : 'c')
 add_project_arguments('-g', language : 'c')
 
 # House rule: every variable is declared at the top of its function. The
@@ -25,11 +17,56 @@ add_project_arguments('-g', language : 'c')
 # header aren't flagged, so keep to the rule by hand there too.
 add_project_arguments('-Wdeclaration-after-statement', language : 'c')
 
-# forkpty() lives in libutil on Linux; on macOS/BSD it is in libc and this
-# lookup simply finds nothing, which is why it is not `required`.
-util_dep = cc.find_library('util', required : false)
+# ─── The OS layer ─────────────────────────────────────────────────────────────
+# Everything beluga needs from the operating system is declared in
+# include/os.h and implemented by exactly one of two libraries:
+#   libbeluga-os-posix  src/os/os_posix.c  Linux, macOS, BSD
+#   libbeluga-os-win32  src/os/os_win32.c  Windows 10 1809+ / 11
+# They're the only code allowed OS headers or POSIX/Win32 calls
+# (tools/check_os_boundary.sh checks it).
+if is_windows
+  if cc.get_id() != 'gcc'
+    error('Windows builds need MinGW-w64 gcc (MSYS2 UCRT64, WinLibs, or a cross-compiler); MSVC is not supported.')
+  endif
+  os_lib = static_library('beluga-os-win32',
+    'src/os/os_win32.c',
+    c_args : ['-D_WIN32_WINNT=0x0A00'],
+    dependencies : [cc.find_library('user32'),   # clipboard
+                    cc.find_library('shell32')]) # file operations
+else
+  os_lib = static_library('beluga-os-posix',
+    'src/os/os_posix.c',
+    # forkpty, realpath, ...: this library is the POSIX one.
+    c_args : ['-D_GNU_SOURCE'],
+    # forkpty() lives in libutil on Linux; on macOS/BSD it is in libc and
+    # this lookup simply finds nothing, which is why it is not `required`.
+    dependencies : [cc.find_library('util', required : false)])
+endif
 
-# Source files
+# ─── The editor ───────────────────────────────────────────────────────────────
+# Plain C99: no _GNU_SOURCE or other feature-test macros, so the C library
+# declares only standard C (glibc hides strdup, popen, fork, ... under
+# -std=c99), and calling anything else is an error rather than a warning.
+# What the editor needs beyond standard C comes from os.h, or from its own
+# utils.c.
+core_args = [
+  '-Werror=implicit-function-declaration',
+  # lisp.h maps files with mmap() unless told not to; stdio is portable.
+  '-DLISP_NO_MMAP',
+]
+link_args = []
+extra_sources = []
+if is_windows
+  # C99 printf (%zu, %lld, ...) instead of msvcrt.dll's, which lacks them.
+  core_args += ['-D__USE_MINGW_ANSI_STDIO=1']
+  # The manifest sets the process code page to UTF-8, so the C runtime's
+  # fopen() takes UTF-8 paths, as on Unix (see windows/beluga.manifest).
+  extra_sources += import('windows').compile_resources('windows/beluga.rc',
+    depend_files : files('windows/beluga.manifest'))
+  # One self-contained beluga.exe: no libgcc DLLs to ship next to it.
+  link_args += ['-static']
+endif
+
 src_files = files(
   'main.c',
   'src/append_buffer.c',
@@ -60,43 +97,19 @@ src_files = files(
   'src/popup_ui.c',
   'src/subprocess.c',
   'src/async_process.c',
+  'src/project_files.c',
   'src/project_search.c',
   'src/file_finder.c'
 )
 
-# Windows (native, built with MinGW-w64 gcc). The Unix sources compile
-# unchanged against compat/win32/ — stand-ins for termios.h, sys/select.h,
-# poll.h, ... — and include/platform_win32.h, force-included into every
-# file; src/platform_win32.c implements them. See platform_win32.h.
-inc_dirs = []
-extra_sources = []
-link_args = []
-extra_deps = []
-if host_machine.system() == 'windows'
-  if cc.get_id() != 'gcc'
-    error('Windows builds need MinGW-w64 gcc (MSYS2 UCRT64, WinLibs, or a cross-compiler); MSVC is not supported.')
-  endif
-  inc_dirs += include_directories('compat/win32')
-  add_project_arguments(
-    '-include', meson.current_source_dir() / 'include' / 'platform_win32.h',
-    '-D_WIN32_WINNT=0x0A00',
-    # C99 printf (%zu, %lld, ...) instead of msvcrt.dll's, which lacks them.
-    '-D__USE_MINGW_ANSI_STDIO=1',
-    language : 'c')
-  extra_sources += files('src/platform_win32.c')
-  # The manifest sets the process code page to UTF-8 (see windows/beluga.manifest).
-  extra_sources += import('windows').compile_resources('windows/beluga.rc',
-    depend_files : files('windows/beluga.manifest'))
-  extra_deps += cc.find_library('user32') # clipboard
-  extra_deps += cc.find_library('shell32') # file operations (dired)
-  # One self-contained beluga.exe: no libgcc/libwinpthread DLLs to ship next to it.
-  link_args += ['-static']
-endif
-
-# Executable
 executable('beluga',
   src_files + extra_sources,
-  include_directories : inc_dirs,
-  dependencies : [m, thread_dep, util_dep] + extra_deps,
+  c_args : core_args,
+  link_with : os_lib,
+  dependencies : [m],
   link_args : link_args
 )
+
+# The OS boundary, checked: no file outside src/os/ includes an OS header.
+test('os-boundary', find_program('tools/check_os_boundary.sh'),
+  args : [meson.current_source_dir()])

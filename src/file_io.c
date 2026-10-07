@@ -14,12 +14,10 @@
 #include "../include/data.h"
 #include "../include/split_screen.h"
 #include "../include/row_op.h"
-#include <fcntl.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <errno.h>
 
 #include "../include/utf8.h"
 #include "../include/builtins.h"

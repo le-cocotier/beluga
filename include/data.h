@@ -1,14 +1,13 @@
 #ifndef DATA_H_
 #define DATA_H_
 
-#include <signal.h>
+#include <signal.h> // sig_atomic_t (standard C)
 #include <stdio.h>
-#include <sys/types.h>  // pid_t, used by lsp_client_t / buffer_t below
-#include <termios.h>
 #include <time.h>
 
 #include "define.h"
 #include "lisp.h"
+#include "os.h"
 
 typedef struct lsp_client_t LspClient;
 
@@ -186,7 +185,7 @@ struct lspServerConfig_t
 {
     char extension[16];
     char language_id[32];
-    char* argv[LSP_SERVER_MAX_ARGS + 1]; // NULL-terminated, for execvp
+    char* argv[LSP_SERVER_MAX_ARGS + 1]; // NULL-terminated, for os_proc_spawn()
 };
 
 // ── Syntax highlighting: per-language rules ──────────────────────────────────
@@ -235,9 +234,9 @@ typedef struct
 struct lsp_client_t
 {
     // ── Process ───────────────────────────────────────────────────────────────
-    pid_t pid;
-    int write_to_server_fd;
-    int read_from_server_fd;
+    // The server, talking JSON-RPC over its stdin/stdout. NULL when none
+    // is running.
+    OsProc *proc;
     char* recv_buf;
     size_t recv_len;
     size_t recv_cap;
@@ -492,8 +491,7 @@ typedef struct buffer_t
     Utf8Char* path;
     Utf8Char* fullname;
 
-    pid_t child_pid;              // -1 if not a terminal buffer / process exited
-    int pty_master_fd;            // -1 if not a terminal buffer
+    OsPty *pty;                   // the shell, for a terminal buffer; NULL otherwise
     TermParserState term_state;
 
     enum bufferStatus_e state;
@@ -591,7 +589,6 @@ typedef struct editor_config_t
 
     Utf8Char* status_msg;
     time_t status_msg_time;
-    struct termios orig_termios; /**< Terminal communication interface */
 
     struct const_t constantes;
     int quit_times_buffer;

@@ -5,13 +5,12 @@
  * interactions. \version 0.1 \date 21 septembre 2024
  */
 
+#include <stdio.h>
 #include <stdlib.h>
-#include <libgen.h>
 #include <string.h>
-#include <unistd.h>
-#include <signal.h>
 
 #include "include/define.h"
+#include "include/os.h"
 #include "include/galloc.h"
 #include "include/utf8.h"
 #include "include/data.h"
@@ -35,19 +34,15 @@ int main(const int argc, char *argv[]) {
         return 0;
     }
 
-    // Get HOME with NULL check
-    home = getenv("HOME");
+    // SIGPIPE ignored on Unix (a write to a dead shell or language server
+    // must not kill the editor); binary stdio and a UTF-8 console on Windows.
+    os_init();
+
+    home = os_home_dir();
     splash_screen = gcalloc(PATH_MAX, sizeof(Utf8Char));
     active = NULL;
-
-    if (!home) {
-        fprintf(stderr, "Error: HOME environment variable not set\n");
-        return 1;
-    }
-    // Allocate and build splash screen path safely
     utf8Printf(splash_screen, PATH_MAX, "%s/.beluga/assets/beluga.txt", home);
 
-    signal(SIGPIPE, SIG_IGN); // writing to a dead PTY must not kill the editor
     enableRawMode();
     initEditor();
 

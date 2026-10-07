@@ -1,10 +1,10 @@
 /**
  * @file async_process.c
  * @brief Programs run in the background, their output collected by the
- * main loop's select(), and a Lisp callback called when they exit.
+ * main loop, and a Lisp callback called when they exit.
  * @details The asynchronous counterpart of runArgvCapture() (subprocess.c):
- * same "no shell, stdout+stderr together, stdin from /dev/null" contract,
- * but instead of waiting it hands the pipe to editorRunLoop(). Built for
+ * same "no shell, stdout+stderr together, stdin empty" contract, but
+ * instead of waiting it hands the output stream to editorRunLoop(). Built for
  * git's network commands, which can take far longer than the editor can
  * afford to freeze for.
  */
@@ -14,12 +14,8 @@
 #include "../include/terminal.h"
 #include "../include/data.h"
 
-#include <errno.h>
-#include <fcntl.h>
-#include <signal.h>
+#include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
 extern EditorConfig E;
 
@@ -28,8 +24,7 @@ extern EditorConfig E;
 
 typedef struct {
   int in_use;
-  pid_t pid;
-  int fd;          // read end of the child's stdout+stderr pipe
+  OsProc *proc;
   char *out;       // collected output, NUL-terminated
   size_t len;
   size_t cap;
@@ -39,10 +34,8 @@ typedef struct {
 static AsyncProcess s_procs[MAX_ASYNC_PROCESSES];
 
 int asyncProcessStart(char *const argv[], const Lisp callback) {
+  OsSpawn spawn;
   int slot;
-  int pipefd[2];
-  pid_t pid;
-  int devnull;
 
   if (!argv || !argv[0])
     return -1;
@@ -51,53 +44,19 @@ int asyncProcessStart(char *const argv[], const Lisp callback) {
       break;
   if (slot == MAX_ASYNC_PROCESSES)
     return -1;
-  if (pipe(pipefd) != 0)
-    return -1;
 
-#ifdef _WIN32
-  // Same contract as below: no shell, stdout+stderr into the pipe, stdin
-  // from NUL, and no way to prompt (hidden console of its own,
-  // GIT_TERMINAL_PROMPT=0).
-  (void)devnull;
-  pid = belugaSpawn(argv, -1, pipefd[1], pipefd[1], BELUGA_SPAWN_NO_PROMPT);
-  if (pid < 0) {
-    close(pipefd[0]);
-    close(pipefd[1]);
+  // No shell, stdout+stderr together, stdin empty, and no way to prompt:
+  // a password prompt fails and says so in the output instead of drawing
+  // over (and reading keys from) the editor.
+  memset(&spawn, 0, sizeof(spawn));
+  spawn.argv = (const char *const *)argv;
+  spawn.stderr_mode = OS_STDERR_MERGE;
+  spawn.no_prompt = 1;
+  s_procs[slot].proc = os_proc_spawn(&spawn);
+  if (!s_procs[slot].proc)
     return -1;
-  }
-#else
-  pid = fork();
-  if (pid < 0) {
-    close(pipefd[0]);
-    close(pipefd[1]);
-    return -1;
-  }
-
-  if (pid == 0) {
-    // A session of its own: no controlling terminal, so ssh/git/gpg can't
-    // open /dev/tty to prompt — they fail and say so in their output
-    // instead of drawing over (and reading keys from) the editor.
-    setsid();
-    close(pipefd[0]);
-    dup2(pipefd[1], STDOUT_FILENO);
-    dup2(pipefd[1], STDERR_FILENO);
-    close(pipefd[1]);
-    devnull = open("/dev/null", O_RDONLY);
-    if (devnull >= 0) {
-      dup2(devnull, STDIN_FILENO);
-      close(devnull);
-    }
-    execvp(argv[0], argv);
-    _exit(127);
-  }
-#endif
-
-  close(pipefd[1]);
-  fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
 
   s_procs[slot].in_use = 1;
-  s_procs[slot].pid = pid;
-  s_procs[slot].fd = pipefd[0];
   s_procs[slot].cap = 256;
   s_procs[slot].len = 0;
   s_procs[slot].out = galloc(s_procs[slot].cap);
@@ -107,16 +66,13 @@ int asyncProcessStart(char *const argv[], const Lisp callback) {
   return slot;
 }
 
-int asyncProcessAddFds(fd_set *set, int maxfd) {
+int asyncProcessStreams(OsStream **streams, const int max) {
   int i;
-  for (i = 0; i < MAX_ASYNC_PROCESSES; i++) {
-    if (!s_procs[i].in_use)
-      continue;
-    FD_SET(s_procs[i].fd, set);
-    if (s_procs[i].fd > maxfd)
-      maxfd = s_procs[i].fd;
-  }
-  return maxfd;
+  int n = 0;
+  for (i = 0; i < MAX_ASYNC_PROCESSES && n < max; i++)
+    if (s_procs[i].in_use)
+      streams[n++] = os_proc_output(s_procs[i].proc);
+  return n;
 }
 
 int asyncProcessCount(void) {
@@ -158,15 +114,13 @@ static void appendOutput(AsyncProcess *p, const char *chunk, size_t n) {
  * that starts another process (fetch, then refresh, ...) can reuse it.
  */
 static void finish(AsyncProcess *p) {
-  int status;
   int exit_code = -1;
   Lisp callback;
   Lisp result;
   LispError error = LISP_ERROR_NONE;
 
-  close(p->fd);
-  if (waitpid(p->pid, &status, 0) == p->pid && WIFEXITED(status))
-    exit_code = WEXITSTATUS(status);
+  os_proc_wait(p->proc, -1, &exit_code);
+  os_proc_free(p->proc);
 
   while (p->len > 0 && (p->out[p->len - 1] == '\n' || p->out[p->len - 1] == '\r'))
     p->out[--p->len] = '\0';
@@ -182,28 +136,25 @@ static void finish(AsyncProcess *p) {
     appDebug("[ASYNC] process callback raised an error\n");
 }
 
-void asyncProcessPoll(const fd_set *set) {
+void asyncProcessPoll(void) {
   int i;
   char chunk[4096];
-  ssize_t n;
+  long n;
   AsyncProcess *p;
 
   for (i = 0; i < MAX_ASYNC_PROCESSES; i++) {
     p = &s_procs[i];
-    if (!p->in_use || !FD_ISSET(p->fd, set))
+    if (!p->in_use)
       continue;
     for (;;) {
-      n = read(p->fd, chunk, sizeof(chunk));
+      n = os_stream_read(os_proc_output(p->proc), chunk, sizeof(chunk), 0);
       if (n > 0) {
         appendOutput(p, chunk, (size_t) n);
         continue;
       }
-      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-        break; // drained for now; more will come
-      if (n < 0 && errno == EINTR)
-        continue;
-      finish(p); // EOF (or a read error): the program is done writing
-      break;
+      if (n < 0)
+        finish(p); // EOF: the program is done writing
+      break;       // 0: drained for now; more will come
     }
   }
 }

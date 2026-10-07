@@ -15,6 +15,8 @@
 #include "../include/split_screen.h"
 #include "../include/utf8.h"
 
+#include "../include/os.h"
+#include "../include/utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -70,9 +72,7 @@ static char **g_commands = NULL;    // M-x candidates
 static int g_command_count = 0;
 
 static long monotonic_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    return (long) os_monotonic_ms();
 }
 
 /**
@@ -187,7 +187,7 @@ static void buildBindNames(void) {
             if (resolved)
                 snprintf(name, sizeof(name), "%s", resolved);
         }
-        g_bind_names[i] = strdup(name);
+        g_bind_names[i] = utilStrdup(name);
     }
 }
 
@@ -229,7 +229,7 @@ void whichKeyBuildCommandList(void) {
                 break;
             g_commands = grown;
         }
-        g_commands[g_command_count++] = strdup(lisp_symbol_string(key));
+        g_commands[g_command_count++] = utilStrdup(lisp_symbol_string(key));
     }
 
     // Alphabetical: the env walk yields hash-table order, which looks random.

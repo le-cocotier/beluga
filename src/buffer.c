@@ -12,18 +12,11 @@
 #include "../include/utils.h"
 
 #include <errno.h>
-#include <fcntl.h>
-#include <libgen.h>
-#include <poll.h>
-#include <signal.h>
-#include <stdio.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "../include/append_buffer.h"
 #include "../include/builtins.h"
@@ -485,33 +478,14 @@ void bufferApplyTextEdit(struct buffer_t *buf, int start_row, int start_col,
  **********************************************************************************************************************/
 
 /**
- * @brief Thin git-flavored wrappers over the shared subprocess helper.
- * @details These were the original implementation; project search needed
- * the same hardened fork/pipe/poll-with-deadline logic, so the body moved
- * to subprocess.c and these stayed behind as the git integration's own
- * defaults — a 1s deadline (this runs synchronously inside bufferCreate()
- * on every file open, so it must never be the reason a file takes a
- * visible moment to appear) and no output cap, since git's own output
- * here is a branch name or one file's diff.
+ * @brief Runs `git -C dir <args...>` (NULL-terminated) and returns its
+ * stdout (stderr dropped), or NULL.
+ * @details A 1s deadline: this runs synchronously inside bufferCreate() on
+ * every file open, so it must never be the reason a file takes a visible
+ * moment to appear. No output cap: git's output here is a branch name or
+ * one file's diff. Arguments as argv, so paths need no quoting.
  */
-#ifndef _WIN32 // Windows: gitRunArgv() below
-static char *gitRunCommand(const char *cmd) {
-  const long GIT_COMMAND_TIMEOUT_MS = 1000;
-  return runCommandCapture(cmd, GIT_COMMAND_TIMEOUT_MS, 0);
-}
-#endif
-
-static void gitShellQuote(const char *path, char *out, size_t out_size) {
-  shellQuote(path, out, out_size);
-}
-
-#ifdef _WIN32
-/**
- * @brief Runs `git -C dir <args...>` (NULL-terminated), stdout only, with
- * the same 1s deadline as gitRunCommand() — which can't be used on
- * Windows, having no sh to hand its command string to.
- */
-static char *gitRunArgv(const char *dir, ...) {
+static char *gitRun(const char *dir, ...) {
   const long GIT_COMMAND_TIMEOUT_MS = 1000;
   char *argv[16];
   const char *arg;
@@ -528,7 +502,6 @@ static char *gitRunArgv(const char *dir, ...) {
   argv[n] = NULL;
   return runArgvCaptureQuiet(argv, GIT_COMMAND_TIMEOUT_MS, 0, NULL);
 }
-#endif
 
 /**
  * @brief Parses a unified-diff hunk header ("@@ -old_start[,old_lines]
@@ -561,9 +534,6 @@ static int gitParseHunkHeader(const char *line, int *old_start, int *old_lines,
 void bufferRefreshGitInfo(struct buffer_t *buf) {
   char *dir_str;
   char *file_str;
-  char qdir[PATH_MAX + 4];
-  char qfile[PATH_MAX + 4];
-  char cmd[3 * PATH_MAX];
   char *branch;
   char *status;
   char *diff;
@@ -588,17 +558,7 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
   dir_str = (char *)utf8ToString(buf->path);
   file_str = (char *)utf8ToString(buf->fullname);
 
-  gitShellQuote(dir_str, qdir, sizeof(qdir));
-  gitShellQuote(file_str, qfile, sizeof(qfile));
-
-#ifdef _WIN32
-  (void)cmd;
-  branch = gitRunArgv(dir_str, "rev-parse", "--abbrev-ref", "HEAD", (char *)NULL);
-#else
-  snprintf(cmd, sizeof(cmd),
-           "git -C %s rev-parse --abbrev-ref HEAD 2>/dev/null", qdir);
-  branch = gitRunCommand(cmd);
-#endif
+  branch = gitRun(dir_str, "rev-parse", "--abbrev-ref", "HEAD", (char *)NULL);
   if (!branch) {
     gfree(dir_str);
     gfree(file_str);
@@ -610,13 +570,7 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
   buf->git_available = 1;
   gfree(branch);
 
-#ifdef _WIN32
-  status = gitRunArgv(dir_str, "status", "--porcelain", "--", file_str, (char *)NULL);
-#else
-  snprintf(cmd, sizeof(cmd), "git -C %s status --porcelain -- %s 2>/dev/null",
-           qdir, qfile);
-  status = gitRunCommand(cmd);
-#endif
+  status = gitRun(dir_str, "status", "--porcelain", "--", file_str, (char *)NULL);
   buf->git_dirty = status != NULL;
   gfree(status);
 
@@ -625,13 +579,7 @@ void bufferRefreshGitInfo(struct buffer_t *buf) {
     buf->git_lines_count = buf->git_lines ? buf->numrows : 0;
   }
 
-#ifdef _WIN32
-  diff = gitRunArgv(dir_str, "diff", "--no-color", "-U0", "--", file_str, (char *)NULL);
-#else
-  snprintf(cmd, sizeof(cmd), "git -C %s diff --no-color -U0 -- %s 2>/dev/null",
-           qdir, qfile);
-  diff = gitRunCommand(cmd);
-#endif
+  diff = gitRun(dir_str, "diff", "--no-color", "-U0", "--", file_str, (char *)NULL);
   if (diff && buf->git_lines) {
     line = strtok(diff, "\n");
     while (line) {
@@ -766,6 +714,8 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   struct buffer_t *new_buf;
   char fullname[PATH_MAX + 1];
   char expanded[PATH_MAX + 1];
+  char directory[PATH_MAX + 1];
+  char *real;
   const char *home;
   char *path_str;
   char *fullname_str;
@@ -857,20 +807,22 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
     // directory name, so "~/.beluga/..." from a keybind or typed at the
     // open-file prompt used to become a new empty buffer for a file
     // under ./~/ instead of opening the real one.
-    home = getenv("HOME");
-    if (home && path_str[0] == '~' && (path_str[1] == '/' || path_str[1] == '\0'))
+    home = os_home_dir();
+    if (path_str[0] == '~' && (path_str[1] == '/' || path_str[1] == '\0'))
       snprintf(expanded, sizeof(expanded), "%s%s", home, path_str + 1);
     else
       snprintf(expanded, sizeof(expanded), "%s", path_str);
     gfree(path_str);
+    os_path_to_slashes(expanded); // "src\\main.c" given the Windows way
 
-    if (realpath(expanded, fullname) == NULL) {
-      // File doesn't exist yet, or path invalid — fall back to the raw path
-      snprintf(fullname, sizeof(fullname), "%s", expanded);
-    }
+    real = os_realpath(expanded);
+    // File doesn't exist yet, or path invalid — fall back to the raw path
+    snprintf(fullname, sizeof(fullname), "%s", real ? real : expanded);
+    free(real);
 
     new_buf->fullname = stringToUtf8((unsigned char *)fullname);
-    new_buf->path = stringToUtf8((unsigned char *)dirname(fullname));
+    utilDirname(fullname, directory, sizeof(directory));
+    new_buf->path = stringToUtf8((unsigned char *)directory);
 
     // bufferMaybeStartLsp() checks itself whether a server is
     // registered for this extension — no need to gate the call here too.
@@ -904,8 +856,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   } else if (type == TERMINAL_BUFF) // no real filesystem path — don't touch r
                                     // alpath/dirname
   {
-    new_buf->child_pid = -1;
-    new_buf->pty_master_fd = -1;
+    new_buf->pty = NULL;
     new_buf->path = NULL;
     new_buf->fullname = stringToUtf8((unsigned char *) "term");
 
@@ -925,8 +876,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
          // explicitly (see editor-explorer-sidebar-open), since a scratch
          // buffer can also just be opened plainly (e.g. a tree dump).
   {
-    new_buf->child_pid = -1;
-    new_buf->pty_master_fd = -1;
+    new_buf->pty = NULL;
     new_buf->path = NULL;
     new_buf->fullname = NULL;
     new_buf->row = NULL;
@@ -1020,7 +970,7 @@ static int bufferConfirmKill(struct buffer_t *buf) {
   int yes;
   if (buf->type == FILE_BUFF && buf->dirty)
     question = "Buffer %u modified; kill anyway? (y/n): %u";
-  else if (buf->type == TERMINAL_BUFF && buf->child_pid > 0)
+  else if (buf->type == TERMINAL_BUFF && os_pty_alive(buf->pty))
     question = "Terminal %u still running; kill it? (y/n): %u";
   if (!question)
     return 1;

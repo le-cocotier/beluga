@@ -9,6 +9,7 @@
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
+#include "../include/utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -131,13 +132,11 @@ void initBuiltins(void) {
   registerBuiltin("system-type", l_systemType);
   registerBuiltin("shell-quote", l_shellQuote);
   registerBuiltin("shell-run", l_shellRun);
-#ifdef _WIN32
-  // dired's file operations: Windows has no rm/mv/cp/mkdir to run.
+  // File operations (dired's D, R, C, +): native, not rm/mv/cp/mkdir.
   registerBuiltin("delete-path", l_deletePath);
   registerBuiltin("move-paths", l_movePaths);
   registerBuiltin("copy-paths", l_copyPaths);
   registerBuiltin("make-directories", l_makeDirectories);
-#endif
   registerBuiltin("process-start", l_processStart);
   registerBuiltin("string-split", l_stringSplit);
   registerBuiltin("current-buffer-id", l_currentBufferId);
@@ -241,7 +240,7 @@ static void initStartupConstants(void) {
  *   - E.panes.layout (via SplitScreenInit)
  */
 void initEditor() {
-  const char *home = getenv("HOME");
+  const char *home = os_home_dir();
   EditorPane *active = NULL;
 
   if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
@@ -269,8 +268,9 @@ void initEditor() {
     die("HOME environment variable not set");
   }
 
-  if (asprintf(&E.init_file_path, "%s/.beluga/config/init.lisp", home) == -1) {
-    die("asprintf failed");
+  E.init_file_path = utilFormat("%s/.beluga/config/init.lisp", home);
+  if (!E.init_file_path) {
+    die("out of memory");
   }
 
   E.status_msg_time = 0;
@@ -360,12 +360,10 @@ void initEditor() {
   initStartupConstants();
   E.lsp_client = (LspClient *)galloc(sizeof(LspClient));
   E.lsp_client->state = LSP_NOT_STARTED;
-  // Both left as garbage otherwise until lspStart() actually runs, but
-  // editorRunLoop's select() reads read_from_server_fd unconditionally
-  // as soon as LSP is enabled — well before the user is even asked
-  // whether to start a server.
-  E.lsp_client->read_from_server_fd = -1;
-  E.lsp_client->write_to_server_fd = -1;
+  // Left as garbage otherwise until lspStart() actually runs, but
+  // editorRunLoop() waits on the server's output as soon as LSP is
+  // enabled — well before the user is even asked whether to start one.
+  E.lsp_client->proc = NULL;
   // Also left as garbage otherwise — lspSyncDebounceTick() (completion.c)
   // reads sync_debounce_pending/deadline before any lspScheduleCompletion-
   // style call would ever overwrite them, since it self-arms rather than

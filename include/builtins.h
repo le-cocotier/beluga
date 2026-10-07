@@ -178,12 +178,10 @@ Lisp l_processRun(Lisp args, LispError *e, LispContext ctx);
 Lisp l_systemType(Lisp args, LispError *e, LispContext ctx);
 Lisp l_shellQuote(Lisp args, LispError *e, LispContext ctx);
 Lisp l_shellRun(Lisp args, LispError *e, LispContext ctx);
-#ifdef _WIN32
 Lisp l_deletePath(Lisp args, LispError *e, LispContext ctx);
 Lisp l_movePaths(Lisp args, LispError *e, LispContext ctx);
 Lisp l_copyPaths(Lisp args, LispError *e, LispContext ctx);
 Lisp l_makeDirectories(Lisp args, LispError *e, LispContext ctx);
-#endif
 // (process-start callback "program" "arg" ...) — background process-run;
 // callback gets (exit-code . "output") from the main loop when it exits.
 Lisp l_processStart(Lisp args, LispError *e, LispContext ctx);

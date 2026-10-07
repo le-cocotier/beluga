@@ -79,25 +79,8 @@
 
 #define ABUF_INIT {NULL, 0, 0}
 
-// Is `p` an absolute path? Paths reach the editor with forward slashes on
-// every platform (see platform_win32.h), so on Windows that's "C:/..." or
-// a path starting with '/' ("//server/share", or the current drive's root).
-#ifdef _WIN32
-#define IS_ABS_PATH(p) ((p)[0] == '/' || (((((p)[0] | 0x20) >= 'a') && (((p)[0] | 0x20) <= 'z')) && \
-                         (p)[1] == ':' && ((p)[2] == '/' || (p)[2] == '\\')))
-#else
-#define IS_ABS_PATH(p) ((p)[0] == '/')
-#endif
-
 #define BELUGA_VERSION "3.2"
 
-#ifdef __APPLE__
-#define CLIPBOARD_COPY_CMD  "pbcopy"
-#define CLIPBOARD_PASTE_CMD "pbpaste"
-#else
-#define CLIPBOARD_COPY_CMD  "xclip -selection clipboard"
-#define CLIPBOARD_PASTE_CMD "xclip -selection clipboard -o"
-#endif
 
 
 #define CSI_MAX_PARAMS 16

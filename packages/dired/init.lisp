@@ -25,16 +25,14 @@
 (define dired-show-hidden #f)     ; list dotfiles?
 (define dired-sort-mode "name")   ; "name" (directories first), "date", "size"
 
-;; Built on: list-directory, file-attributes, process-run (runs rm/mv/cp/
-;; mkdir directly, no shell, so names need no quoting), expand-path,
-;; editor-prompt, editor-message, and the scratch-buffer primitives.
-;; On Windows, which has no rm/mv/cp/mkdir/sh to run, the file operations
-;; use the editor's own delete-path, move-paths, copy-paths and
-;; make-directories instead, and ! runs its command in PowerShell
-;; (shell-run).
+;; Built on: list-directory, file-attributes, delete-path, move-paths,
+;; copy-paths, make-directories (the editor's own file operations — the
+;; same on every platform, no rm/mv/cp/mkdir involved), shell-run (for !),
+;; expand-path, editor-prompt, editor-message, and the scratch-buffer
+;; primitives.
 ;;
 ;; Every operation runs synchronously: copying a large tree blocks the
-;; editor until cp finishes (process-run gives up after 60 s).
+;; editor until it's done.
 
 ;; ─── state ──────────────────────────────────────────────────────────────────
 
@@ -372,44 +370,18 @@
           (if (and e (not (dired--parent-entry? e))) (list e) '()))
         marked)))
 
-;; ─── platform ───────────────────────────────────────────────────────────────
-;; Each returns process-run's (exit-code . output). On Windows the work is
-;; done by builtins that only exist there (no rm/mv/cp/mkdir programs);
-;; they're only ever called on that branch.
-(define dired--windows? (string=? (system-type) "windows"))
-
-(define (dired--rm path)
-  (if dired--windows?
-      (delete-path path)
-      (process-run "rm" "-rf" "--" path)))
-
-(define (dired--mkdir path)
-  (if dired--windows?
-      (make-directories path)
-      (process-run "mkdir" "-p" "--" path)))
-
-;; `program` is "mv" or "cp", `flags` its options on Unix.
-(define (dired--mv-cp program flags sources dest)
-  (if dired--windows?
-      ((if (string=? program "mv") move-paths copy-paths) sources dest)
-      (apply process-run (append (list program) flags (list "--") sources (list dest)))))
+;; ─── file operations ────────────────────────────────────────────────────────
+;; Each returns (exit-code . message): (0 . "") on success.
 
 (define (dired--join-spaced strings)
   (cond ((null? strings) "")
         ((null? (cdr strings)) (car strings))
         (else (string-append (car strings) " " (dired--join-spaced (cdr strings))))))
 
-;; ! — `command` run from `dir` with `names` appended as arguments.
+;; ! — `command` run in the platform's shell (sh, or PowerShell on Windows)
+;; from `dir`, with `names` appended as arguments, each quoted for it.
 (define (dired--shell command dir names)
-  (if dired--windows?
-      (shell-run (string-append "Set-Location -LiteralPath " (shell-quote dir) "; "
-                                command " " (dired--join-spaced (map1 shell-quote names))))
-      (apply process-run
-             (append (list "sh" "-c"
-                           (string-append "cd -- \"$1\" || exit; shift; "
-                                          command " \"$@\"")
-                           "dired-sh" dir)
-                     names))))
+  (shell-run (string-append command " " (dired--join-spaced (map1 shell-quote names))) dir))
 
 ;; Runs (run entry) — which returns (exit-code . output) — for each entry,
 ;; collecting "name: error" strings.
@@ -434,7 +406,7 @@
                                               "?"
                                               ", directories recursively?")))
           (let ((failures (dired--run-each
-                           (lambda (e) (dired--rm (dired--path e)))
+                           (lambda (e) (delete-path (dired--path e)))
                            entries '())))
             (begin
               (dired--load dired-dir "" (dired--index))
@@ -447,8 +419,8 @@
 (define (dired-do-flagged-delete) (dired--delete (dired--with-mark "D")))
 
 ;; Rename and copy: one entry asks for its new path, several ask for a
-;; destination directory. `program` gets "--", the sources, then the target.
-(define (dired--transfer verb past program flags)
+;; destination directory. `transfer` is move-paths or copy-paths.
+(define (dired--transfer verb past transfer)
   (let ((entries (dired--targets)))
     (if (null? entries)
         (editor-message (string-append "Nothing to " verb))
@@ -461,7 +433,7 @@
                                       #t)))
           (if answer
               (let* ((dest (expand-path answer dired-dir))
-                     (result (dired--mv-cp program flags (map1 dired--path entries) dest)))
+                     (result (transfer (map1 dired--path entries) dest)))
                 (begin
                   (dired--load dired-dir (if single (dired--basename dest) "") (dired--index))
                   (editor-message (if (= (car result) 0)
@@ -469,19 +441,19 @@
                                       (string-append verb " failed — " (dired--first-line (cdr result)))))))
               (editor-message (string-append verb " cancelled")))))))
 
-(define (dired-do-rename) (dired--transfer "Rename" "Moved" "mv" '()))
-(define (dired-do-copy) (dired--transfer "Copy" "Copied" "cp" (list "-R")))
+(define (dired-do-rename) (dired--transfer "Rename" "Moved" move-paths))
+(define (dired-do-copy) (dired--transfer "Copy" "Copied" copy-paths))
 
 (define (dired-create-directory)
   (let ((answer (editor-prompt "Create directory: %u" (dired--dir-slash) #t)))
     (if answer
         (let* ((path (expand-path answer dired-dir))
-               (result (dired--mkdir path)))
+               (result (make-directories path)))
           (if (= (car result) 0)
               (begin
                 (dired--load dired-dir (dired--basename path) (dired--index))
                 (editor-message (string-append "Created " path)))
-              (editor-message (string-append "mkdir failed — " (dired--first-line (cdr result))))))
+              (editor-message (string-append "Create directory failed — " (dired--first-line (cdr result))))))
         '())))
 
 ;; Runs a shell command from the listed directory with the target files as

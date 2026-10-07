@@ -25,8 +25,8 @@ jobs:
       - name: Build project
         run: meson compile -C build
 
-      - name: Run tests
-        run: ctest --test-dir build || true
+      - name: Run tests (includes the OS-boundary check)
+        run: meson test -C build --print-errorlogs
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
@@ -53,6 +53,9 @@ jobs:
 
       - name: Build project
         run: meson compile -C build-windows
+
+      - name: Check the OS boundary
+        run: tools/check_os_boundary.sh .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3

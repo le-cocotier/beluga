@@ -17,8 +17,6 @@
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
 #include "../include/utf8.h"
-#include <errno.h>
-#include <sys/select.h>
 
 extern EditorConfig E;
 
@@ -92,17 +90,16 @@ int editorMoveCursor(const int key) {
 
 // TODO(TODO.md): paste — CRLF, bulk insert (see editorPaste in builtins.c)
 
-#ifdef _WIN32
-// The Windows clipboard, through its own API (platform_win32.c) — no
-// helper program to run. Line endings are converted both ways there.
+// The system clipboard (os_clipboard_*), as galloc'd text the callers
+// gfree(). Line endings are LF on our side whatever the platform uses.
 char *editorGetClipboard(void) {
-  char *text = belugaClipboardGet();
+  char *text = os_clipboard_get();
   size_t len;
   char *buf;
   if (!text)
     return NULL;
   len = strlen(text);
-  buf = galloc(len + 1); // callers gfree() it
+  buf = galloc(len + 1);
   if (buf)
     memcpy(buf, text, len + 1);
   free(text);
@@ -111,74 +108,39 @@ char *editorGetClipboard(void) {
 
 void editorSetClipboard(const char *text, const int len) {
   if (text && len > 0)
-    belugaClipboardSet(text, (size_t)len);
-}
-#else
-char *editorGetClipboard(void) {
-  FILE *pipe = popen(CLIPBOARD_PASTE_CMD, "r");
-  size_t cap;
-  size_t len;
-  char *buf;
-  int c;
-  char *new_buf;
-  if (!pipe)
-    return NULL;
-
-  cap = 4096;
-  len = 0;
-  buf = galloc(cap);
-  if (!buf) {
-    pclose(pipe);
-    return NULL;
-  }
-
-  while ((c = fgetc(pipe)) != EOF) {
-    if (len + 1 >= cap) {
-      cap *= 2;
-      new_buf = grealloc(buf, cap);
-      if (!new_buf) {
-        gfree(buf);
-        pclose(pipe);
-        return NULL;
-      }
-      buf = new_buf;
-    }
-    buf[len++] = (char)c;
-  }
-  buf[len] = '\0';
-  pclose(pipe);
-  return buf;
+    os_clipboard_set(text, (size_t)len);
 }
 
-void editorSetClipboard(const char *text, const int len) {
-  FILE *pipe = popen(CLIPBOARD_COPY_CMD, "w");
-  if (!pipe)
-    return;
-  fwrite(text, 1, len, pipe);
-  pclose(pipe);
-}
-#endif
+/**
+ * @brief Upper bound on the streams editorRunLoop() waits on: the keyboard,
+ * one per terminal pane, the language server, background processes.
+ */
+#define RUN_LOOP_MAX_STREAMS 64
+#define RUN_LOOP_MAX_TERMINALS 32
 
 void editorRunLoop(void) {
   // Polled every tick instead of driven by SIGWINCH: nothing ever actually
   // installed a WINCH handler (editorInstallSignalHandlers(), which used
   // to live here, was never called from main()), so resizing silently did
-  // nothing at all. The 50ms select() timeout below already bounds how
-  // often this loop comes back around, so comparing the terminal's actual
-  // size against what was last seen catches a resize within one tick —
-  // dynamically, and without depending on signal delivery/interruption
-  // semantics that vary across terminals and platforms.
+  // nothing at all. The 50ms wait timeout below already bounds how often
+  // this loop comes back around, so comparing the terminal's actual size
+  // against what was last seen catches a resize within one tick —
+  // dynamically, and without depending on signal delivery semantics that
+  // vary across terminals and platforms (Windows has no SIGWINCH at all).
   int last_rows = 0, last_cols = 0;
   int rows;
   int cols;
-  fd_set readfds;
-  int maxfd;
+  OsStream *streams[RUN_LOOP_MAX_STREAMS];
+  int ready[RUN_LOOP_MAX_STREAMS];
+  struct buffer_t *terminals[RUN_LOOP_MAX_TERMINALS];
+  int n_streams;
+  int n_terminals;
+  int lsp_index;
   int first_buffer_id;
   struct buffer_t *b;
-  struct timeval tv;
-  int ready;
+  int i;
   unsigned char chunk[4096];
-  ssize_t n;
+  long n;
   getWindowSize(&last_rows, &last_cols);
 
   while (!E.exit_requested) {
@@ -195,76 +157,61 @@ void editorRunLoop(void) {
       splitScreenSyncTerminalSizes();
     }
 
-    FD_ZERO(&readfds);
-    FD_SET(STDIN_FILENO, &readfds);
-    maxfd = STDIN_FILENO;
+    // Everything there is to wait for: keys first (index 0), then each
+    // terminal pane's shell, the language server, background processes.
+    n_streams = 0;
+    streams[n_streams++] = os_term_input();
 
+    n_terminals = 0;
     if (E.buffers != NULL) {
       first_buffer_id = E.buffers->buffer_id;
       b = E.buffers;
       do {
-        if (b->type == TERMINAL_BUFF && b->pty_master_fd >= 0) {
-          FD_SET(b->pty_master_fd, &readfds);
-          if (b->pty_master_fd > maxfd)
-            maxfd = b->pty_master_fd;
+        if (b->type == TERMINAL_BUFF && b->pty && n_terminals < RUN_LOOP_MAX_TERMINALS) {
+          terminals[n_terminals++] = b;
+          streams[n_streams++] = ptySessionOutput(b);
         }
         b = b->next;
       } while (b->buffer_id != first_buffer_id);
     }
 
-    if (E.constantes.LSP && E.lsp_client &&
-        E.lsp_client->read_from_server_fd >= 0) {
-      FD_SET(E.lsp_client->read_from_server_fd, &readfds);
-      if (E.lsp_client->read_from_server_fd > maxfd)
-        maxfd = E.lsp_client->read_from_server_fd;
+    lsp_index = -1;
+    if (E.constantes.LSP && E.lsp_client && E.lsp_client->proc) {
+      lsp_index = n_streams;
+      streams[n_streams++] = os_proc_output(E.lsp_client->proc);
     }
 
-    maxfd = asyncProcessAddFds(&readfds, maxfd);
+    n_streams += asyncProcessStreams(streams + n_streams, RUN_LOOP_MAX_STREAMS - n_streams);
 
-    tv = (struct timeval){.tv_sec = 0, .tv_usec = 50000}; // 50ms tick
-    ready = select(maxfd + 1, &readfds, NULL, NULL, &tv);
-
-    if (ready < 0) {
-      if (errno == EINTR)
-        continue; // interrupted by a signal — just retry
-      die("select");
-    }
-
-    if (ready > 0) {
-      if (E.buffers != NULL) {
-        first_buffer_id = E.buffers->buffer_id;
-        b = E.buffers;
-        do {
-          if (b->type == TERMINAL_BUFF && b->pty_master_fd >= 0 &&
-              FD_ISSET(b->pty_master_fd, &readfds)) {
-            while ((n = read(b->pty_master_fd, chunk, sizeof(chunk))) > 0) {
-              ansiParserFeed(b, chunk, (size_t)n);
-              b->x = b->term_state.cursor_x;
-              b->y = b->term_state.cursor_y;
-            }
-
-            if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
-              ptySessionIsAlive(b); // reap if the shell exited
-          }
-          b = b->next;
-        } while (b->buffer_id != first_buffer_id);
+    if (os_wait(streams, n_streams, 50, ready) > 0) { // 50ms tick
+      for (i = 0; i < n_terminals; i++) {
+        if (!ready[1 + i])
+          continue;
+        b = terminals[i];
+        while ((n = os_stream_read(ptySessionOutput(b), chunk, sizeof(chunk), 0)) > 0) {
+          ansiParserFeed(b, chunk, (size_t)n);
+          b->x = b->term_state.cursor_x;
+          b->y = b->term_state.cursor_y;
+        }
+        // The shell has exited: release it. The buffer keeps showing what
+        // it last drew.
+        if (n < 0)
+          ptySessionClose(b);
       }
 
-      if (E.constantes.LSP && E.lsp_client &&
-          (E.lsp_client->read_from_server_fd >= 0) &&
-          FD_ISSET(E.lsp_client->read_from_server_fd, &readfds))
+      if (lsp_index >= 0 && ready[lsp_index])
         lspPoll(E.lsp_client);
 
       // Before keys: a finished process's callback (e.g. a refresh after
       // a push) should land before the next keystroke acts on its buffer.
-      asyncProcessPoll(&readfds);
+      asyncProcessPoll();
 
-      if (FD_ISSET(STDIN_FILENO, &readfds))
+      if (ready[0])
         editorProcessKeypress();
     }
 
-    // Runs every ~50ms tick regardless of what select() woke up for, so
-    // a scheduled completion request fires shortly after its debounce
+    // Runs every ~50ms tick regardless of what woke the wait up, so a
+    // scheduled completion request fires shortly after its debounce
     // deadline passes even if the user has stopped typing entirely.
     if (E.constantes.LSP) {
       lspCompletionDebounceTick();

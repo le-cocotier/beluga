@@ -25,9 +25,6 @@ is actually left to do.
     `path` instead).
   - Only the first match is used: no common-prefix completion, no cycling
     through candidates on repeated TAB, no listing of the matches.
-  - Relative paths are resolved against `getenv("PWD")`, which is whatever
-    the launching shell exported, not the process's actual working
-    directory. Use `getcwd()`, or the project root.
 
 - [ ] **[bug]** Saving — `src/file_io.c`, `editorSave()` *(was "TODO: utf8")*
   - The UTF-8 part is done: rows go through `utf8ToString()`. What's left:

@@ -7,9 +7,6 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/ioctl.h>
-#include <termios.h>
-#include <unistd.h>
 #include "utf8.h"
 
 /**
@@ -33,18 +30,16 @@ void enableRawMode();
 
 Utf8Char* editorReadKey();
 
-int getCursorPosition(int *rows, int *cols);
-
 int getWindowSize(int *rows, int *cols);
 
 char *keyToString(const Utf8Char* key);
 
 void appDebug(const char *fmt, ...);
 
-// Fd of the same debug log file appDebug() writes to (opening it if this
-// is the first call), or -1 when built without APP_DEBUG. Lets another
-// subsystem — currently just the spawned language server — send its own
-// stderr there too instead of onto the raw terminal beluga is drawing on.
-int appDebugFd(void);
+// Path of the debug log appDebug() writes to (opened by this call if not
+// yet), or NULL when built without APP_DEBUG. Lets another subsystem —
+// currently just the spawned language server — send its own stderr there
+// too instead of onto the terminal beluga is drawing on.
+const char *appDebugLogPath(void);
 
 #endif

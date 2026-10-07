@@ -40,18 +40,45 @@ Things that work differently on Windows:
 - **Your files** live in `%USERPROFILE%\.beluga`, the Windows equivalent of `~/.beluga`.
 - **Terminal panes** run PowerShell (`pwsh` if installed, else Windows PowerShell). Set
   `BELUGA_SHELL` to use another shell, e.g. `cmd.exe`.
-- **Git integration, project search and the file finder** use [Git for Windows](https://gitforwindows.org)
-  (`winget install Git.Git`). Project search outside a repository uses `git grep --no-index`
-  instead of `grep`.
-- **dired**'s delete, rename, copy and mkdir use Windows' own file operations, and `!` runs its
-  command in PowerShell.
+- **dired's `!`** (and `shell-run` in Lisp) runs its command in PowerShell rather than `sh`.
+- **Git integration** needs [Git for Windows](https://gitforwindows.org) (`winget install Git.Git`).
+  Without it, project search and the file finder still work, on plain directories.
 - **Language servers** installed with npm (`typescript-language-server`, `pyright-langserver`, ...)
   are found as usual: their `.cmd` launchers work.
-- **Line endings:** files using CRLF are edited without stray `^M`s and saved back as CRLF
-  (on every platform); new files are saved with LF.
 
 To cross-compile `beluga.exe` from Linux: `meson setup --cross-file cross/mingw-w64.ini build-windows && meson compile -C build-windows`
 (needs the `mingw-w64` package).
+
+## How beluga talks to the operating system
+
+Everything beluga needs from the OS — the terminal, waiting for input, running programs,
+terminal panes, files and directories, the clipboard, time — is declared in
+[`include/os.h`](include/os.h) and implemented by one of two small libraries:
+
+| Library               | Source                 | For                       |
+|-----------------------|------------------------|---------------------------|
+| `libbeluga-os-posix`  | `src/os/os_posix.c`    | Linux, macOS, BSD         |
+| `libbeluga-os-win32`  | `src/os/os_win32.c`    | Windows 10 (1809+) and 11 |
+
+The rest of the editor is plain C99 plus `os.h`: no `<unistd.h>`, no `<windows.h>`, no
+`#ifdef _WIN32`. That's checked, not just intended — the editor is compiled without any
+feature-test macros and with `-Werror=implicit-function-declaration`, so calling a POSIX or
+Windows function outside `src/os/` doesn't build, and `meson test` runs
+`tools/check_os_boundary.sh` to catch OS headers and platform `#ifdef`s.
+
+As a result, behaviour is the same everywhere:
+
+- Programs are always started from an argument list, never a shell string: git, language
+  servers, `process-run`. Only `shell-run` (dired's `!`) goes through a shell, on purpose.
+- dired's delete, rename, copy and mkdir are the editor's own file operations, not `rm`, `mv`,
+  `cp` and `mkdir`.
+- Project search and the file finder use git inside a repository, and their own directory walk
+  and search elsewhere — no `find` or `grep` needed.
+- Files using CRLF line endings are edited without stray `^M`s and saved back as CRLF; new
+  files are saved with LF.
+
+Porting beluga to another system means writing one more `os_*.c` against `os.h` (and a line in
+`meson.build` to pick it).
 
 ## Getting start
 

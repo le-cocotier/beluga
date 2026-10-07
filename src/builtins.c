@@ -22,14 +22,12 @@
 #include "../include/split_screen.h"
 #include "../include/subprocess.h"
 #include "../include/terminal.h"
+#include "../include/utils.h"
 
-#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "../include/buffer_switcher.h"
 #include "../include/completion.h"
@@ -519,8 +517,13 @@ Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
   Utf8Char *pwd;
   Utf8Char *filename;
   EditorPane *active;
+  char *cwd;
   appDebug("[EDITOR OPEN FILE]\n");
-  pwd = stringToUtf8((unsigned char *)getenv("PWD"));
+  // The working directory as the starting point (getcwd, not $PWD, which
+  // Windows shells don't set).
+  cwd = os_getcwd();
+  pwd = stringToUtf8((unsigned char *)(cwd ? cwd : ""));
+  free(cwd);
   filename = editorPrompt("Open : %u", pwd, 1);
   if (filename) {
     active = splitScreenGetActivePane();
@@ -633,10 +636,12 @@ Lisp editorOpenFilePath(const Lisp args, LispError *e, LispContext ctx) {
  * @return Lisp string, or "" if getcwd() fails
  */
 Lisp editorPwd(Lisp args, LispError *e, LispContext ctx) {
-  char cwd[PATH_MAX];
-  if (getcwd(cwd, sizeof(cwd)) == NULL)
-    return lisp_make_string2("", ctx);
-  return lisp_make_string2(cwd, ctx);
+  char *cwd = os_getcwd();
+  Lisp result = lisp_make_string2(cwd ? cwd : "", ctx);
+  (void)args;
+  (void)e;
+  free(cwd);
+  return result;
 }
 
 /**
@@ -653,23 +658,15 @@ Lisp editorPwd(Lisp args, LispError *e, LispContext ctx) {
  * @return Lisp string: the repo root, or ""
  */
 Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx) {
-  char cwd[PATH_MAX];
-  char qdir[PATH_MAX + 4];
-  char cmd[PATH_MAX + 64];
+  char *cwd = os_getcwd();
+  char *argv[6];
   char *out;
   Lisp result;
-#ifdef _WIN32
-  char *argv[6];
-#endif
   (void)args;
   (void)e;
-  if (getcwd(cwd, sizeof(cwd)) == NULL)
+  if (!cwd)
     return lisp_make_string2("", ctx);
 
-#ifdef _WIN32
-  // No sh on Windows: the same git command, as argv.
-  (void)qdir;
-  (void)cmd;
   argv[0] = "git";
   argv[1] = "-C";
   argv[2] = cwd;
@@ -677,14 +674,7 @@ Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx) {
   argv[4] = "--show-toplevel";
   argv[5] = NULL;
   out = runArgvCaptureQuiet(argv, 1000, PATH_MAX, NULL);
-#else
-  shellQuote(cwd, qdir, sizeof(qdir));
-
-  snprintf(cmd, sizeof(cmd), "git -C %s rev-parse --show-toplevel 2>/dev/null",
-           qdir);
-
-  out = runCommandCapture(cmd, 1000, PATH_MAX);
-#endif
+  free(cwd);
   if (!out)
     return lisp_make_string2("", ctx);
 
@@ -705,30 +695,18 @@ Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx) {
  */
 Lisp listDirectory(const Lisp args, LispError *e, LispContext ctx) {
   const char *path = lisp_string(lisp_car(args));
-  DIR *dir = opendir(path);
-  Lisp result;
-  struct dirent *entry;
-  char full_path[PATH_MAX];
-  struct stat st;
-  int is_dir;
-  Lisp pair;
-  if (!dir)
-    return lisp_null();
-
-  result = lisp_null();
-  while ((entry = readdir(dir)) != NULL) {
-    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-      continue;
-
-    snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
-
-    is_dir = (stat(full_path, &st) == 0) && S_ISDIR(st.st_mode);
-
-    pair = lisp_cons(lisp_make_string2(entry->d_name, ctx),
-                     lisp_make_bool(is_dir), ctx);
-    result = lisp_cons(pair, result, ctx);
-  }
-  closedir(dir);
+  int count = 0;
+  OsDirEntry *entries = os_list_dir(path, &count);
+  Lisp result = lisp_null();
+  int i;
+  (void)e;
+  if (!entries)
+    return result;
+  for (i = 0; i < count; i++)
+    result = lisp_cons(lisp_cons(lisp_make_string2(entries[i].name, ctx),
+                                 lisp_make_bool(entries[i].is_dir), ctx),
+                       result, ctx);
+  os_free_dir(entries, count);
   return result;
 }
 
@@ -1097,13 +1075,9 @@ Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
   appDebug("%s\n", package_name);
   if (packageAlreadyLoaded(package_name))
     return lisp_null();
-  home = getenv("HOME");
-  if (!home) {
-    return lisp_null();
-  }
-
-  if (asprintf(&package_dir, "%s/.beluga/packages/%s/init.lisp", home,
-               package_name) == -1) {
+  home = os_home_dir();
+  package_dir = utilFormat("%s/.beluga/packages/%s/init.lisp", home, package_name);
+  if (!package_dir) {
     return lisp_null();
   }
 
@@ -1839,7 +1813,7 @@ Lisp lspRegisterServer(Lisp args, LispError *e, LispContext ctx) {
 
   argc = 0;
   while (!lisp_is_null(args) && argc < LSP_SERVER_MAX_ARGS) {
-    cfg->argv[argc] = strdup(lisp_string(lisp_car(args)));
+    cfg->argv[argc] = utilStrdup(lisp_string(lisp_car(args)));
     argc++;
     args = lisp_cdr(args);
   }
@@ -2134,15 +2108,13 @@ static void normalizePath(const char *in, char *out, const size_t out_size) {
   size_t seg_len;
 
   out[0] = '\0';
-#ifdef _WIN32
-  if (in[0] && in[1] == ':' && out_size > 3) {
-    out[0] = in[0];
-    out[1] = ':';
-    out[2] = '\0';
-    root = len = 2;
-    seg = in + 2;
+  root = (size_t)os_path_drive_length(in);
+  if (root > 0 && out_size > root + 1) {
+    memcpy(out, in, root);
+    out[root] = '\0';
+    len = root;
+    seg = in + root;
   }
-#endif
   while (*seg) {
     while (*seg == '/')
       seg++;
@@ -2185,12 +2157,9 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
   const char *path;
   const char *base = NULL;
   const char *home;
-  char cwd[PATH_MAX];
+  char *cwd = NULL;
   char joined[PATH_MAX * 2];
   char out[PATH_MAX];
-#ifdef _WIN32
-  char *p;
-#endif
 
   if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
     *e = LISP_ERROR_ARG_TYPE;
@@ -2201,86 +2170,45 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
   if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING)
     base = lisp_string(lisp_car(args));
 
-  home = getenv("HOME");
-  if (path[0] == '~' && (path[1] == '/' || path[1] == '\0') && home) {
+  home = os_home_dir();
+  if (path[0] == '~' && (path[1] == '/' || path[1] == '\0')) {
     snprintf(joined, sizeof(joined), "%s/%s", home, path + 1);
-  } else if (IS_ABS_PATH(path)) {
+  } else if (os_path_is_absolute(path)) {
     snprintf(joined, sizeof(joined), "%s", path);
   } else {
     if (!base || base[0] == '\0') {
-      if (getcwd(cwd, sizeof(cwd)) == NULL)
-        snprintf(cwd, sizeof(cwd), "/");
-      base = cwd;
+      cwd = os_getcwd();
+      base = cwd ? cwd : "/";
     }
     snprintf(joined, sizeof(joined), "%s/%s", base, path);
   }
+  free(cwd);
 
-#ifdef _WIN32
-  // A path typed (or pasted) the Windows way: "C:\\dir\\file".
-  for (p = joined; *p; p++)
-    if (*p == '\\')
-      *p = '/';
-#endif
+  os_path_to_slashes(joined); // "C:\\dir\\file" typed the Windows way
   normalizePath(joined, out, sizeof(out));
   return lisp_make_string2(out, ctx);
 }
 
 /**
- * @brief Builds an `ls -l` style mode string ("drwxr-xr-x") from st_mode.
- */
-static void modeString(const mode_t mode, char out[11]) {
-  if (S_ISDIR(mode))
-    out[0] = 'd';
-  else if (S_ISLNK(mode))
-    out[0] = 'l';
-  else if (S_ISCHR(mode))
-    out[0] = 'c';
-  else if (S_ISBLK(mode))
-    out[0] = 'b';
-  else if (S_ISFIFO(mode))
-    out[0] = 'p';
-  else if (S_ISSOCK(mode))
-    out[0] = 's';
-  else
-    out[0] = '-';
-  out[1] = (mode & S_IRUSR) ? 'r' : '-';
-  out[2] = (mode & S_IWUSR) ? 'w' : '-';
-  out[3] = (mode & S_ISUID) ? ((mode & S_IXUSR) ? 's' : 'S')
-                            : ((mode & S_IXUSR) ? 'x' : '-');
-  out[4] = (mode & S_IRGRP) ? 'r' : '-';
-  out[5] = (mode & S_IWGRP) ? 'w' : '-';
-  out[6] = (mode & S_ISGID) ? ((mode & S_IXGRP) ? 's' : 'S')
-                            : ((mode & S_IXGRP) ? 'x' : '-');
-  out[7] = (mode & S_IROTH) ? 'r' : '-';
-  out[8] = (mode & S_IWOTH) ? 'w' : '-';
-  out[9] = (mode & S_ISVTX) ? ((mode & S_IXOTH) ? 't' : 'T')
-                            : ((mode & S_IXOTH) ? 'x' : '-');
-  out[10] = '\0';
-}
-
-/**
  * @brief Lisp function: metadata for one path
- * @details (file-attributes path) — returns #f if the path doesn't exist
- * (lstat fails), otherwise the list
+ * @details (file-attributes path) — returns #f if the path doesn't exist,
+ * otherwise the list
  *   (is-dir is-link size mtime "mode" "date" "link-target")
- * `is-link` and `mode`/`size` describe the path itself (lstat), while
- * `is-dir` follows a symlink, so a link to a directory can be entered.
- * `mtime` is seconds since the epoch, for sorting; `date` is formatted the
- * way `ls -l` does it ("Sep 28 14:02" within the last six months,
- * "Sep 28  2025" otherwise). `link-target` is "" unless is-link.
+ * `is-link` and `mode`/`size` describe the path itself (not what a link
+ * points to), while `is-dir` follows a link, so a link to a directory can
+ * be entered. `mtime` is seconds since the epoch, for sorting; `date` is
+ * formatted the way `ls -l` does it ("Sep 28 14:02" within the last six
+ * months, "Sep 28  2025" otherwise). `link-target` is "" unless is-link.
  */
 Lisp l_fileAttributes(Lisp args, LispError *e, LispContext ctx) {
+  static const char *const months[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
   const char *path;
-  struct stat lst;
-  struct stat st;
-  int is_dir;
-  int is_link;
-  char mode[11];
+  OsFileInfo info;
   char date[32];
-  char target[PATH_MAX];
-  ssize_t target_len;
   time_t now;
-  struct tm tm_mtime;
+  time_t mtime;
+  const struct tm *tm;
   Lisp fields[7];
 
   if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
@@ -2288,44 +2216,40 @@ Lisp l_fileAttributes(Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
   }
   path = lisp_string(lisp_car(args));
-  if (lstat(path, &lst) != 0)
+  if (os_file_info(path, &info) != 0)
     return lisp_false();
 
-  is_link = S_ISLNK(lst.st_mode);
-  is_dir = is_link ? (stat(path, &st) == 0 && S_ISDIR(st.st_mode))
-                   : S_ISDIR(lst.st_mode);
-  modeString(lst.st_mode, mode);
-
   now = time(NULL);
-  localtime_r(&lst.st_mtime, &tm_mtime);
-  // Same six-month cutoff ls uses to switch from time-of-day to year.
-  if (lst.st_mtime > now - 15778476 && lst.st_mtime <= now + 3600)
-    strftime(date, sizeof(date), "%b %e %H:%M", &tm_mtime);
-  else
-    strftime(date, sizeof(date), "%b %e  %Y", &tm_mtime);
-
-  target[0] = '\0';
-  if (is_link) {
-    target_len = readlink(path, target, sizeof(target) - 1);
-    target[target_len > 0 ? target_len : 0] = '\0';
+  mtime = (time_t)info.mtime;
+  tm = localtime(&mtime);
+  date[0] = '\0';
+  if (tm) {
+    // Same six-month cutoff ls uses to switch from time-of-day to year.
+    // Built by hand: strftime's %e (space-padded day) isn't standard C.
+    if (mtime > now - 15778476 && mtime <= now + 3600)
+      snprintf(date, sizeof(date), "%s %2d %02d:%02d", months[tm->tm_mon % 12],
+               tm->tm_mday, tm->tm_hour, tm->tm_min);
+    else
+      snprintf(date, sizeof(date), "%s %2d  %d", months[tm->tm_mon % 12], tm->tm_mday,
+               tm->tm_year + 1900);
   }
 
-  fields[0] = lisp_make_bool(is_dir);
-  fields[1] = lisp_make_bool(is_link);
-  fields[2] = lisp_make_int((LispInt)lst.st_size);
-  fields[3] = lisp_make_int((LispInt)lst.st_mtime);
-  fields[4] = lisp_make_string2(mode, ctx);
+  fields[0] = lisp_make_bool(info.is_dir);
+  fields[1] = lisp_make_bool(info.is_link);
+  fields[2] = lisp_make_int((LispInt)info.size);
+  fields[3] = lisp_make_int((LispInt)info.mtime);
+  fields[4] = lisp_make_string2(info.mode, ctx);
   fields[5] = lisp_make_string2(date, ctx);
-  fields[6] = lisp_make_string2(target, ctx);
+  fields[6] = lisp_make_string2(info.link_target, ctx);
   return lisp_make_list2(fields, 7, ctx);
 }
 
 /**
  * @brief Lisp function: run a program and capture its output
  * @details (process-run "program" "arg" ...) — runs the program directly
- * (execvp, searched on PATH), **not** through a shell: every argument
- * reaches it verbatim, so file names with spaces or quotes need no
- * escaping. stdout and stderr are captured together; stdin is /dev/null.
+ * (searched on PATH), **not** through a shell: every argument reaches it
+ * verbatim, so file names with spaces or quotes need no escaping. stdout
+ * and stderr are captured together; stdin is empty.
  * Blocks the editor until the program exits, up to 60 seconds (then it's
  * killed), keeping at most 1 MiB of output.
  * @return (exit-code . "output"): exit-code 0 on success, 127 if the
@@ -2335,150 +2259,84 @@ Lisp l_fileAttributes(Lisp args, LispError *e, LispContext ctx) {
 /**
  * @brief Lisp function: which platform the editor runs on
  * @details (system-type) — "windows", "darwin" (macOS), "linux", or
- * "unix" for anything else. For packages whose commands differ by
- * platform (dired, on Windows, has no rm/mv/cp to run).
+ * "unix" for anything else.
  * @return Lisp string
  */
 Lisp l_systemType(Lisp args, LispError *e, LispContext ctx) {
   (void)args;
   (void)e;
-#if defined(_WIN32)
-  return lisp_make_string2("windows", ctx);
-#elif defined(__APPLE__)
-  return lisp_make_string2("darwin", ctx);
-#elif defined(__linux__)
-  return lisp_make_string2("linux", ctx);
-#else
-  return lisp_make_string2("unix", ctx);
-#endif
+  return lisp_make_string2(os_name(), ctx);
 }
 
 /**
  * @brief Lisp function: quote a string for shell-run
- * @details (shell-quote "it's") — one literal argument for the platform's
+ * @details (shell-quote "it's") — one literal word for the platform's
  * shell: 'it'\''s' for sh, 'it''s' for PowerShell.
  * @return Lisp string
  */
 Lisp l_shellQuote(Lisp args, LispError *e, LispContext ctx) {
-  const char *in;
-  char *out;
-  size_t size;
+  char *quoted;
   Lisp result;
-#ifdef _WIN32
-  const unsigned char *p;
-  size_t o = 0;
-#endif
-
   if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
     *e = LISP_ERROR_ARG_TYPE;
     return lisp_null();
   }
-  in = lisp_string(lisp_car(args));
-  size = strlen(in) * 4 + 3;
-  out = galloc(size);
-  if (!out)
+  quoted = os_shell_quote(lisp_string(lisp_car(args)));
+  if (!quoted)
     return lisp_null();
-#ifdef _WIN32
-  // PowerShell single quotes: everything literal, ' doubled — and so are
-  // the typographic ones (U+2018-U+201B), which PowerShell also accepts
-  // as quote characters.
-  out[o++] = '\'';
-  for (p = (const unsigned char *)in; *p; p++) {
-    if (*p == '\'')
-      out[o++] = '\'';
-    else if (p[0] == 0xE2 && p[1] == 0x80 && p[2] >= 0x98 && p[2] <= 0x9B) {
-      memcpy(out + o, p, 3);
-      o += 3;
-    }
-    out[o++] = (char)*p;
-  }
-  out[o++] = '\'';
-  out[o] = '\0';
-#else
-  shellQuote(in, out, size);
-#endif
-  result = lisp_make_string2(out, ctx);
-  gfree(out);
+  result = lisp_make_string2(quoted, ctx);
+  free(quoted);
   return result;
 }
 
 /**
  * @brief Lisp function: run a shell command and capture its output
- * @details (shell-run "command") — like process-run, but through the
+ * @details (shell-run "command" [dir]) — like process-run, but through the
  * platform's shell: /bin/sh -c on Unix, PowerShell on Windows (pwsh if
- * installed). Same contract: stdout and stderr together, stdin empty, a
- * 60s deadline, and (exit-code . "output").
+ * installed), from `dir` if given. Same contract: stdout and stderr
+ * together, stdin empty, a 60s deadline, and (exit-code . "output").
  * @return Lisp pair (exit-code . output)
  */
 Lisp l_shellRun(Lisp args, LispError *e, LispContext ctx) {
   const char *command;
-  char *argv[6];
+  const char *dir = NULL;
+  char **argv;
   char *out;
   int status;
   Lisp result;
-#ifdef _WIN32
-  static const char prologue[] =
-      "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-      "$OutputEncoding = [Text.Encoding]::UTF8\n";
-  // $? and $LASTEXITCODE of the user's command, as the process exit code:
-  // a failing program's own code, 1 for a failed cmdlet, else 0.
-  static const char epilogue[] =
-      "\n$__beluga_ok = $?; if ($LASTEXITCODE) { exit $LASTEXITCODE }; "
-      "if (-not $__beluga_ok) { exit 1 }";
-  char *script;
-  char *encoded;
-  size_t len;
-#endif
 
   if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
     *e = LISP_ERROR_ARG_TYPE;
     return lisp_null();
   }
   command = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING)
+    dir = lisp_string(lisp_car(args));
 
-#ifdef _WIN32
-  len = sizeof(prologue) + strlen(command) + sizeof(epilogue);
-  script = galloc(len);
-  if (!script)
+  argv = os_shell_argv(command);
+  if (!argv)
     return lisp_null();
-  snprintf(script, len, "%s%s%s", prologue, command, epilogue);
-  encoded = belugaPowerShellEncode(script);
-  gfree(script);
-  if (!encoded)
-    return lisp_null();
-  argv[0] = (char *)belugaPowerShell();
-  argv[1] = "-NoProfile";
-  argv[2] = "-NonInteractive";
-  argv[3] = "-EncodedCommand";
-  argv[4] = encoded;
-  argv[5] = NULL;
-  out = runArgvCapture(argv, 60000, 1 << 20, &status);
-  free(encoded);
-#else
-  argv[0] = "/bin/sh";
-  argv[1] = "-c";
-  argv[2] = (char *)command;
-  argv[3] = NULL;
-  out = runArgvCapture(argv, 60000, 1 << 20, &status);
-#endif
+  out = runArgvCaptureIn(argv, dir, 60000, 1 << 20, &status);
+  os_free_argv(argv);
 
   result = lisp_cons(lisp_make_int(status), lisp_make_string2(out ? out : "", ctx), ctx);
   gfree(out);
   return result;
 }
 
-#ifdef _WIN32
 /**
  * @brief (code . message) for the file-operation builtins below — the
- * same shape as process-run's (exit-code . output).
+ * same shape as process-run's (exit-code . output): 0 and "" on success.
  */
-static Lisp fileOpResult(const int code, const char *message, LispContext ctx) {
-  return lisp_cons(lisp_make_int(code), lisp_make_string2(message, ctx), ctx);
+static Lisp fileOpResult(const int rc, const char *message, LispContext ctx) {
+  return lisp_cons(lisp_make_int(rc == 0 ? 0 : 1), lisp_make_string2(rc == 0 ? "" : message, ctx),
+                   ctx);
 }
 
 /**
- * @brief The strings of a Lisp list, as a galloc'd array (NULL on a
- * non-string element).
+ * @brief The strings of a Lisp list, as a galloc'd NULL-terminated array
+ * (NULL on a non-string element).
  */
 static const char **stringList(Lisp list, int *count) {
   Lisp it;
@@ -2501,33 +2359,30 @@ static const char **stringList(Lisp list, int *count) {
 }
 
 /**
- * @brief Lisp function (Windows only): delete a file or a directory tree
- * @details (delete-path "path") — permanently, like rm -rf; there are no
- * rm/mv/cp programs to run on Windows. Returns (0 . "") or
- * (error-code . "message").
+ * @brief Lisp function: delete a file or a directory tree
+ * @details (delete-path "path") — permanently, like rm -rf; a symbolic
+ * link is removed, not followed. Returns (0 . "") or (1 . "reason").
  */
 Lisp l_deletePath(Lisp args, LispError *e, LispContext ctx) {
-  const char *path;
-  char err[256];
-  int code;
+  char err[512];
+  int rc;
   if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
     *e = LISP_ERROR_ARG_TYPE;
     return lisp_null();
   }
-  path = lisp_string(lisp_car(args));
-  code = belugaFileOperation(BELUGA_FILEOP_DELETE, &path, 1, NULL, err, sizeof(err));
-  return fileOpResult(code, err, ctx);
+  rc = os_delete_tree(lisp_string(lisp_car(args)), err, sizeof(err));
+  return fileOpResult(rc, err, ctx);
 }
 
 /**
  * @brief move-paths / copy-paths: (op '("src" ...) "dest").
  */
-static Lisp transferPaths(const int op, Lisp args, LispError *e, LispContext ctx) {
+static Lisp transferPaths(const int move, Lisp args, LispError *e, LispContext ctx) {
   const char **paths;
   const char *dest;
-  char err[256];
+  char err[512];
   int count = 0;
-  int code;
+  int rc;
   if (!lisp_is_pair(args) || !lisp_is_pair(lisp_cdr(args)) ||
       lisp_type(lisp_car(lisp_cdr(args))) != LISP_STRING) {
     *e = LISP_ERROR_ARG_TYPE;
@@ -2539,43 +2394,43 @@ static Lisp transferPaths(const int op, Lisp args, LispError *e, LispContext ctx
     return lisp_null();
   }
   dest = lisp_string(lisp_car(lisp_cdr(args)));
-  code = belugaFileOperation(op, paths, count, dest, err, sizeof(err));
+  rc = move ? os_move(paths, count, dest, err, sizeof(err))
+            : os_copy_tree(paths, count, dest, err, sizeof(err));
   gfree(paths);
-  return fileOpResult(code, err, ctx);
+  return fileOpResult(rc, err, ctx);
 }
 
 /**
- * @brief Lisp function (Windows only): move or rename, like mv
+ * @brief Lisp function: move or rename, like mv
  * @details (move-paths '("a" "b") "dest") — into dest when it's an
  * existing directory, else (one source) renamed to dest.
  */
 Lisp l_movePaths(Lisp args, LispError *e, LispContext ctx) {
-  return transferPaths(BELUGA_FILEOP_MOVE, args, e, ctx);
+  return transferPaths(1, args, e, ctx);
 }
 
 /**
- * @brief Lisp function (Windows only): copy, like cp -R
+ * @brief Lisp function: copy, like cp -R
  * @details (copy-paths '("a" "dir") "dest") — directories recursively.
  */
 Lisp l_copyPaths(Lisp args, LispError *e, LispContext ctx) {
-  return transferPaths(BELUGA_FILEOP_COPY, args, e, ctx);
+  return transferPaths(0, args, e, ctx);
 }
 
 /**
- * @brief Lisp function (Windows only): create a directory and its parents
+ * @brief Lisp function: create a directory and its parents
  * @details (make-directories "a/b/c") — like mkdir -p.
  */
 Lisp l_makeDirectories(Lisp args, LispError *e, LispContext ctx) {
-  char err[256];
-  int code;
+  char err[512];
+  int rc;
   if (!lisp_is_pair(args) || lisp_type(lisp_car(args)) != LISP_STRING) {
     *e = LISP_ERROR_ARG_TYPE;
     return lisp_null();
   }
-  code = belugaMakeDirectories(lisp_string(lisp_car(args)), err, sizeof(err));
-  return fileOpResult(code, err, ctx);
+  rc = os_mkdirs(lisp_string(lisp_car(args)), err, sizeof(err));
+  return fileOpResult(rc, err, ctx);
 }
-#endif
 
 Lisp l_processRun(Lisp args, LispError *e, LispContext ctx) {
   Lisp it;
@@ -2618,7 +2473,7 @@ Lisp l_processRun(Lisp args, LispError *e, LispContext ctx) {
 /**
  * @brief Lisp function: run a program in the background
  * @details (process-start callback "program" "arg" ...) — like process-run
- * (no shell, stdout+stderr captured, stdin /dev/null), but returns at once;
+ * (no shell, stdout+stderr captured, stdin empty), but returns at once;
  * `callback` is called later, from the main loop, with the same
  * (exit-code . "output") pair once the program exits. The program has no
  * controlling terminal, so anything that would prompt for a password fails
@@ -2709,7 +2564,7 @@ Lisp l_stringSplit(Lisp args, LispError *e, LispContext ctx) {
   start = text;
   while (limit < 0 || count < limit) {
     hit = strstr(start, sep);
-    piece = hit ? strndup(start, (size_t)(hit - start)) : strdup(start);
+    piece = hit ? utilStrndup(start, (size_t)(hit - start)) : utilStrdup(start);
     if (!piece)
       break;
     cell = lisp_cons(lisp_make_string2(piece, ctx), lisp_null(), ctx);

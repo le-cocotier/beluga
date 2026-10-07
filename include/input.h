@@ -6,7 +6,6 @@
 #include "output.h"
 #include "terminal.h"
 #include "builtins.h"
-#include <unistd.h>
 
 // KEYS keycode
 //

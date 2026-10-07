@@ -831,7 +831,7 @@ void editorRefreshScreen() {
   abAppend(&ab, SHOW_CURSOR, 6);
 
   if (screenFrameChanged(ab.b, ab.len)) {
-    write(STDOUT_FILENO, ab.b, ab.len);
+    os_term_write(ab.b, (size_t)ab.len);
     screenFrameCache(ab.b, ab.len);
   }
   abFree(&ab);

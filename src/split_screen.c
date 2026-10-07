@@ -278,7 +278,7 @@ void splitScreenSyncTerminalSizes(void) {
     for (i = 0; i < layout->num_panes; i++) {
         pane = &layout->panes[i];
         buf = bufferFindById(pane->buffer_id);
-        if (!buf || buf->type != TERMINAL_BUFF || buf->pty_master_fd < 0)
+        if (!buf || buf->type != TERMINAL_BUFF || !buf->pty)
             continue;
         ptySessionResize(buf, pane->height, pane->width);
         buf->term_state.pane_height = pane->height;
