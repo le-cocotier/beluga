@@ -25,8 +25,9 @@ add_project_arguments('-Wdeclaration-after-statement', language : 'c')
 # They're the only code allowed OS headers or POSIX/Win32 calls
 # (tools/check_os_boundary.sh checks it).
 if is_windows
-  if cc.get_id() != 'gcc'
-    error('Windows builds need MinGW-w64 gcc (MSYS2 UCRT64, WinLibs, or a cross-compiler); MSVC is not supported.')
+  # MinGW-w64 gcc or clang (llvm-mingw, MSYS2 CLANG64); not MSVC or clang-cl.
+  if cc.get_argument_syntax() == 'msvc'
+    error('Windows builds need MinGW-w64 gcc or clang (MSYS2 UCRT64/CLANG64, WinLibs, llvm-mingw, or a cross-compiler); MSVC is not supported.')
   endif
   os_lib = static_library('beluga-os-win32',
     'src/os/os_win32.c',
@@ -64,7 +65,11 @@ if is_windows
   extra_sources += import('windows').compile_resources('windows/beluga.rc',
     depend_files : files('windows/beluga.manifest'))
   # One self-contained beluga.exe: no libgcc DLLs to ship next to it.
-  link_args += ['-static']
+  # Not for a sanitizer build (clang's AddressSanitizer on Windows only
+  # comes as a DLL, libclang_rt.asan_dynamic-x86_64.dll).
+  if get_option('b_sanitize') == 'none'
+    link_args += ['-static']
+  endif
 endif
 
 src_files = files(
