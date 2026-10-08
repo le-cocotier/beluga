@@ -24,6 +24,25 @@
 EditorConfig E;
 int buffer_id = 0;
 
+#ifdef APP_DEBUG
+// Debug builds: whatever galloc still tracks once everything has been torn
+// down is a leak (or something deliberately kept to the end). Written to
+// ~/.beluga/memory-at-exit.log, with a one-line summary on the terminal.
+static void reportMemoryAtExit(void) {
+    char path[OS_PATH_MAX];
+    FILE *out;
+    int left;
+    snprintf(path, sizeof(path), "%s/.beluga/memory-at-exit.log", os_home_dir());
+    out = fopen(path, "w");
+    if (!out)
+        return;
+    left = gReportMemory(out);
+    fclose(out);
+    if (left > 0)
+        printf("beluga (debug): %d blocks still allocated at exit, see %s\n", left, path);
+}
+#endif
+
 int main(const int argc, char *argv[]) {
     const char *home;
     Utf8Char* splash_screen;
@@ -68,5 +87,8 @@ int main(const int argc, char *argv[]) {
     // inside a live lisp_apply call, which was a use-after-free).
     deInitEditor();
     bFree_structs();
+#ifdef APP_DEBUG
+    reportMemoryAtExit();
+#endif
     return 0;
 }

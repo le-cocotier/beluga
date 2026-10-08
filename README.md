@@ -66,8 +66,10 @@ Everything outside `src/os/` is the same code on every platform, so Linux or mac
 most problems. For the Windows layer, do the same from an MSYS2 **CLANG64** shell (gcc has no
 AddressSanitizer on Windows), and run `build-asan\beluga.exe` with `C:\msys64\clang64\bin` on
 `PATH` (the sanitizer runtime is a DLL). Dr. Memory doesn't start on Windows 11 24H2.
-Leaks: every `galloc` is tracked, and `CTRL-x m` (memory inspector) lists the live blocks
-with the file and line that allocated them.
+Leaks: every `galloc` is tracked. `CTRL-x m` (memory inspector) lists the live blocks with
+the file and line that allocated them, and a debug build (`install.sh --debug`,
+`install.ps1 -DebugBuild`) writes what is still allocated at exit to
+`~/.beluga/memory-at-exit.log`, grouped by allocation site.
 
 ## How beluga talks to the operating system
 

@@ -13,7 +13,15 @@ void * galloc_impl(size_t size, const char * file, int line, const char * func);
 void * gcalloc_impl(size_t num, size_t size, const char * file, int line, const char * func);
 void * grealloc_impl(void * address, size_t size, const char * file, int line, const char * func);
 void gfree(void * data);
-void gShowMemory();
+
+/**
+ * Writes every block still tracked to `out`, grouped by the line that
+ * allocated it (count, bytes, file:line, function), biggest first, then a
+ * total. Returns the number of blocks. beluga calls it at exit in APP_DEBUG
+ * builds (~/.beluga/memory-at-exit.log); call it anywhere else to see what
+ * is allocated at that moment.
+ */
+int gReportMemory(FILE * out);
 
 #define galloc(size) galloc_impl((size), __FILE__, __LINE__, __func__)
 #define gcalloc(num, size) gcalloc_impl((num), (size), __FILE__, __LINE__, __func__)
