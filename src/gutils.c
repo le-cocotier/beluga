@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "../include/galloc.h"
 
@@ -184,15 +185,74 @@ void gfree(void * data){
   free(pBlock);
 }
 
-void gShowMemory() {
-    int i;
-    const struct dataBlock_t * pBlock = blocks;
-    for (i = 0; i < blockAmount; ++i){
-        printf("%p | %lu | %s:%d (%s) \r\n", pBlock->address, pBlock->size,
-               pBlock->file, pBlock->line, pBlock->func);
-        printf("------------------------\r\n");
-        pBlock = pBlock->lastBlock;
+// One allocation site in gReportMemory()'s summary.
+struct allocSite {
+  const char * file;
+  int line;
+  const char * func;
+  size_t count;
+  size_t bytes;
+};
+
+static int sameSite(const struct allocSite * s, const struct dataBlock_t * b) {
+  return s->line == b->line && strcmp(s->file, b->file) == 0 &&
+         strcmp(s->func, b->func) == 0;
+}
+
+static int bySizeDescending(const void * a, const void * b) {
+  const struct allocSite * x = a;
+  const struct allocSite * y = b;
+  if (x->bytes != y->bytes)
+    return x->bytes < y->bytes ? 1 : -1;
+  if (x->count != y->count)
+    return x->count < y->count ? 1 : -1;
+  return 0;
+}
+
+int gReportMemory(FILE * out) {
+  // Raw allocator throughout: reporting must not add tracked blocks.
+  struct allocSite * sites = NULL;
+  size_t nsites = 0;
+  size_t cap = 0;
+  size_t total = 0;
+  size_t i;
+  const struct dataBlock_t * p;
+  struct allocSite * grown;
+
+  for (p = blocks; p; p = p->lastBlock) {
+    total += p->size;
+    for (i = 0; i < nsites && !sameSite(&sites[i], p); i++)
+      ;
+    if (i == nsites) {
+      if (nsites == cap) {
+        cap = cap ? cap * 2 : 64;
+        grown = realloc(sites, cap * sizeof(*sites));
+        if (!grown)
+          break;
+        sites = grown;
+      }
+      sites[nsites].file = p->file;
+      sites[nsites].line = p->line;
+      sites[nsites].func = p->func;
+      sites[nsites].count = 0;
+      sites[nsites].bytes = 0;
+      nsites++;
     }
+    sites[i].count++;
+    sites[i].bytes += p->size;
+  }
+  if (sites)
+    qsort(sites, nsites, sizeof(*sites), bySizeDescending);
+
+  fprintf(out, "%8s %12s  %s\n", "blocks", "bytes", "allocated at");
+  for (i = 0; i < nsites; i++)
+    fprintf(out, "%8lu %12lu  %s:%d (%s)\n", (unsigned long) sites[i].count,
+            (unsigned long) sites[i].bytes, sites[i].file, sites[i].line,
+            sites[i].func);
+  fprintf(out, "%8d %12lu  total, from %lu allocation sites\n", blockAmount,
+          (unsigned long) total, (unsigned long) nsites);
+  free(sites);
+  return blockAmount;
 }
 
 struct dataBlock_t * gBlocks(void) {

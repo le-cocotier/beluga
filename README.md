@@ -60,6 +60,17 @@ to a release for that tag (`.gitea/workflows/release-windows.yml`).
 To cross-compile `beluga.exe` from Linux: `meson setup --cross-file cross/mingw-w64.ini build-windows && meson compile -C build-windows`
 (needs the `mingw-w64` package).
 
+**Checking memory** (developers): build with AddressSanitizer and UndefinedBehaviorSanitizer:
+`meson setup -Db_sanitize=address,undefined -Dbuildtype=debug build-asan && meson compile -C build-asan`.
+Everything outside `src/os/` is the same code on every platform, so Linux or macOS catches
+most problems. For the Windows layer, do the same from an MSYS2 **CLANG64** shell (gcc has no
+AddressSanitizer on Windows), and run `build-asan\beluga.exe` with `C:\msys64\clang64\bin` on
+`PATH` (the sanitizer runtime is a DLL). Dr. Memory doesn't start on Windows 11 24H2.
+Leaks: every `galloc` is tracked. `CTRL-x m` (memory inspector) lists the live blocks with
+the file and line that allocated them, and a debug build (`install.sh --debug`,
+`install.ps1 -DebugBuild`) writes what is still allocated at exit to
+`~/.beluga/memory-at-exit.log`, grouped by allocation site.
+
 ## How beluga talks to the operating system
 
 Everything beluga needs from the OS — the terminal, waiting for input, running programs,
