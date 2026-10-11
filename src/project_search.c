@@ -25,11 +25,11 @@
 #include "../include/data.h"
 #include "../include/editor_op.h"
 #include "../include/input.h"
-#include "../include/split_screen.h"
 #include "../include/project_files.h"
+#include "../include/split_screen.h"
 #include "../include/subprocess.h"
-#include "../include/utils.h"
 #include "../include/utf8.h"
+#include "../include/utils.h"
 
 #include <ctype.h>
 #include <limits.h>
@@ -100,16 +100,18 @@ typedef struct {
   const char *pattern;
   size_t pattern_len;
   long long deadline;
-  char *out;   // "path:line:text\n"..., galloc'd
+  char *out; // "path:line:text\n"..., galloc'd
   size_t len;
   size_t cap;
-  int stop;    // cap or deadline reached
+  int stop; // cap or deadline reached
 } PlainSearch;
 
-static void plainSearchAppend(PlainSearch *ps, const char *rel, const int line_no,
-                              const char *text, const size_t text_len) {
+static void plainSearchAppend(PlainSearch *ps, const char *rel,
+                              const int line_no, const char *text,
+                              const size_t text_len) {
   char prefix[OS_PATH_MAX + 32];
-  const int prefix_len = snprintf(prefix, sizeof(prefix), "%s:%d:", rel, line_no);
+  const int prefix_len =
+      snprintf(prefix, sizeof(prefix), "%s:%d:", rel, line_no);
   const size_t need = (size_t)prefix_len + text_len + 2;
   char *grown;
   size_t cap;
@@ -162,12 +164,12 @@ static int plainSearchFile(const char *rel, const char *full, void *ctx) {
   f = fopen(full, "rb");
   if (!f)
     return 0;
-  if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) <= 0 || size > 64L * 1024 * 1024 ||
-      fseek(f, 0, SEEK_SET) != 0) {
+  if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) <= 0 ||
+      size > 64L * 1024 * 1024 || fseek(f, 0, SEEK_SET) != 0) {
     fclose(f);
     return 0;
   }
-  data = malloc((size_t)size);
+  data = galloc((size_t)size);
   got = data ? fread(data, 1, (size_t)size, f) : 0;
   fclose(f);
   if (!data || memchr(data, '\0', got < 8192 ? got : 8192)) {
@@ -201,12 +203,13 @@ static int plainSearchFile(const char *rel, const char *full, void *ctx) {
  * file the project walker visits.
  */
 static char *runSearch(const char *pattern, const char *root) {
-  char *argv[] = {"git", "-C", (char *)root, "grep", "-I", "-n", "--no-color",
-                  "-F", "-e", (char *)pattern, NULL};
+  char *argv[] = {"git",        "-C", (char *)root, "grep",          "-I", "-n",
+                  "--no-color", "-F", "-e",         (char *)pattern, NULL};
   PlainSearch ps;
 
   if (projectIsGitRepo(root))
-    return runArgvCaptureQuiet(argv, SEARCH_TIMEOUT_MS, SEARCH_MAX_OUTPUT, NULL);
+    return runArgvCaptureQuiet(argv, SEARCH_TIMEOUT_MS, SEARCH_MAX_OUTPUT,
+                               NULL);
 
   memset(&ps, 0, sizeof(ps));
   ps.pattern = pattern;
@@ -308,7 +311,8 @@ static int parseResults(char *output, const char *root) {
       break;
     }
 
-    path = NULL; text = NULL;
+    path = NULL;
+    text = NULL;
     line_no = 0;
     if (!parseGrepLine(line, &path, &line_no, &text))
       continue;

@@ -1097,17 +1097,7 @@ int bufferClose(int buff_id) {
   buf->prev->next = buf->next;
   E.number_of_buffer--;
 
-  for (i = 0; i < buf->numrows; i++)
-    bufferFreeRow(&buf->row[i]);
-  gfree(buf->row);
-  gfree(buf->filename);
-  gfree(buf->path);
-  gfree(buf->fullname);
-  gfree(buf->undo_stack.entries);
-  gfree(buf->redo_stack.entries);
-  gfree(buf->git_lines);
-  gfree(buf->comment_state);
-  gfree(buf);
+  bufferFree(buf);
 
   editorSetStatusMessage("Killed %s", short_str ? short_str : "buffer");
   gfree(short_str);
@@ -1541,6 +1531,33 @@ void bufferInsertRow(struct buffer_t *buffer, int at, Utf8Char *string,
     buffer->dirty++;
   }
   syntaxHighlighterInvalidateAfter(buffer, at - 1);
+}
+
+/**
+ * @brief Frees a buffer and everything it owns — rows, names, undo/redo
+ * history, git line status, comment-state cache — once it's unlinked.
+ * @details The one place that knows what a buffer owns: bufferClose()
+ * (CTRL-x k) and the teardown at exit (bFree_structs()) both use it. They
+ * used to keep a list each, and the exit one fell behind, leaving every
+ * buffer's undo history, git status and comment cache allocated at exit.
+ * Doesn't unlink, close a terminal, or tell the language server — that's
+ * bufferClose()'s job.
+ */
+void bufferFree(struct buffer_t *buf) {
+  int i;
+  if (!buf)
+    return;
+  for (i = 0; i < buf->numrows; i++)
+    bufferFreeRow(&buf->row[i]);
+  gfree(buf->row);
+  gfree(buf->filename);
+  gfree(buf->path);
+  gfree(buf->fullname);
+  gfree(buf->undo_stack.entries);
+  gfree(buf->redo_stack.entries);
+  gfree(buf->git_lines);
+  gfree(buf->comment_state);
+  gfree(buf);
 }
 
 void bufferFreeRow(Row *row) {

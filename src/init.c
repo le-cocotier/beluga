@@ -1,5 +1,6 @@
 #include "../include/init.h"
 #include "../include/builtins.h"
+#include "../include/cJSON.h"
 #include "../include/color.h"
 #include "../include/completion.h"
 #include "../include/data.h"
@@ -233,6 +234,22 @@ static void initStartupConstants(void) {
 }
 
 /**
+ * @brief cJSON's allocation hooks: route its nodes and printed strings
+ * through galloc, so they show up in the memory inspector and the exit
+ * report like everything else. galloc is a macro, hence the wrapper.
+ * cJSON_InitHooks() with a non-malloc allocator drops realloc, so cJSON's
+ * print buffers grow by allocate + copy + free, all through these two.
+ */
+static void *cjsonAlloc(size_t size) { return galloc(size); }
+
+static void initJsonHooks(void) {
+  cJSON_Hooks hooks;
+  hooks.malloc_fn = cjsonAlloc;
+  hooks.free_fn = gfree;
+  cJSON_InitHooks(&hooks);
+}
+
+/**
  * @brief Init all editor variable
  * @note Dynamic allocation for :\n
  *   - E.status_msg \n
@@ -242,6 +259,9 @@ static void initStartupConstants(void) {
 void initEditor() {
   const char *home = os_home_dir();
   EditorPane *active = NULL;
+
+  // Before anything can build a cJSON object (the LSP client, later on).
+  initJsonHooks();
 
   if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
     E.screencols = 80;
@@ -358,7 +378,7 @@ void initEditor() {
 
   initConfig();
   initStartupConstants();
-  E.lsp_client = (LspClient *)galloc(sizeof(LspClient));
+  E.lsp_client = (LspClient *)gcalloc(1, sizeof(LspClient));
   E.lsp_client->state = LSP_NOT_STARTED;
   // Left as garbage otherwise until lspStart() actually runs, but
   // editorRunLoop() waits on the server's output as soon as LSP is
@@ -378,6 +398,7 @@ void initEditor() {
 
 void deInitEditor() {
   int i;
+  char **temp;
   // free EditorPane
   gfree(E.layout.panes);
 
@@ -405,6 +426,11 @@ void deInitEditor() {
   // free lsp_client
   if (E.lsp_client) {
     lspCleanup(E.lsp_client);
+  }
+
+  temp = &E.theme.BACKGROUND_COLOR;
+  for (i = 0; i < 8; ++i) {
+    gfree(*(temp + i));
   }
 
   // free config

@@ -76,6 +76,8 @@ void bufferRowInsertChar(struct buffer_t *buffer, Row *row, int at, Utf8Char *ch
 void bufferRowDelChar(struct buffer_t *buffer, Row *row, int at);
 void bufferInsertRow(struct buffer_t *buffer, int at,  Utf8Char* string, int len);
 void bufferFreeRow(Row *row);
+// Frees an (already unlinked) buffer and everything it owns.
+void bufferFree(struct buffer_t *buf);
 char* bufferToText(struct buffer_t* buf);
 void bufferMaybeStartLsp(struct buffer_t* buf);
 void bufferMaybeSyncLsp(struct buffer_t* buf);

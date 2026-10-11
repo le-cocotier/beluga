@@ -1517,8 +1517,12 @@ void lspShutdown(LspClient *lsp)
 
     lsp->state = LSP_SHUTDOWN;
 
-    // gfree(lsp->recv_buf);
+    // Only ever reached from lspCleanup() at exit, after the main loop —
+    // never while lsp_feed() is parsing this buffer — so it's safe to free.
+    gfree(lsp->recv_buf);
     lsp->recv_buf = NULL;
+    lsp->recv_len = 0;
+    lsp->recv_cap = 0;
 
     if (lsp->proc)
     {

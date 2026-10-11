@@ -17,6 +17,7 @@
 #include "../include/input.h"
 #include "../include/split_screen.h"
 #include "../include/utf8.h"
+#include "../include/utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,9 +31,9 @@ extern EditorConfig E;
 static int s_memory_buffer_id = -1;
 
 typedef enum {
-  SORT_RECENCY,    // newest allocation first (gutils' own list order)
-  SORT_SIZE_DESC,  // biggest block first — the usual "what's eating memory" view
-  SORT_LOCATION,   // grouped by file:line, then func
+  SORT_RECENCY,   // newest allocation first (gutils' own list order)
+  SORT_SIZE_DESC, // biggest block first — the usual "what's eating memory" view
+  SORT_LOCATION,  // grouped by file:line, then func
   SORT_MODE_COUNT
 } SortMode;
 
@@ -40,23 +41,26 @@ static SortMode s_sort_mode = SORT_RECENCY;
 
 static const char *sortModeLabel(const SortMode mode) {
   switch (mode) {
-  case SORT_SIZE_DESC: return "size";
-  case SORT_LOCATION:  return "location";
-  default:             return "recency";
+  case SORT_SIZE_DESC:
+    return "size";
+  case SORT_LOCATION:
+    return "location";
+  default:
+    return "recency";
   }
 }
 
 static int compareSizeDesc(const void *a, const void *b) {
-  const struct dataBlock_t *ba = *(const struct dataBlock_t * const *)a;
-  const struct dataBlock_t *bb = *(const struct dataBlock_t * const *)b;
+  const struct dataBlock_t *ba = *(const struct dataBlock_t *const *)a;
+  const struct dataBlock_t *bb = *(const struct dataBlock_t *const *)b;
   if (ba->size != bb->size)
     return ba->size > bb->size ? -1 : 1;
   return 0;
 }
 
 static int compareLocation(const void *a, const void *b) {
-  const struct dataBlock_t *ba = *(const struct dataBlock_t * const *)a;
-  const struct dataBlock_t *bb = *(const struct dataBlock_t * const *)b;
+  const struct dataBlock_t *ba = *(const struct dataBlock_t *const *)a;
+  const struct dataBlock_t *bb = *(const struct dataBlock_t *const *)b;
   const int c = strcmp(ba->file ? ba->file : "", bb->file ? bb->file : "");
   if (c != 0)
     return c;
@@ -118,7 +122,7 @@ static struct dataBlock_t **collectSortedBlocks(int *out_count) {
     return NULL;
   }
 
-  arr = galloc(sizeof(struct dataBlock_t *) * (size_t) count);
+  arr = galloc(sizeof(struct dataBlock_t *) * (size_t)count);
   if (!arr) {
     *out_count = 0;
     return NULL;
@@ -130,10 +134,10 @@ static struct dataBlock_t **collectSortedBlocks(int *out_count) {
 
   switch (s_sort_mode) {
   case SORT_SIZE_DESC:
-    qsort(arr, (size_t) i, sizeof(*arr), compareSizeDesc);
+    qsort(arr, (size_t)i, sizeof(*arr), compareSizeDesc);
     break;
   case SORT_LOCATION:
-    qsort(arr, (size_t) i, sizeof(*arr), compareLocation);
+    qsort(arr, (size_t)i, sizeof(*arr), compareLocation);
     break;
   default:
     break; // SORT_RECENCY: gBlocks() order is already newest-first
@@ -199,7 +203,7 @@ void memoryInspectorOpen(void) {
     E.prefix_state = prefix.prefix_id;
 
   editorSetStatusMessage("%d tracked block%s — r to refresh, CTRL-x to leave",
-                          gBlockCount(), gBlockCount() == 1 ? "" : "s");
+                         gBlockCount(), gBlockCount() == 1 ? "" : "s");
 }
 
 void memoryInspectorRefresh(void) {
@@ -222,12 +226,49 @@ void memoryInspectorRefresh(void) {
   }
 
   editorSetStatusMessage("%d tracked block%s", gBlockCount(),
-                          gBlockCount() == 1 ? "" : "s");
+                         gBlockCount() == 1 ? "" : "s");
 }
 
 void memoryInspectorCycleSort(void) {
   s_sort_mode = (SortMode)((s_sort_mode + 1) % SORT_MODE_COUNT);
   memoryInspectorRefresh();
+}
+
+void memoryReport(void) {
+  const char *home = os_home_dir();
+  char *memory_report_location;
+  FILE *f;
+  int count;
+  struct dataBlock_t **sorted;
+  size_t total;
+  int i;
+  char row[160];
+
+  memory_report_location = utilFormat("%s/.beluga/memory_report.log", home);
+
+  f = fopen(memory_report_location, "w");
+  if (!f) {
+    gfree(memory_report_location);
+    return;
+  }
+
+  sorted = collectSortedBlocks(&count);
+  total = 0;
+  for (i = 0; i < count; i++)
+    total += sorted[i]->size;
+
+  fprintf(f, "%d tracked block%s, %zu bytes total, sorted by %s\n\n", count,
+          count == 1 ? "" : "s", total, sortModeLabel(s_sort_mode));
+  for (i = 0; i < count; i++) {
+    formatRow(row, sizeof(row), sorted[i]);
+    fprintf(f, "%s\n", row);
+  }
+  gfree(sorted);
+  fclose(f);
+
+  editorSetStatusMessage("wrote %d block%s to %s", count, count == 1 ? "" : "s",
+                         memory_report_location);
+  gfree(memory_report_location);
 }
 
 void memoryInspectorExport(void) {
@@ -273,7 +314,7 @@ void memoryInspectorExport(void) {
   gfree(sorted);
   fclose(f);
 
-  editorSetStatusMessage("wrote %d block%s to %s", count,
-                          count == 1 ? "" : "s", path);
+  editorSetStatusMessage("wrote %d block%s to %s", count, count == 1 ? "" : "s",
+                         path);
   gfree(path);
 }

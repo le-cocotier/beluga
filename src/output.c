@@ -737,7 +737,7 @@ void editorDrawMessageBar(struct abuf *ab) {
 // when nothing underneath moved. Caching the last frame written and skipping
 // the write() when the new one is byte-for-byte identical (same content,
 // same cursor position) fixes it without touching the redraw cadence itself.
-// Never freed — a process-lifetime cache, same as several other globals here.
+// Lives for the whole session; editorFreeScreenCache() releases it at exit.
 static char *g_prev_frame = NULL;
 static int g_prev_frame_len = 0;
 static int g_prev_frame_cap = 0;
@@ -757,6 +757,13 @@ static void screenFrameCache(const char *buf, int len) {
   }
   memcpy(g_prev_frame, buf, (size_t) len);
   g_prev_frame_len = len;
+}
+
+void editorFreeScreenCache(void) {
+  gfree(g_prev_frame);
+  g_prev_frame = NULL;
+  g_prev_frame_len = 0;
+  g_prev_frame_cap = 0;
 }
 
 void editorRefreshScreen() {

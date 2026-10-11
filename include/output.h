@@ -9,6 +9,8 @@
  */
 
 void editorRefreshScreen();
+// Frees the last-frame cache editorRefreshScreen() keeps (teardown only).
+void editorFreeScreenCache(void);
 
 // Gutter geometry — the single source of truth for how many columns sit to
 // the left of a pane's text (line numbers + diagnostic/git marker). Used by

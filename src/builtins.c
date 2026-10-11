@@ -201,23 +201,23 @@ void bFree_structs(void) {
     b = E.buffers;
     for (i = 0; i < E.number_of_buffer; ++i) {
       next = b->next;
-      for (j = 0; j < b->numrows; ++j) {
-        gfree(b->row[j].characters);
-        gfree(b->row[j].attrs);
-      }
-      gfree(b->row);
-      if (b->filename)
-        gfree(b->filename);
-      if (b->path)
-        gfree(b->path);
-      if (b->fullname)
-        gfree(b->fullname);
-      gfree(b);
+      bufferFree(b);
       b = next;
     }
   }
   E.buffers = NULL;
   E.number_of_buffer = 0;
+
+  // (lsp-server ...) registrations: the table, and each argv string
+  // (utilStrdup — plain malloc, which gfree hands back to free()).
+  for (i = 0; i < E.number_of_lsp_servers; ++i)
+    for (j = 0; j < LSP_SERVER_MAX_ARGS && E.lsp_servers[i].argv[j]; ++j)
+      gfree(E.lsp_servers[i].argv[j]);
+  gfree(E.lsp_servers);
+  E.lsp_servers = NULL;
+  E.number_of_lsp_servers = 0;
+
+  editorFreeScreenCache();
 }
 
 /**

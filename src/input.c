@@ -1,11 +1,11 @@
 #include "../include/input.h"
-#include "../include/galloc.h"
 #include "../include/buffer.h"
 #include "../include/builtins.h"
 #include "../include/completion.h"
 #include "../include/data.h"
 #include "../include/define.h"
 #include "../include/editor_op.h"
+#include "../include/galloc.h"
 #include "../include/output.h"
 #include "../include/split_screen.h"
 #include <ctype.h>
@@ -41,7 +41,8 @@
  * would then match unconditionally, the same as an actual "*" one does.
  */
 static int starPrefixId(void) {
-  static int id = -2; // -2: not yet looked up: distinct from -1 (find_prefix's own not-found)
+  static int id = -2; // -2: not yet looked up: distinct from -1 (find_prefix's
+                      // own not-found)
   if (id == -2)
     id = find_prefix("*").prefix_id;
   return id;
@@ -99,20 +100,19 @@ Utf8Char *fileCompletion(Utf8Char *path) {
     utf8Printf(directory, PATH_MAX, "%u", path);
     END_OF_STRING(directory[utf8StringLen(directory) - 2])
   } else {
-    utf8NCpy(directory, path, (int) (last_slash - path));
+    utf8NCpy(directory, path, (int)(last_slash - path));
     predict_len = utf8Printf(predict, PATH_MAX, "%u", last_slash + 1);
   }
 
-  dir_path = (char *) utf8ToString(directory);
+  dir_path = (char *)utf8ToString(directory);
   entries = os_list_dir(dir_path, &count);
   gfree(dir_path);
   if (!entries) {
-    gfree(full_path);
-    return path;
+    return full_path;
   }
 
   for (i = 0; i < count; i++) {
-    entry_name_utf8 = stringToUtf8((unsigned char *) entries[i].name);
+    entry_name_utf8 = stringToUtf8((unsigned char *)entries[i].name);
     if ((predict_len == 0) ||
         (utf8StringNCmp(entry_name_utf8, predict, predict_len) == 0)) {
       utf8Printf(full_path, PATH_MAX, "%u/%u", directory, entry_name_utf8);
@@ -128,9 +128,9 @@ Utf8Char *fileCompletion(Utf8Char *path) {
   }
 
   os_free_dir(entries, count);
-  gfree(full_path);
   appDebug("[FILE COMP] no entries\n");
-  return path;
+  utf8Cpy(full_path, path);
+  return full_path;
 }
 
 /**
@@ -147,7 +147,8 @@ Utf8Char *fileCompletion(Utf8Char *path) {
  * @note Caller is responsible for bFreeing the returned string
  * @note Uses editorReadKey() for input and editorRefreshScreen() for display
  */
-Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode) {
+Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder,
+                       char bPathMode) {
   Utf8Char *buf = gcalloc(PATH_MAX, sizeof(Utf8Char));
   int buf_len = 0;
   Utf8Char *c = NULL;
@@ -187,7 +188,7 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode
       }
     } else if (bPathMode && *c->character == '\t') {
       // Completion of first path
-       // getenv is allocating memory
+      // getenv is allocating memory
       buf_str = (char *)utf8ToString(buf);
       absolute = os_path_is_absolute(buf_str);
       gfree(buf_str);
@@ -205,6 +206,7 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode
       full_path = fileCompletion(path);
       if (full_path) {
         buf_len = utf8Printf(buf, PATH_MAX, "%u", full_path);
+        gfree(full_path);
       }
     } else if (*c->character) {
       (buf + buf_len)->length = c->length;
@@ -229,7 +231,8 @@ int executeKeyBind(char *key_sequence) {
   int previous_state = 0;
   for (i = 0; i < E.number_of_keybinds; ++i) {
     if (!strcmp(key_sequence, E.key_binds[i].key_sequence)) {
-      if ((E.key_binds[i].prefix_id != starPrefixId()) && (E.prefix_state != E.key_binds[i].prefix_id)) {
+      if ((E.key_binds[i].prefix_id != starPrefixId()) &&
+          (E.prefix_state != E.key_binds[i].prefix_id)) {
         continue;
       }
       previous_state = E.prefix_state;
@@ -292,7 +295,7 @@ static void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
     break;
   default:
     memcpy(seq, key->character, key->length);
-    len = (int) key->length;
+    len = (int)key->length;
     break;
   }
 
@@ -451,7 +454,8 @@ void editorProcessKeypress() {
     E.quit_times_buffer = E.constantes.QUIT_TIMES;
   }
 
-  should_trigger_completion = E.constantes.LSP && buf->b_lsp_open && is_printable && is_word;
+  should_trigger_completion =
+      E.constantes.LSP && buf->b_lsp_open && is_printable && is_word;
 
   // Word-char keystrokes aren't the only thing worth asking the
   // server about — member-access completion (by far the most common
