@@ -23,6 +23,8 @@
 #include "../include/builtins.h"
 #include "../include/editor_op.h"
 #include "../include/utils.h"
+#include "../include/list_popup.h"
+#include "../include/syntax_highlighter.h"
 
 extern EditorConfig E;
 
@@ -48,6 +50,115 @@ static void lsp_send(const LspClient *lsp, const char *json)
     os_proc_write(lsp->proc, json, (size_t) body_len);
 
     appDebug("[LSP →] Content-Length: %d | %s\n", body_len, json);
+}
+
+/**
+ * @brief Answers a request the *server* sent us (workspace/applyEdit, ...).
+ * Takes ownership of `result` (NULL = JSON null) and of `error`; at most
+ * one of the two is non-NULL.
+ */
+static void lsp_send_response(const LspClient *lsp, const cJSON *id, cJSON *result,
+                              cJSON *error)
+{
+    cJSON *root;
+    char *msg;
+    root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "jsonrpc", "2.0");
+    cJSON_AddItemToObject(root, "id", cJSON_Duplicate(id, 1));
+    if (error)
+        cJSON_AddItemToObject(root, "error", error);
+    else
+        cJSON_AddItemToObject(root, "result", result ? result : cJSON_CreateNull());
+    msg = cJSON_PrintUnformatted(root);
+    lsp_send(lsp, msg);
+    gfree(msg);
+    cJSON_Delete(root);
+}
+
+/**
+ * @brief Pushes `buf` to the server if it changed since the last sync.
+ * Position-based requests (hover, signature help, code actions) are
+ * answered against the server's copy of the document, which otherwise only
+ * catches up on the sync/completion debounce.
+ */
+static void lsp_sync_if_dirty(LspClient *lsp, struct buffer_t *buf)
+{
+    if (!buf->b_lsp_open || buf->dirty == buf->lsp_synced_dirty)
+        return;
+    lspDidChange(lsp, buf);
+    buf->lsp_synced_dirty = buf->dirty;
+}
+
+/**
+ * @brief The active pane's cursor, in 0-based screen coordinates — where
+ * the hover/signature popup anchors. Read when the response arrives, not
+ * when the request goes out: by then the pane has been redrawn, so its
+ * cursor matches the buffer's.
+ */
+static void lsp_cursor_screen_pos(int *x, int *y)
+{
+    EditorPane *active = splitScreenGetActivePane();
+    struct buffer_t *buf = bufferFindById(active->buffer_id);
+    *x = active->cursor_x + active->origin_x + (buf ? editorGutterWidth(buf) : 0);
+    *y = active->cursor_y + active->origin_y;
+}
+
+// ─── Diagnostics cache ─────────────────────────────────────────────────────
+// The server's own diagnostics, verbatim, per document. A code-action
+// request has to hand back the exact diagnostic objects the server
+// published (clangd looks its fixes up by range + full message), which
+// DiagnosticList's one-line, display-only copy can't reproduce.
+
+typedef struct
+{
+    char *uri;
+    cJSON *diagnostics; // array, owned
+} LspDiagCache;
+
+static LspDiagCache *g_diag_cache = NULL;
+static int g_diag_cache_count = 0;
+
+static void lsp_cache_diagnostics(const char *uri, const cJSON *diagnostics)
+{
+    int i;
+    LspDiagCache *grown;
+    for (i = 0; i < g_diag_cache_count; i++)
+    {
+        if (strcmp(g_diag_cache[i].uri, uri) == 0)
+        {
+            cJSON_Delete(g_diag_cache[i].diagnostics);
+            g_diag_cache[i].diagnostics = cJSON_Duplicate(diagnostics, 1);
+            return;
+        }
+    }
+    grown = grealloc(g_diag_cache, sizeof(LspDiagCache) * (size_t) (g_diag_cache_count + 1));
+    if (!grown) return;
+    g_diag_cache = grown;
+    g_diag_cache[g_diag_cache_count].uri = utilStrdup(uri);
+    g_diag_cache[g_diag_cache_count].diagnostics = cJSON_Duplicate(diagnostics, 1);
+    g_diag_cache_count++;
+}
+
+static const cJSON *lsp_cached_diagnostics(const char *uri)
+{
+    int i;
+    for (i = 0; i < g_diag_cache_count; i++)
+        if (strcmp(g_diag_cache[i].uri, uri) == 0)
+            return g_diag_cache[i].diagnostics;
+    return NULL;
+}
+
+static void lsp_free_diag_cache(void)
+{
+    int i;
+    for (i = 0; i < g_diag_cache_count; i++)
+    {
+        gfree(g_diag_cache[i].uri);
+        cJSON_Delete(g_diag_cache[i].diagnostics);
+    }
+    gfree(g_diag_cache);
+    g_diag_cache = NULL;
+    g_diag_cache_count = 0;
 }
 
 static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
@@ -482,12 +593,10 @@ static void lsp_on_definition_response(LspClient *lsp, const char *result_json)
 }
 
 /**
- * @brief Extracts a single display string from a hover response's
+ * @brief Extracts the display text from a hover response's
  * `result.contents`, which per spec may be a plain string, a
  * {kind,value} MarkupContent, a single MarkedString, or an array of any
- * of those. Only the first line of whatever comes back is ever shown
- * (editorSetStatusMessage's single-line status bar), so this just needs
- * *a* representative string, not a faithful full rendering.
+ * of those — of which the first is shown.
  */
 static const char *lsp_hover_contents_text(cJSON *contents)
 {
@@ -510,31 +619,127 @@ static void lsp_on_hover_response(LspClient *lsp, const char *result_json)
     cJSON *result;
     cJSON *contents;
     const char *text;
-    char first_line[256];
-    int i;
+    int x;
+    int y;
     (void) lsp;
     root = cJSON_Parse(result_json);
     if (!root) return;
 
     result = cJSON_GetObjectItem(root, "result");
-    contents = result ? cJSON_GetObjectItem(result, "contents") : NULL;
+    contents = (result && cJSON_IsObject(result)) ? cJSON_GetObjectItem(result, "contents") : NULL;
     text = lsp_hover_contents_text(contents);
 
     if (text && text[0])
     {
-        i = 0;
-        while (text[i] && text[i] != '\n' && i < (int) sizeof(first_line) - 1)
-        {
-            first_line[i] = text[i];
-            i++;
-        }
-        first_line[i] = '\0';
-        editorSetStatusMessage("%s", first_line);
+        lsp_cursor_screen_pos(&x, &y);
+        lspUiSetInfo(&E.lsp_info, LSP_INFO_HOVER, text, x, y);
     }
-    else
-    {
+    if (!text || !text[0] || !E.lsp_info.visible)
         editorSetStatusMessage("No hover info");
+    cJSON_Delete(root);
+}
+
+/**
+ * @brief Shows result.signatures[activeSignature] above the cursor, its
+ * active parameter highlighted. A null result means the cursor has left
+ * the call, so an open signature popup closes.
+ */
+static void lsp_on_signature_help_response(LspClient *lsp, const char *result_json)
+{
+    cJSON *root;
+    cJSON *result;
+    cJSON *signatures;
+    cJSON *sig;
+    cJSON *label;
+    cJSON *params;
+    cJSON *param;
+    cJSON *param_label;
+    cJSON *doc;
+    cJSON *active_item;
+    const char *doc_text;
+    char *text;
+    size_t text_len;
+    int active_sig;
+    int active_param;
+    int hl_start;
+    int hl_end;
+    const char *found;
+    int x;
+    int y;
+    (void) lsp;
+    root = cJSON_Parse(result_json);
+    if (!root) return;
+
+    result = cJSON_GetObjectItem(root, "result");
+    signatures = (result && cJSON_IsObject(result)) ? cJSON_GetObjectItem(result, "signatures") : NULL;
+    if (!signatures || !cJSON_IsArray(signatures) || cJSON_GetArraySize(signatures) == 0)
+    {
+        if (E.lsp_info.kind == LSP_INFO_SIGNATURE)
+            E.lsp_info.visible = 0;
+        cJSON_Delete(root);
+        return;
     }
+
+    active_item = cJSON_GetObjectItem(result, "activeSignature");
+    active_sig = (active_item && cJSON_IsNumber(active_item)) ? active_item->valueint : 0;
+    if (active_sig < 0 || active_sig >= cJSON_GetArraySize(signatures)) active_sig = 0;
+    sig = cJSON_GetArrayItem(signatures, active_sig);
+    label = cJSON_GetObjectItem(sig, "label");
+    if (!label || !cJSON_IsString(label))
+    {
+        cJSON_Delete(root);
+        return;
+    }
+
+    // A signature's own activeParameter wins over the response-wide one.
+    active_item = cJSON_GetObjectItem(sig, "activeParameter");
+    if (!active_item) active_item = cJSON_GetObjectItem(result, "activeParameter");
+    active_param = (active_item && cJSON_IsNumber(active_item)) ? active_item->valueint : -1;
+
+    // ParameterInformation.label is either a substring of the signature
+    // label or, with labelOffsetSupport, its [start, end) offsets.
+    hl_start = hl_end = 0;
+    params = cJSON_GetObjectItem(sig, "parameters");
+    param = (params && active_param >= 0) ? cJSON_GetArrayItem(params, active_param) : NULL;
+    param_label = param ? cJSON_GetObjectItem(param, "label") : NULL;
+    if (param_label && cJSON_IsArray(param_label) && cJSON_GetArraySize(param_label) == 2)
+    {
+        hl_start = cJSON_GetArrayItem(param_label, 0)->valueint;
+        hl_end = cJSON_GetArrayItem(param_label, 1)->valueint;
+    }
+    else if (param_label && cJSON_IsString(param_label) && param_label->valuestring[0])
+    {
+        found = strstr(label->valuestring, param_label->valuestring);
+        if (found)
+        {
+            hl_start = (int) (found - label->valuestring);
+            hl_end = hl_start + (int) strlen(param_label->valuestring);
+        }
+    }
+
+    doc = cJSON_GetObjectItem(sig, "documentation");
+    doc_text = lsp_hover_contents_text(doc);
+    text_len = strlen(label->valuestring) + (doc_text ? strlen(doc_text) : 0) + 3;
+    text = galloc(text_len);
+    if (!text)
+    {
+        cJSON_Delete(root);
+        return;
+    }
+    snprintf(text, text_len, "%s%s%s", label->valuestring,
+             doc_text ? "\n\n" : "", doc_text ? doc_text : "");
+
+    lsp_cursor_screen_pos(&x, &y);
+    lspUiSetInfo(&E.lsp_info, LSP_INFO_SIGNATURE, text, x, y);
+    if (E.lsp_info.count > 0 && hl_end > hl_start &&
+        hl_end <= (int) strlen(E.lsp_info.lines[0]))
+    {
+        E.lsp_info.hl_line = 0;
+        E.lsp_info.hl_start = hl_start;
+        E.lsp_info.hl_end = hl_end;
+    }
+
+    gfree(text);
     cJSON_Delete(root);
 }
 
@@ -619,10 +824,14 @@ static void applyTextEditsToUri(const char *uri, const cJSON *edits_array)
     gfree(edits);
 }
 
-static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
+/**
+ * @brief Applies a WorkspaceEdit — both its "changes" ({uri: TextEdit[]})
+ * and its "documentChanges" (TextDocumentEdit[]) shapes — across every
+ * affected buffer, opening files that aren't open yet. Nothing is saved.
+ * @return the number of documents touched.
+ */
+static int applyWorkspaceEdit(const cJSON *edit)
 {
-    cJSON *root;
-    cJSON *result;
     int files_touched;
     cJSON *changes;
     cJSON *edits_array;
@@ -630,21 +839,11 @@ static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
     cJSON *entry;
     cJSON *text_doc;
     cJSON *uri_item;
-    (void) lsp;
-    root = cJSON_Parse(result_json);
-    if (!root) return;
-
-    result = cJSON_GetObjectItem(root, "result");
-    if (!result)
-    {
-        editorSetStatusMessage("Rename failed (no response from server)");
-        cJSON_Delete(root);
-        return;
-    }
-
     files_touched = 0;
+    if (!edit || !cJSON_IsObject(edit))
+        return 0;
 
-    changes = cJSON_GetObjectItem(result, "changes");
+    changes = cJSON_GetObjectItem(edit, "changes");
     if (changes)
     {
         // cJSON objects are linked lists of (string key, value) pairs —
@@ -657,11 +856,12 @@ static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
         }
     }
 
-    document_changes = cJSON_GetObjectItem(result, "documentChanges");
+    document_changes = cJSON_GetObjectItem(edit, "documentChanges");
     if (document_changes && cJSON_IsArray(document_changes))
     {
         cJSON_ArrayForEach(entry, document_changes)
         {
+            // Create/rename/delete-file operations carry no "edits".
             text_doc = cJSON_GetObjectItem(entry, "textDocument");
             uri_item = text_doc ? cJSON_GetObjectItem(text_doc, "uri") : NULL;
             edits_array = cJSON_GetObjectItem(entry, "edits");
@@ -672,7 +872,27 @@ static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
             }
         }
     }
+    return files_touched;
+}
 
+static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
+{
+    cJSON *root;
+    cJSON *result;
+    int files_touched;
+    (void) lsp;
+    root = cJSON_Parse(result_json);
+    if (!root) return;
+
+    result = cJSON_GetObjectItem(root, "result");
+    if (!result)
+    {
+        editorSetStatusMessage("Rename failed (no response from server)");
+        cJSON_Delete(root);
+        return;
+    }
+
+    files_touched = applyWorkspaceEdit(result);
     if (files_touched > 0)
         editorSetStatusMessage("Renamed — %d file%s touched (review and save)",
                                files_touched, files_touched == 1 ? "" : "s");
@@ -680,6 +900,178 @@ static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
         editorSetStatusMessage("Rename: nothing to change");
 
     cJSON_Delete(root);
+}
+
+// ─── Code actions ──────────────────────────────────────────────────────────
+
+// The last textDocument/codeAction result (an array of Command |
+// CodeAction), kept until the user picks one from the popup.
+static cJSON *g_code_actions = NULL;
+
+static void lsp_on_execute_command_response(LspClient *lsp, const char *result_json)
+{
+    cJSON *root;
+    cJSON *error;
+    cJSON *message;
+    (void) lsp;
+    root = cJSON_Parse(result_json);
+    if (!root) return;
+    error = cJSON_GetObjectItem(root, "error");
+    message = error ? cJSON_GetObjectItem(error, "message") : NULL;
+    if (message && cJSON_IsString(message))
+        editorSetStatusMessage("Code action failed: %s", message->valuestring);
+    cJSON_Delete(root);
+}
+
+/**
+ * @brief workspace/executeCommand for a Command {title, command,
+ * arguments}. The server answers by sending us a workspace/applyEdit
+ * request — see lsp_handle_server_request().
+ */
+static void lsp_execute_command(LspClient *lsp, const cJSON *command)
+{
+    cJSON *name;
+    cJSON *arguments;
+    cJSON *req;
+    cJSON *params;
+    char *msg;
+    int req_id;
+    name = cJSON_GetObjectItem(command, "command");
+    if (!name || !cJSON_IsString(name))
+        return;
+    arguments = cJSON_GetObjectItem(command, "arguments");
+
+    req_id = lsp->next_id++;
+    req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(req, "id", req_id);
+    cJSON_AddStringToObject(req, "method", "workspace/executeCommand");
+    params = cJSON_CreateObject();
+    cJSON_AddStringToObject(params, "command", name->valuestring);
+    if (arguments)
+        cJSON_AddItemToObject(params, "arguments", cJSON_Duplicate(arguments, 1));
+    cJSON_AddItemToObject(req, "params", params);
+
+    msg = cJSON_PrintUnformatted(req);
+    lsp_send(lsp, msg);
+    lsp_track_pending(lsp, req_id, lsp_on_execute_command_response);
+    gfree(msg);
+    cJSON_Delete(req);
+}
+
+void lspApplyCodeAction(LspClient *lsp, const int index)
+{
+    cJSON *action;
+    cJSON *edit;
+    cJSON *command;
+    if (!lsp || lsp->state != LSP_READY || !g_code_actions)
+        return;
+    action = cJSON_GetArrayItem(g_code_actions, index);
+    if (!action)
+        return;
+
+    command = cJSON_GetObjectItem(action, "command");
+    if (command && cJSON_IsString(command))
+    {
+        // A bare Command — the whole item is the command.
+        lsp_execute_command(lsp, action);
+    }
+    else
+    {
+        // A CodeAction: its edit first, then its command, if any (spec order).
+        edit = cJSON_GetObjectItem(action, "edit");
+        if (edit)
+            applyWorkspaceEdit(edit);
+        if (command && cJSON_IsObject(command))
+            lsp_execute_command(lsp, command);
+    }
+
+    cJSON_Delete(g_code_actions);
+    g_code_actions = NULL;
+}
+
+static void lsp_on_code_action_response(LspClient *lsp, const char *result_json)
+{
+    cJSON *root;
+    cJSON *result;
+    cJSON *title;
+    Lisp items;
+    int i;
+    (void) lsp;
+    root = cJSON_Parse(result_json);
+    if (!root) return;
+
+    result = cJSON_GetObjectItem(root, "result");
+    if (!result || !cJSON_IsArray(result) || cJSON_GetArraySize(result) == 0)
+    {
+        editorSetStatusMessage("No code actions here");
+        cJSON_Delete(root);
+        return;
+    }
+
+    cJSON_Delete(g_code_actions);
+    g_code_actions = cJSON_DetachItemFromObject(root, "result");
+
+    // (title . index) pairs, built back to front so they keep the
+    // server's order — clangd lists quick fixes before refactorings.
+    items = lisp_null();
+    for (i = cJSON_GetArraySize(g_code_actions) - 1; i >= 0; i--)
+    {
+        title = cJSON_GetObjectItem(cJSON_GetArrayItem(g_code_actions, i), "title");
+        items = lisp_cons(lisp_cons(lisp_make_string2(
+                                        (title && cJSON_IsString(title)) ? title->valuestring : "?",
+                                        E.ctx),
+                                    lisp_make_int(i), E.ctx),
+                          items, E.ctx);
+    }
+    listPopupOpen("Code actions", items, lisp_make_func(lspApplyCodeAction_L), lisp_null(), 0);
+    cJSON_Delete(root);
+}
+
+/**
+ * @brief Answers a request the server sent us. Only workspace/applyEdit
+ * (how clangd's tweaks, run through workspace/executeCommand, deliver
+ * their edit) and workspace/configuration need real answers; the
+ * registration/progress bookkeeping a server may ask for gets a null
+ * result, and anything else "method not found" — a server blocks waiting
+ * on every one of these, so none may go unanswered.
+ */
+static void lsp_handle_server_request(LspClient *lsp, const cJSON *id, const char *method,
+                                      const cJSON *params)
+{
+    cJSON *result;
+    cJSON *error;
+    cJSON *items;
+    int applied;
+    int i;
+    if (strcmp(method, "workspace/applyEdit") == 0)
+    {
+        applied = params && applyWorkspaceEdit(cJSON_GetObjectItem(params, "edit")) > 0;
+        result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "applied", applied);
+        lsp_send_response(lsp, id, result, NULL);
+    }
+    else if (strcmp(method, "workspace/configuration") == 0)
+    {
+        result = cJSON_CreateArray();
+        items = params ? cJSON_GetObjectItem(params, "items") : NULL;
+        for (i = 0; items && i < cJSON_GetArraySize(items); i++)
+            cJSON_AddItemToArray(result, cJSON_CreateNull());
+        lsp_send_response(lsp, id, result, NULL);
+    }
+    else if (strcmp(method, "window/workDoneProgress/create") == 0 ||
+             strcmp(method, "client/registerCapability") == 0 ||
+             strcmp(method, "client/unregisterCapability") == 0)
+    {
+        lsp_send_response(lsp, id, NULL, NULL);
+    }
+    else
+    {
+        error = cJSON_CreateObject();
+        cJSON_AddNumberToObject(error, "code", -32601);
+        cJSON_AddStringToObject(error, "message", "Method not found");
+        lsp_send_response(lsp, id, NULL, error);
+    }
 }
 
 static struct buffer_t *g_format_target_buf = NULL;
@@ -757,7 +1149,13 @@ void lspHandleMessage(LspClient *lsp, const char *json)
     method = cJSON_GetObjectItem(root, "method");
     params = cJSON_GetObjectItem(root, "params");
 
-    if (id && cJSON_IsNumber(id))
+    if (id && method && cJSON_IsString(method))
+    {
+        // A request *from* the server: it has both an id (from its own
+        // numbering, unrelated to ours) and a method.
+        lsp_handle_server_request(lsp, id, method->valuestring, params);
+    }
+    else if (id && cJSON_IsNumber(id))
     {
         // A response to something we sent — dispatch by id, not by method
         callback = lsp_pop_pending(lsp, id->valueint);
@@ -773,6 +1171,8 @@ void lspHandleMessage(LspClient *lsp, const char *json)
             uri_item = cJSON_GetObjectItem(params, "uri");
             if (uri_item && cJSON_IsString(uri_item))
             {
+                lsp_cache_diagnostics(uri_item->valuestring,
+                                      cJSON_GetObjectItem(params, "diagnostics"));
                 buffer_id = lsp_find_buffer_id_by_uri(uri_item->valuestring);
                 if (buffer_id >= 0)
                     lspParseDiagnostics(json, &E.lsp_diagnostics, buffer_id);
@@ -798,6 +1198,17 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
     cJSON *comp_item;
     cJSON *general;
     cJSON *encodings;
+    cJSON *hover_caps;
+    cJSON *formats;
+    cJSON *sig_caps;
+    cJSON *sig_info;
+    cJSON *param_info;
+    cJSON *action_caps;
+    cJSON *literal;
+    cJSON *kind_caps;
+    cJSON *kinds;
+    cJSON *ws_caps;
+    cJSON *ws_edit;
     char *msg;
     if (!lsp || !project_root || !server_argv || !server_argv[0])
         return -1;
@@ -848,10 +1259,53 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
         cJSON_AddBoolToObject(comp_item, "commitCharactersSupport", 0);
         cJSON_AddItemToObject(comp_caps, "completionItem", comp_item);
         cJSON_AddItemToObject(td_caps, "completion", comp_caps);
-        cJSON_AddItemToObject(td_caps, "hover", cJSON_CreateObject());
+        // Plain text first: hover is shown as-is in a popup, and markdown
+        // would leave it full of ``` fences and ### headings.
+        hover_caps = cJSON_CreateObject();
+        formats = cJSON_CreateArray();
+        cJSON_AddItemToArray(formats, cJSON_CreateString("plaintext"));
+        cJSON_AddItemToArray(formats, cJSON_CreateString("markdown"));
+        cJSON_AddItemToObject(hover_caps, "contentFormat", formats);
+        cJSON_AddItemToObject(td_caps, "hover", hover_caps);
+
+        sig_caps = cJSON_CreateObject();
+        sig_info = cJSON_CreateObject();
+        param_info = cJSON_CreateObject();
+        cJSON_AddBoolToObject(param_info, "labelOffsetSupport", 1);
+        cJSON_AddItemToObject(sig_info, "parameterInformation", param_info);
+        formats = cJSON_CreateArray();
+        cJSON_AddItemToArray(formats, cJSON_CreateString("plaintext"));
+        cJSON_AddItemToObject(sig_info, "documentationFormat", formats);
+        cJSON_AddBoolToObject(sig_info, "activeParameterSupport", 1);
+        cJSON_AddItemToObject(sig_caps, "signatureInformation", sig_info);
+        cJSON_AddItemToObject(td_caps, "signatureHelp", sig_caps);
+
+        // Literal CodeActions (with their edit inline) rather than bare
+        // Commands — without this clangd answers with commands only, and
+        // every quick fix becomes an extra executeCommand round-trip.
+        action_caps = cJSON_CreateObject();
+        literal = cJSON_CreateObject();
+        kind_caps = cJSON_CreateObject();
+        kinds = cJSON_CreateArray();
+        cJSON_AddItemToArray(kinds, cJSON_CreateString("quickfix"));
+        cJSON_AddItemToArray(kinds, cJSON_CreateString("refactor"));
+        cJSON_AddItemToArray(kinds, cJSON_CreateString("source"));
+        cJSON_AddItemToObject(kind_caps, "valueSet", kinds);
+        cJSON_AddItemToObject(literal, "codeActionKind", kind_caps);
+        cJSON_AddItemToObject(action_caps, "codeActionLiteralSupport", literal);
+        cJSON_AddItemToObject(td_caps, "codeAction", action_caps);
         cJSON_AddItemToObject(td_caps, "definition", cJSON_CreateObject());
         cJSON_AddItemToObject(td_caps, "publishDiagnostics", cJSON_CreateObject());
         cJSON_AddItemToObject(caps, "textDocument", td_caps);
+
+        // workspace/applyEdit is how commands (clangd's tweaks) hand back
+        // their edits — see lsp_handle_server_request().
+        ws_caps = cJSON_CreateObject();
+        cJSON_AddBoolToObject(ws_caps, "applyEdit", 1);
+        ws_edit = cJSON_CreateObject();
+        cJSON_AddBoolToObject(ws_edit, "documentChanges", 1);
+        cJSON_AddItemToObject(ws_caps, "workspaceEdit", ws_edit);
+        cJSON_AddItemToObject(caps, "workspace", ws_caps);
 
         // Request UTF-8 code-point positions instead of UTF-16 code units
         // (LSP 3.17+, clangd 15+ support this) — this matches your Utf8Char
@@ -1112,6 +1566,8 @@ void lspRequestDefinition(LspClient *lsp, struct buffer_t *buf,
     if (!lspBufferUri(buf, uri, sizeof(uri)))
         return;
 
+    lsp_sync_if_dirty(lsp, buf);
+
     req_id = lsp->next_id++;
 
     req = cJSON_CreateObject();
@@ -1154,6 +1610,8 @@ void lspRequestHover(LspClient *lsp, struct buffer_t *buf, const int line, const
     if (!lspBufferUri(buf, uri, sizeof(uri)))
         return;
 
+    lsp_sync_if_dirty(lsp, buf);
+
     req_id = lsp->next_id++;
 
     req = cJSON_CreateObject();
@@ -1179,6 +1637,188 @@ void lspRequestHover(LspClient *lsp, struct buffer_t *buf, const int line, const
 
     gfree(msg);
     cJSON_Delete(req);
+}
+
+void lspRequestSignatureHelp(LspClient *lsp, struct buffer_t *buf, const int line, const int col)
+{
+    char uri[PATH_MAX + 8];
+    int req_id;
+    cJSON* req;
+    cJSON* params;
+    cJSON* textDoc;
+    cJSON* position;
+    char* msg;
+    if (!lsp || lsp->state != LSP_READY || !buf)
+        return;
+
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
+
+    // Usually fired right after "(" or "," was typed: the server has to
+    // see that keystroke to know which call and argument the cursor is in.
+    lsp_sync_if_dirty(lsp, buf);
+
+    req_id = lsp->next_id++;
+
+    req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(req, "id", req_id);
+    cJSON_AddStringToObject(req, "method", "textDocument/signatureHelp");
+
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
+    cJSON_AddStringToObject(textDoc, "uri", uri);
+    cJSON_AddItemToObject(params, "textDocument", textDoc);
+
+    position = cJSON_CreateObject();
+    cJSON_AddNumberToObject(position, "line", line);
+    cJSON_AddNumberToObject(position, "character", col);
+    cJSON_AddItemToObject(params, "position", position);
+
+    cJSON_AddItemToObject(req, "params", params);
+
+    msg = cJSON_PrintUnformatted(req);
+    lsp_send(lsp, msg);
+    lsp_track_pending(lsp, req_id, lsp_on_signature_help_response);
+
+    gfree(msg);
+    cJSON_Delete(req);
+}
+
+void lspRequestCodeAction(LspClient *lsp, struct buffer_t *buf, const int line, const int col)
+{
+    char uri[PATH_MAX + 8];
+    int req_id;
+    cJSON* req;
+    cJSON* params;
+    cJSON* textDoc;
+    cJSON* range;
+    cJSON* pos;
+    cJSON* context;
+    cJSON* diags;
+    const cJSON* cached;
+    const cJSON* d;
+    cJSON* d_range;
+    cJSON* d_start;
+    cJSON* d_end;
+    cJSON* d_line;
+    int start_line;
+    int end_line;
+    char* msg;
+    if (!lsp || lsp->state != LSP_READY || !buf)
+        return;
+
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
+
+    lsp_sync_if_dirty(lsp, buf);
+
+    req_id = lsp->next_id++;
+
+    req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(req, "id", req_id);
+    cJSON_AddStringToObject(req, "method", "textDocument/codeAction");
+
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
+    cJSON_AddStringToObject(textDoc, "uri", uri);
+    cJSON_AddItemToObject(params, "textDocument", textDoc);
+
+    // An empty range at the cursor: refactorings (clangd's tweaks) are
+    // offered for what the cursor is on, and a whole-line range is a
+    // selection most of them refuse. Quick fixes don't depend on it —
+    // they come from the diagnostics in the context below.
+    range = cJSON_CreateObject();
+    pos = cJSON_CreateObject();
+    cJSON_AddNumberToObject(pos, "line", line);
+    cJSON_AddNumberToObject(pos, "character", col);
+    cJSON_AddItemToObject(range, "start", pos);
+    pos = cJSON_CreateObject();
+    cJSON_AddNumberToObject(pos, "line", line);
+    cJSON_AddNumberToObject(pos, "character", col);
+    cJSON_AddItemToObject(range, "end", pos);
+    cJSON_AddItemToObject(params, "range", range);
+
+    // Quick fixes are only offered for the diagnostics passed back here,
+    // so hand over every published one that touches the cursor's line,
+    // verbatim — a fix is usually wanted for "the error on this line",
+    // wherever on it the cursor happens to be.
+    diags = cJSON_CreateArray();
+    cached = lsp_cached_diagnostics(uri);
+    if (cached && cJSON_IsArray(cached))
+    {
+        cJSON_ArrayForEach(d, cached)
+        {
+            d_range = cJSON_GetObjectItem(d, "range");
+            d_start = d_range ? cJSON_GetObjectItem(d_range, "start") : NULL;
+            d_end = d_range ? cJSON_GetObjectItem(d_range, "end") : NULL;
+            d_line = d_start ? cJSON_GetObjectItem(d_start, "line") : NULL;
+            if (!d_line) continue;
+            start_line = d_line->valueint;
+            d_line = d_end ? cJSON_GetObjectItem(d_end, "line") : NULL;
+            end_line = d_line ? d_line->valueint : start_line;
+            if (start_line <= line && line <= end_line)
+                cJSON_AddItemToArray(diags, cJSON_Duplicate(d, 1));
+        }
+    }
+    context = cJSON_CreateObject();
+    cJSON_AddItemToObject(context, "diagnostics", diags);
+    cJSON_AddItemToObject(params, "context", context);
+
+    cJSON_AddItemToObject(req, "params", params);
+
+    msg = cJSON_PrintUnformatted(req);
+    lsp_send(lsp, msg);
+    lsp_track_pending(lsp, req_id, lsp_on_code_action_response);
+
+    gfree(msg);
+    cJSON_Delete(req);
+}
+
+/**
+ * @brief Inserts the chosen completion over what's already typed.
+ * @details The server's textEdit range starts where the word being
+ * completed starts, which is the only reliable way to know how much of it
+ * is already in the buffer: with fuzzy matching, "prf" completes to
+ * "printf", so skipping strlen("prf") bytes of the insert text — what this
+ * used to do — produced "prfntf". The range was computed when the request
+ * went out; anything typed since then sits between its end and the
+ * cursor, so the replacement runs up to the cursor (or past it, for an
+ * InsertReplaceEdit's "replace" range covering the rest of the word).
+ */
+void lspAcceptCompletion(struct buffer_t *buf, const CompletionItem *item)
+{
+    Row *row;
+    int start_col;
+    int end_col;
+    if (!buf || !item || buf->y < 0 || buf->y >= buf->numrows)
+        return;
+    row = &buf->row[buf->y];
+    end_col = buf->x;
+
+    if (item->has_edit && item->edit_line == buf->y && item->edit_start_col <= buf->x)
+    {
+        start_col = item->edit_start_col;
+        if (item->edit_end_col > end_col)
+            end_col = item->edit_end_col;
+    }
+    else
+    {
+        // No range from the server: replace the word before the cursor.
+        // is_word_char() counts '#' as a word char (for "#include"
+        // highlighting), but a preprocessor completion's text never
+        // includes it — stop right after one.
+        start_col = buf->x;
+        while (start_col > 0 &&
+               is_word_char(&row->characters[start_col - 1]) &&
+               row->characters[start_col - 1].character[0] != '#')
+            start_col--;
+    }
+    if (end_col > row->size)
+        end_col = row->size;
+
+    bufferApplyTextEdit(buf, buf->y, start_col, buf->y, end_col, item->insertText);
 }
 
 void lspRequestRename(LspClient *lsp, struct buffer_t *buf, const int line, const int col,
@@ -1521,6 +2161,9 @@ void lspShutdown(LspClient *lsp)
     // never while lsp_feed() is parsing this buffer — so it's safe to free.
     gfree(lsp->recv_buf);
     lsp->recv_buf = NULL;
+    lsp_free_diag_cache();
+    cJSON_Delete(g_code_actions);
+    g_code_actions = NULL;
     lsp->recv_len = 0;
     lsp->recv_cap = 0;
 

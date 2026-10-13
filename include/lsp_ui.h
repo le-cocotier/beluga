@@ -29,6 +29,14 @@ void lspParseDiagnostics(const char *json, DiagnosticList *diags, int buffer_id)
 // info doesn't apply.
 void lspUiDrawGutter(struct abuf *ab, DiagnosticList *diags,
                      int buf_id, int line, GitLineStatus git_status);
+// Hover / signature help popup. lspUiSetInfo() replaces its text (markdown
+// fences, headings and backticks stripped) and shows it; anchor_x/y are the
+// cursor's 0-based screen position. lspUiInfoHandleKey() returns 1 only for
+// ESC — every other key still reaches the editor.
+void lspUiSetInfo(LspInfoPopup *popup, LspInfoKind kind, const char *text,
+                  int anchor_x, int anchor_y);
+void lspUiDrawInfo(struct abuf *ab, const LspInfoPopup *popup);
+int lspUiInfoHandleKey(LspInfoPopup *popup, const Utf8Char *key);
 const char *lspUiDiagnosticAtCursor(DiagnosticList *diags,
                                     int buffer_id, int cursor_line);
 

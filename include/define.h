@@ -30,6 +30,8 @@
 #define COMPLETION_MAX_WIDTH  40
 #define COMPLETION_POPUP_H    8   // max visible rows
 #define DIAG_MAX 128
+#define LSP_INFO_MAX_LINES 12
+#define LSP_INFO_LINE_W 160
 
 // Generic (editor-list-popup ...) picker — max visible rows before it
 // scrolls, and the widest a label is allowed to render before truncation.

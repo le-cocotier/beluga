@@ -26,8 +26,21 @@ void lspDidClose(LspClient* lsp, struct buffer_t* buf);
 void lspRequestCompletion(LspClient* lsp, const struct buffer_t* buf,
                           int line, int col,
                           int screen_x, int screen_y);
-// Response is shown via editorSetStatusMessage() (first line only).
+// Response opens a popup below the cursor (E.lsp_info); any key closes it.
 void lspRequestHover(LspClient* lsp, struct buffer_t* buf, int line, int col);
+// Response opens a popup above the cursor (E.lsp_info) with the active
+// parameter highlighted; it stays up while typing the arguments.
+void lspRequestSignatureHelp(LspClient* lsp, struct buffer_t* buf, int line, int col);
+// Asks for the code actions at the cursor — passing the server's own
+// diagnostics for its line, so their quick fixes come back too — and lists
+// them in a popup.
+void lspRequestCodeAction(LspClient* lsp, struct buffer_t* buf, int line, int col);
+// Applies entry `index` of the last code-action list: its edit, then its
+// command (workspace/executeCommand), if it has either.
+void lspApplyCodeAction(LspClient* lsp, int index);
+// Accepting a completion: replaces the item's textEdit range — the
+// already-typed prefix — or, without one, the word before the cursor.
+void lspAcceptCompletion(struct buffer_t* buf, const CompletionItem* item);
 // Response jumps the cursor to the definition, opening the target file
 // first if it isn't already open — see lspJumpToUri() in completion.c.
 void lspRequestDefinition(LspClient* lsp, struct buffer_t* buf, int line, int col);

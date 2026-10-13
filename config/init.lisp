@@ -16,6 +16,11 @@
 ;; loads; omitting either leaves the feature on.
 (define WHICH-KEY #t)
 
+;; Show the signature of the function being called, with the current
+;; argument highlighted, as soon as "(" or "," is typed in an LSP buffer.
+;; CTRL-x p s shows it on demand either way. Omitting this leaves it on.
+(define LSP-SIGNATURE-HELP #t)
+
 ;; Prefixes need to exist before anything below tries to (map-key ... "user")
 ;; or "term" — including packages, which load next. A package that tried to
 ;; bind under a not-yet-registered prefix would silently fall back to
@@ -304,6 +309,8 @@
 ;; project
 (map-key "d" lsp-definition "project")
 (map-key "h" lsp-hover "project")
+(map-key "s" lsp-signature-help "project")
+(map-key "a" lsp-code-action "project")
 (map-key "r" lsp-rename "project")
 (map-key "z" lsp-format-buffer "project")
 

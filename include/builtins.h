@@ -103,6 +103,9 @@ Lisp editorAutoComplete(Lisp args, LispError *e, LispContext ctx);
 // Lisp lspComplete(Lisp args, LispError *e, LispContext ctx);
 Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx);
 Lisp lspHover(Lisp args, LispError *e, LispContext ctx);
+Lisp lspSignatureHelp(Lisp args, LispError *e, LispContext ctx);
+Lisp lspCodeAction(Lisp args, LispError *e, LispContext ctx);
+Lisp lspApplyCodeAction_L(Lisp args, LispError *e, LispContext ctx);
 Lisp lspRename(Lisp args, LispError *e, LispContext ctx);
 Lisp lspFormatBuffer(Lisp args, LispError *e, LispContext ctx);
 

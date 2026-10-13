@@ -12,6 +12,9 @@
 #include "../include/append_buffer.h"
 #include "../include/terminal.h"
 #include "../include/popup_ui.h"
+#include "../include/utf8.h"
+
+extern EditorConfig E;
 
 // ─── ANSI helpers ─────────────────────────────────────────────────────────────
 // (the completion popup's chrome now lives in popup_ui.c — these remain for
@@ -178,6 +181,193 @@ int lspUiHandleKey(CompletionPopup *popup, const Utf8Char *key) {
     return 0;
 }
 
+// ─── Hover / signature popup ─────────────────────────────────────────────────
+
+// Code points in the first `len` bytes of s — the popup's column count.
+static int utf8_cols(const char *s, const int len) {
+    int i;
+    int cols = 0;
+    for (i = 0; i < len && s[i]; i++)
+        if (((unsigned char) s[i] & 0xC0) != 0x80) cols++;
+    return cols;
+}
+
+// Appends one cleaned-up line to the popup, collapsing runs of blank lines
+// and dropping leading ones. Returns 0 once the popup is full.
+static int info_push_line(LspInfoPopup *popup, const char *src, const int len) {
+    char *dst;
+    int i;
+    int k;
+    int n;
+    int seq;
+    int start;
+    int end;
+    unsigned char lead;
+    if (popup->count >= LSP_INFO_MAX_LINES) return 0;
+
+    start = 0;
+    end = len;
+    // Markdown headings ("### function `foo`") read fine without the hashes.
+    while (start < end && src[start] == '#') start++;
+    while (start < end && src[start] == ' ') start++;
+    // Trailing spaces and the "\" markdown hard break.
+    while (end > start && (src[end - 1] == ' ' || src[end - 1] == '\\' ||
+                           src[end - 1] == '\r'))
+        end--;
+
+    if (start == end && (popup->count == 0 || popup->lines[popup->count - 1][0] == '\0'))
+        return 1;
+
+    dst = popup->lines[popup->count];
+    n = 0;
+    i = start;
+    while (i < end) {
+        if (src[i] == '`') { i++; continue; }
+        lead = (unsigned char) src[i];
+        seq = lead < 0x80 ? 1 : lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+        if (i + seq > end) seq = end - i;
+        // Truncate on a character boundary, never mid-sequence.
+        if (n + seq > LSP_INFO_LINE_W - 1) break;
+        for (k = 0; k < seq; k++)
+            dst[n++] = src[i + k] == '\t' ? ' ' : src[i + k];
+        i += seq;
+    }
+    dst[n] = '\0';
+    popup->count++;
+    return 1;
+}
+
+void lspUiSetInfo(LspInfoPopup *popup, const LspInfoKind kind, const char *text,
+                  const int anchor_x, const int anchor_y) {
+    const char *p;
+    const char *eol;
+    int len;
+    popup->count = 0;
+    popup->kind = kind;
+    popup->anchor_x = anchor_x;
+    popup->anchor_y = anchor_y;
+    popup->hl_line = -1;
+    popup->hl_start = 0;
+    popup->hl_end = 0;
+
+    p = text ? text : "";
+    while (*p) {
+        eol = strchr(p, '\n');
+        len = eol ? (int) (eol - p) : (int) strlen(p);
+        if (len >= 3 && strncmp(p, "```", 3) == 0) {
+            // code fence: keep the code, drop the fence line itself
+        } else if (len == 3 && strncmp(p, "---", 3) == 0) {
+            if (!info_push_line(popup, "", 0)) break;
+        } else if (!info_push_line(popup, p, len)) {
+            break;
+        }
+        if (!eol) break;
+        p = eol + 1;
+    }
+    while (popup->count > 0 && popup->lines[popup->count - 1][0] == '\0')
+        popup->count--;
+    popup->visible = popup->count > 0;
+}
+
+void lspUiDrawInfo(struct abuf *ab, const LspInfoPopup *popup) {
+    int content_w;
+    int box_w;
+    int box_h;
+    int x;
+    int top;
+    int fits_above;
+    int fits_below;
+    int i;
+    int j;
+    int cols;
+    int len;
+    int in_hl;
+    const char *line;
+    PopupStyle style;
+    if (!popup->visible || popup->count == 0) return;
+
+    content_w = 1;
+    for (i = 0; i < popup->count; i++) {
+        cols = utf8_cols(popup->lines[i], LSP_INFO_LINE_W);
+        if (cols > content_w) content_w = cols;
+    }
+    if (content_w > E.screencols - 6) content_w = E.screencols - 6;
+    if (content_w < 1) return;
+    box_w = content_w + 5; // border+marker (2) + text + space + space+border (2)
+    box_h = popup->count + 2;
+
+    x = popup->anchor_x + 1;
+    if (x + box_w - 1 > E.screencols) x = E.screencols - box_w + 1;
+    if (x < 1) x = 1;
+
+    // Signature help goes above the cursor, out of the completion popup's
+    // way; hover goes below. Either flips when there's no room.
+    fits_above = popup->anchor_y + 1 - box_h >= 1;
+    fits_below = popup->anchor_y + 2 + box_h - 1 <= E.screenrows;
+    if (popup->kind == LSP_INFO_SIGNATURE)
+        top = (fits_above || !fits_below) ? popup->anchor_y + 1 - box_h : popup->anchor_y + 2;
+    else
+        top = (fits_below || !fits_above) ? popup->anchor_y + 2 : popup->anchor_y + 1 - box_h;
+    if (top < 1) top = 1;
+
+    popupStyleInit(&style);
+    popupDrawTop(ab, &style, x, top, box_w);
+    for (i = 0; i < popup->count; i++) {
+        line = popup->lines[i];
+        popupRowBegin(ab, &style, x, top + 1 + i, 0);
+
+        len = (int) strlen(line);
+        cols = 0;
+        in_hl = 0;
+        for (j = 0; j < len; j++) {
+            if (((unsigned char) line[j] & 0xC0) != 0x80) {
+                if (cols == content_w) break;
+                cols++;
+            }
+            if (i == popup->hl_line && j == popup->hl_start && popup->hl_end > j) {
+                ab_sgr(ab, style.accent_fg);
+                AB_BOLD(ab);
+                in_hl = 1;
+            } else if (in_hl && j == popup->hl_end) {
+                popupRowStyle(ab, &style, 0);
+                in_hl = 0;
+            }
+            abAppend(ab, &line[j], 1);
+        }
+        if (in_hl) popupRowStyle(ab, &style, 0);
+        for (; cols < content_w; cols++) abAppend(ab, " ", 1);
+        abAppend(ab, " ", 1);
+
+        popupRowEnd(ab, &style);
+    }
+    popupDrawBottom(ab, &style, x, top + box_h - 1, box_w);
+    popupDrawShadow(ab, &style, x, top, box_w, box_h);
+}
+
+int lspUiInfoHandleKey(LspInfoPopup *popup, const Utf8Char *key) {
+    unsigned char c;
+    int is_single;
+    if (!popup->visible) return 0;
+
+    c = key->character[0];
+    is_single = (key->length == 1);
+
+    if (is_single && c == '\x1b') {
+        popup->visible = 0;
+        return 1;
+    }
+    // A signature stays up while its arguments are typed — "," re-requests
+    // it to move the highlight — and goes away once the call is closed or
+    // the cursor moves off somewhere else.
+    if (popup->kind == LSP_INFO_SIGNATURE &&
+        ((utf8IsPrintable(key) && !(is_single && c == ')')) ||
+         (is_single && c == BACKSPACE)))
+        return 0;
+
+    popup->visible = 0;
+    return 0;
+}
+
 static DiagSeverity diag_worst_on_line(DiagnosticList *diags,
                                        const int buffer_id, const int line) {
     DiagSeverity worst = 0;
@@ -272,6 +462,14 @@ void lspParseCompletion(const char *json, CompletionPopup *popup,
     cJSON *kind;
     const char *raw_label;
     const char *raw_insert;
+    cJSON *text_edit;
+    cJSON *new_text;
+    cJSON *range;
+    cJSON *start;
+    cJSON *end;
+    cJSON *line_it;
+    cJSON *scol_it;
+    cJSON *ecol_it;
     popup->count    = 0;
     popup->selected = 0;
     popup->origin_x = screen_x + 1;
@@ -296,15 +494,49 @@ void lspParseCompletion(const char *json, CompletionPopup *popup,
         detail = cJSON_GetObjectItem(item, "detail");
         kind = cJSON_GetObjectItem(item, "kind");
 
-        raw_label = label ? label->valuestring : "";
+        raw_label = (label && cJSON_IsString(label)) ? label->valuestring : "";
+        // clangd prefixes labels with a space, or with "•" (U+2022) when
+        // accepting the item would also insert an #include — neither is
+        // part of the identifier.
         if (raw_label[0] == ' ') raw_label++;
+        else if (strncmp(raw_label, "\xe2\x80\xa2", 3) == 0) raw_label += 3;
 
+        memset(ci, 0, sizeof(*ci));
         strncpy(ci->label,  raw_label,                          127);
-        strncpy(ci->detail, detail ? detail->valuestring : "",   63);
+        strncpy(ci->detail, (detail && cJSON_IsString(detail)) ? detail->valuestring : "", 63);
 
-        raw_insert = (insertText && insertText->valuestring)
-                                ? insertText->valuestring
-                                : raw_label;
+        // textEdit is what the server actually wants inserted, and over
+        // which range: a TextEdit {range,newText}, or an InsertReplaceEdit
+        // {insert,replace,newText} — whose "replace" range also covers the
+        // rest of the word after the cursor. Either way the range starts
+        // at the beginning of what's already typed, which is what lets
+        // accepting "printf" on a fuzzy "prf" replace the prefix instead
+        // of guessing how much of it to skip.
+        text_edit = cJSON_GetObjectItem(item, "textEdit");
+        new_text = text_edit ? cJSON_GetObjectItem(text_edit, "newText") : NULL;
+        range = NULL;
+        if (text_edit) {
+            range = cJSON_GetObjectItem(text_edit, "range");
+            if (!range) range = cJSON_GetObjectItem(text_edit, "replace");
+        }
+        start = range ? cJSON_GetObjectItem(range, "start") : NULL;
+        end = range ? cJSON_GetObjectItem(range, "end") : NULL;
+        line_it = start ? cJSON_GetObjectItem(start, "line") : NULL;
+        scol_it = start ? cJSON_GetObjectItem(start, "character") : NULL;
+        ecol_it = end ? cJSON_GetObjectItem(end, "character") : NULL;
+        if (new_text && cJSON_IsString(new_text) && line_it && scol_it && ecol_it) {
+            ci->has_edit = 1;
+            ci->edit_line = line_it->valueint;
+            ci->edit_start_col = scol_it->valueint;
+            ci->edit_end_col = ecol_it->valueint;
+        }
+
+        if (ci->has_edit)
+            raw_insert = new_text->valuestring;
+        else if (insertText && cJSON_IsString(insertText))
+            raw_insert = insertText->valuestring;
+        else
+            raw_insert = raw_label;
         strncpy(ci->insertText, raw_insert, 127);
 
         if (!kind)

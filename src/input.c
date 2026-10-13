@@ -303,6 +303,28 @@ static void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
 }
 
 /**
+ * @brief Asks for signature help when `key` just opened a call's argument
+ * list or started its next argument — i.e. it was "(" or "," and that's
+ * what now sits right before the cursor, however it got inserted (plain
+ * typing, or a binding such as smart_delimiters' "(" that also inserts
+ * the ")"). Off with (define LSP-SIGNATURE-HELP #f).
+ */
+static void maybeRequestSignatureHelp(struct buffer_t *buf, const Utf8Char *key) {
+  unsigned char ch;
+  if (!E.constantes.LSP || !E.constantes.LSP_SIGNATURE_HELP || !E.lsp_client ||
+      E.lsp_client->state != LSP_READY || !buf || !buf->b_lsp_open)
+    return;
+  if (key->length != 1 || (key->character[0] != '(' && key->character[0] != ','))
+    return;
+  if (buf->y >= buf->numrows || buf->x <= 0 || buf->x > buf->row[buf->y].size)
+    return;
+  ch = buf->row[buf->y].characters[buf->x - 1].character[0];
+  if (ch != key->character[0])
+    return;
+  lspRequestSignatureHelp(E.lsp_client, buf, buf->y, buf->x);
+}
+
+/**
  * @brief Processes a single keypress from the user
  * @details Reads a key, checks if it matches any registered keybinding,
  * and either executes the bound command or inserts the character. Resets
@@ -316,13 +338,8 @@ void editorProcessKeypress() {
   EditorPane *active;
   struct buffer_t *buf;
   CompletionItem *item;
-  int file_col;
   Row *row;
-  int word_start;
-  int already_typed;
-  const char *suffix;
   int i;
-  Utf8Char ch;
   int first_buffer_id;
   struct buffer_t *b;
   int is_printable;
@@ -364,31 +381,7 @@ void editorProcessKeypress() {
     if (E.lsp_client && E.lsp_completion.visible) {
       if (*c->character == '\r') {
         item = &E.lsp_completion.items[E.lsp_completion.selected];
-
-        file_col = active->cursor_x + active->x_offset;
-        row = &buf->row[active->cursor_y + active->y_offset];
-
-        // is_word_char() treats '#' as part of a "word" so the syntax
-        // highlighter can match whole keywords like "#include" — but
-        // clangd's completion items for preprocessor directives never
-        // include the '#' in insertText (the '#' is already typed and
-        // out of band from its point of view). Walking through it here
-        // would over-count already_typed by one and silently drop the
-        // first character of every such completion, so stop the scan
-        // right after any '#' instead of consuming it.
-        word_start = file_col;
-        while (word_start > 0 &&
-               is_word_char(&row->characters[word_start - 1]) &&
-               row->characters[word_start - 1].character[0] != '#')
-          word_start--;
-
-        already_typed = file_col - word_start;
-        suffix = item->insertText + already_typed;
-        for (i = 0; suffix[i]; i++) {
-          ch = (Utf8Char){.character = {suffix[i], 0, 0, 0}, .length = 1};
-          bufferInsertChar(&ch);
-        }
-
+        lspAcceptCompletion(buf, item);
         E.lsp_completion.visible = 0;
         gfree(c);
         return;
@@ -399,6 +392,13 @@ void editorProcessKeypress() {
         return;
       }
     }
+  }
+
+  // Hover / signature popup: ESC closes it (and goes no further); any other
+  // key also closes a hover, then carries on as usual.
+  if (lspUiInfoHandleKey(&E.lsp_info, c)) {
+    gfree(c);
+    return;
   }
 
   E.dirty = 0;
@@ -412,6 +412,9 @@ void editorProcessKeypress() {
   }
 
   if (executeKeyBind(keyToString(c))) {
+    // "(" is usually bound (smart_delimiters inserts the pair), so it
+    // never reaches the plain-insert path below.
+    maybeRequestSignatureHelp(buf, c);
     gfree(c);
     return;
   }
@@ -487,6 +490,8 @@ void editorProcessKeypress() {
         should_trigger_completion = 1;
     }
   }
+
+  maybeRequestSignatureHelp(buf, c);
 
   gfree(c);
   c = NULL;

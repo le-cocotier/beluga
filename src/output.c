@@ -823,6 +823,7 @@ void editorRefreshScreen() {
   editorDrawStatusBar(&ab);
   editorDrawMessageBar(&ab);
   if (E.constantes.LSP && (E.lsp_client && E.lsp_client->state == LSP_READY)) {
+    lspUiDrawInfo(&ab, &E.lsp_info);
     lspUiDrawCompletion(&ab, &E.lsp_completion);
   }
   bufferSwitcherDraw(&ab);

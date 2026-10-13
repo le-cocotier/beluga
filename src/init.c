@@ -83,6 +83,9 @@ void initBuiltins(void) {
   // registerBuiltin("lsp-complete",    lspComplete);
   registerBuiltin("lsp-definition", lspDefinition);
   registerBuiltin("lsp-hover", lspHover);
+  registerBuiltin("lsp-signature-help", lspSignatureHelp);
+  registerBuiltin("lsp-code-action", lspCodeAction);
+  registerBuiltin("lsp-apply-code-action", lspApplyCodeAction_L);
   registerBuiltin("lsp-rename", lspRename);
   registerBuiltin("lsp-format-buffer", lspFormatBuffer);
   registerBuiltin("editor-open-terminal", editorOpenTerminal);
@@ -222,6 +225,7 @@ static void initStartupConstants(void) {
       lisp_eval(lisp_read("LSP", &E.ctx_error, E.ctx), &E.ctx_error, E.ctx));
   E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
   E.constantes.WHICH_KEY = readBoolConst("WHICH-KEY", 1);
+  E.constantes.LSP_SIGNATURE_HELP = readBoolConst("LSP-SIGNATURE-HELP", 1);
   appDebug("LSP ON : %d", E.constantes.LSP);
   E.constantes.TAB_LENGTH =
       (int)lisp_eval(lisp_read("TAB-LENGTH", &E.ctx_error, E.ctx), &E.ctx_error,

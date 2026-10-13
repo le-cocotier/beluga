@@ -1883,6 +1883,72 @@ Lisp lspHover(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function to show the signature of the call the cursor is in,
+ * with the current argument highlighted, in a popup above the cursor.
+ * Async: see lsp_on_signature_help_response(). Also fired automatically on
+ * "(" and "," unless (define LSP-SIGNATURE-HELP #f).
+ * @return lisp_null()
+ */
+Lisp lspSignatureHelp(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active;
+  struct buffer_t *buf;
+  (void)args;
+  (void)e;
+  (void)ctx;
+  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+    return lisp_null();
+
+  active = splitScreenGetActivePane();
+  buf = bufferFindById(active->buffer_id);
+  if (!buf)
+    return lisp_null();
+
+  lspRequestSignatureHelp(E.lsp_client, buf, buf->y, buf->x);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to list the server's code actions at the cursor —
+ * quick fixes for its line's diagnostics first, then refactorings — in a
+ * popup; ENTER applies the chosen one (see lsp-apply-code-action).
+ * @return lisp_null()
+ */
+Lisp lspCodeAction(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active;
+  struct buffer_t *buf;
+  (void)args;
+  (void)e;
+  (void)ctx;
+  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY) {
+    editorSetStatusMessage("LSP not ready");
+    return lisp_null();
+  }
+
+  active = splitScreenGetActivePane();
+  buf = bufferFindById(active->buffer_id);
+  if (!buf || buf->type != FILE_BUFF)
+    return lisp_null();
+
+  lspRequestCodeAction(E.lsp_client, buf, buf->y, buf->x);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function applying entry `index` of the last code-action
+ * list — the code-action popup's on-select callback.
+ * @param args Lisp list of 1 argument: (index)
+ * @return lisp_null()
+ */
+Lisp lspApplyCodeAction_L(Lisp args, LispError *e, LispContext ctx) {
+  (void)e;
+  (void)ctx;
+  if (!E.lsp_client || !lisp_is_pair(args))
+    return lisp_null();
+  lspApplyCodeAction(E.lsp_client, (int)lisp_int(lisp_car(args)));
+  return lisp_null();
+}
+
+/**
  * @brief Lisp function to rename the symbol at the cursor across every
  * file the server reports. Prompts for the new name, then blocks briefly
  * (up to 3s — see lspAwaitResponse()) waiting for the server's

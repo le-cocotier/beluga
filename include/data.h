@@ -129,6 +129,7 @@ struct const_t
     int LSP;
     int LINE_NUMBERS;  // (define LINE-NUMBERS #t) — draw the line-number gutter
     int WHICH_KEY;     // (define WHICH-KEY #t)    — pending-prefix / M-x help panel
+    int LSP_SIGNATURE_HELP; // (define LSP-SIGNATURE-HELP #t) — signature popup on "(" and ","
 };
 
 struct prefix_t
@@ -290,9 +291,17 @@ struct lsp_client_t
 typedef struct
 {
     char label[128]; // display text  e.g. "printf"
-    char insertText[128];
+    char insertText[128]; // textEdit.newText when the server sent one
     char detail[64]; // type/sig hint e.g. "int (const char *, ...)"
     int kind; // LSP CompletionItemKind (1=Text,2=Method,3=Function…)
+    // The range the server wants insertText to replace (textEdit.range, or
+    // InsertReplaceEdit.replace) — the already-typed prefix, usually.
+    // has_edit = 0 when the item carried no textEdit: accepting it then
+    // replaces the word before the cursor instead.
+    int has_edit;
+    int edit_line;
+    int edit_start_col;
+    int edit_end_col;
 } CompletionItem;
 
 typedef struct
@@ -396,6 +405,27 @@ typedef struct
     Diagnostic entries[DIAG_MAX];
     int count;
 } DiagnosticList;
+
+/**
+ * @brief Floating text box for LSP hover and signature help.
+ * @details Lines are stored already cleaned up (markdown fences and
+ * backticks stripped). hl_* marks a byte range of one line drawn in the
+ * accent color — the active parameter of a signature.
+ */
+typedef enum { LSP_INFO_HOVER, LSP_INFO_SIGNATURE } LspInfoKind;
+
+typedef struct
+{
+    char lines[LSP_INFO_MAX_LINES][LSP_INFO_LINE_W];
+    int count;
+    int visible;
+    LspInfoKind kind;
+    int anchor_x; // screen col of the cursor when it was requested
+    int anchor_y; // screen row of the cursor when it was requested
+    int hl_line;  // -1 when nothing is highlighted
+    int hl_start;
+    int hl_end;
+} LspInfoPopup;
 
 typedef enum
 {
@@ -573,6 +603,7 @@ typedef struct editor_config_t
     LspClient* lsp_client;
     CompletionPopup lsp_completion;
     DiagnosticList lsp_diagnostics;
+    LspInfoPopup lsp_info;
 
     BufferSwitcherPopup buffer_switcher;
     ListPopup list_popup;
