@@ -1860,6 +1860,45 @@ Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function to list the references to the symbol at the cursor
+ * @details (lsp-references) — asks the server (async); the answer is shown
+ * in the "*search*" buffer, grouped by file, ENTER jumps to one.
+ * @return lisp_null()
+ */
+Lisp lspReferences(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active;
+  struct buffer_t *buf;
+  (void)args;
+  (void)e;
+  (void)ctx;
+  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY) {
+    editorSetStatusMessage("LSP not ready");
+    return lisp_null();
+  }
+
+  active = splitScreenGetActivePane();
+  buf = bufferFindById(active->buffer_id);
+  if (!buf)
+    return lisp_null();
+
+  lspRequestReferences(E.lsp_client, buf, buf->y, buf->x);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to list every diagnostic of the open buffers
+ * @details (lsp-diagnostics) — in the "*search*" buffer, ENTER jumps to one.
+ * @return lisp_null()
+ */
+Lisp lspDiagnostics(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  lspShowDiagnosticsList();
+  return lisp_null();
+}
+
+/**
  * @brief Lisp function to show hover info (type/doc) for the symbol at the
  * cursor in the status bar. Async: see lsp_on_hover_response().
  * @return lisp_null()

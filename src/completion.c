@@ -24,6 +24,8 @@
 #include "../include/editor_op.h"
 #include "../include/utils.h"
 #include "../include/list_popup.h"
+#include "../include/project_search.h"
+#include "../include/utf8.h"
 #include "../include/syntax_highlighter.h"
 
 extern EditorConfig E;
@@ -590,6 +592,207 @@ static void lsp_on_definition_response(LspClient *lsp, const char *result_json)
         editorSetStatusMessage("No definition found");
 
     cJSON_Delete(root);
+}
+
+// ─── References and the diagnostics list ───────────────────────────────────
+
+/**
+ * @brief Text of 0-based line `line` of `path`, galloc'd, or NULL. Taken
+ * from an open buffer of that file when there is one (it may hold unsaved
+ * changes the positions refer to), else read from disk.
+ */
+static char *lsp_line_text(const char *uri, const char *path, const int line)
+{
+    const int buffer_id = lsp_find_buffer_id_by_uri(uri);
+    struct buffer_t *buf = buffer_id >= 0 ? bufferFindById(buffer_id) : NULL;
+    FILE *f;
+    char chunk[512];
+    char *out = NULL;
+    size_t len = 0;
+    size_t n;
+    char *grown;
+    int current = 0;
+
+    if (buf)
+        return (line >= 0 && line < buf->numrows)
+                   ? (char *) utf8ToString(buf->row[line].characters)
+                   : NULL;
+
+    f = fopen(path, "rb");
+    if (!f)
+        return NULL;
+    while (current <= line && fgets(chunk, sizeof(chunk), f))
+    {
+        if (current == line)
+        {
+            n = strcspn(chunk, "\r\n");
+            grown = grealloc(out, len + n + 1);
+            if (!grown)
+                break;
+            out = grown;
+            memcpy(out + len, chunk, n);
+            len += n;
+            out[len] = '\0';
+        }
+        if (strchr(chunk, '\n'))
+            current++;
+    }
+    fclose(f);
+    return out;
+}
+
+static void lsp_on_references_response(LspClient *lsp, const char *result_json)
+{
+    cJSON *root;
+    cJSON *result;
+    cJSON *loc;
+    cJSON *uri_item;
+    cJSON *start;
+    cJSON *line_item;
+    cJSON *char_item;
+    SearchLocation *locs;
+    char (*paths)[PATH_MAX];
+    char **texts;
+    char title[64];
+    int n;
+    int count = 0;
+    int i;
+    (void) lsp;
+    root = cJSON_Parse(result_json);
+    if (!root) return;
+
+    result = cJSON_GetObjectItem(root, "result");
+    n = (result && cJSON_IsArray(result)) ? cJSON_GetArraySize(result) : 0;
+    if (n == 0)
+    {
+        editorSetStatusMessage("No references found");
+        cJSON_Delete(root);
+        return;
+    }
+
+    locs = gcalloc((size_t) n, sizeof(SearchLocation));
+    paths = gcalloc((size_t) n, sizeof(*paths));
+    texts = gcalloc((size_t) n, sizeof(char *));
+    if (!locs || !paths || !texts)
+    {
+        gfree(locs);
+        gfree(paths);
+        gfree(texts);
+        cJSON_Delete(root);
+        return;
+    }
+
+    for (i = 0; i < n; i++)
+    {
+        loc = cJSON_GetArrayItem(result, i);
+        uri_item = cJSON_GetObjectItem(loc, "uri");
+        start = cJSON_GetObjectItem(cJSON_GetObjectItem(loc, "range"), "start");
+        line_item = start ? cJSON_GetObjectItem(start, "line") : NULL;
+        char_item = start ? cJSON_GetObjectItem(start, "character") : NULL;
+        if (!uri_item || !cJSON_IsString(uri_item) || !line_item ||
+            !lspUriToPath(uri_item->valuestring, paths[count], sizeof(paths[count])))
+            continue;
+        texts[count] = lsp_line_text(uri_item->valuestring, paths[count], line_item->valueint);
+        locs[count].abs_path = paths[count];
+        locs[count].line = line_item->valueint + 1;
+        locs[count].col = char_item ? char_item->valueint : 0;
+        locs[count].text = texts[count];
+        count++;
+    }
+
+    snprintf(title, sizeof(title), "%d reference%s", count, count == 1 ? "" : "s");
+    if (count > 0)
+    {
+        projectSearchShowLocations(title, locs, count);
+        editorSetStatusMessage("%s - ENTER to jump", title);
+    }
+    else
+        editorSetStatusMessage("No references in local files");
+
+    for (i = 0; i < count; i++)
+        gfree(texts[i]);
+    gfree(texts);
+    gfree(paths);
+    gfree(locs);
+    cJSON_Delete(root);
+}
+
+void lspShowDiagnosticsList(void)
+{
+    DiagnosticList *diags = &E.lsp_diagnostics;
+    SearchLocation *locs;
+    char **paths;
+    char **texts;
+    struct buffer_t *buf;
+    static const char *const severity[] = {"", "error", "warning", "info", "hint"};
+    char title[64];
+    char text[320];
+    int errors = 0;
+    int count = 0;
+    int i;
+
+    if (diags->count == 0)
+    {
+        editorSetStatusMessage("No diagnostics");
+        return;
+    }
+    locs = gcalloc((size_t) diags->count, sizeof(SearchLocation));
+    paths = gcalloc((size_t) diags->count, sizeof(char *));
+    texts = gcalloc((size_t) diags->count, sizeof(char *));
+    if (!locs || !paths || !texts)
+    {
+        gfree(locs);
+        gfree(paths);
+        gfree(texts);
+        return;
+    }
+
+    for (i = 0; i < diags->count; i++)
+    {
+        buf = bufferFindById(diags->entries[i].buffer_id);
+        if (!buf || buf->type != FILE_BUFF || !buf->fullname)
+            continue;
+        paths[count] = (char *) utf8ToString(buf->fullname);
+        snprintf(text, sizeof(text), "%s: %s",
+                 (diags->entries[i].severity >= DIAG_ERROR &&
+                  diags->entries[i].severity <= DIAG_HINT)
+                     ? severity[diags->entries[i].severity]
+                     : "note",
+                 diags->entries[i].message);
+        texts[count] = utilStrdup(text);
+        if (!paths[count] || !texts[count])
+        {
+            gfree(paths[count]);
+            gfree(texts[count]);
+            continue;
+        }
+        if (diags->entries[i].severity == DIAG_ERROR)
+            errors++;
+        locs[count].abs_path = paths[count];
+        locs[count].line = diags->entries[i].line + 1;
+        locs[count].col = diags->entries[i].col_start;
+        locs[count].text = texts[count];
+        count++;
+    }
+
+    snprintf(title, sizeof(title), "%d diagnostic%s (%d error%s)", count,
+             count == 1 ? "" : "s", errors, errors == 1 ? "" : "s");
+    if (count > 0)
+    {
+        projectSearchShowLocations(title, locs, count);
+        editorSetStatusMessage("%s - ENTER to jump", title);
+    }
+    else
+        editorSetStatusMessage("No diagnostics");
+
+    for (i = 0; i < count; i++)
+    {
+        gfree(paths[i]);
+        gfree(texts[i]);
+    }
+    gfree(paths);
+    gfree(texts);
+    gfree(locs);
 }
 
 /**
@@ -1590,6 +1793,56 @@ void lspRequestDefinition(LspClient *lsp, struct buffer_t *buf,
     msg = cJSON_PrintUnformatted(req);
     lsp_send(lsp, msg);
     lsp_track_pending(lsp, req_id, lsp_on_definition_response);
+
+    gfree(msg);
+    cJSON_Delete(req);
+}
+
+void lspRequestReferences(LspClient *lsp, struct buffer_t *buf, const int line, const int col)
+{
+    char uri[PATH_MAX + 8];
+    int req_id;
+    cJSON* req;
+    cJSON* params;
+    cJSON* textDoc;
+    cJSON* position;
+    cJSON* context;
+    char* msg;
+    if (!lsp || lsp->state != LSP_READY || !buf)
+        return;
+
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
+
+    lsp_sync_if_dirty(lsp, buf);
+
+    req_id = lsp->next_id++;
+
+    req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(req, "id", req_id);
+    cJSON_AddStringToObject(req, "method", "textDocument/references");
+
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
+    cJSON_AddStringToObject(textDoc, "uri", uri);
+    cJSON_AddItemToObject(params, "textDocument", textDoc);
+
+    position = cJSON_CreateObject();
+    cJSON_AddNumberToObject(position, "line", line);
+    cJSON_AddNumberToObject(position, "character", col);
+    cJSON_AddItemToObject(params, "position", position);
+
+    // The declaration too: it's usually the first place one wants to see.
+    context = cJSON_CreateObject();
+    cJSON_AddBoolToObject(context, "includeDeclaration", 1);
+    cJSON_AddItemToObject(params, "context", context);
+
+    cJSON_AddItemToObject(req, "params", params);
+
+    msg = cJSON_PrintUnformatted(req);
+    lsp_send(lsp, msg);
+    lsp_track_pending(lsp, req_id, lsp_on_references_response);
 
     gfree(msg);
     cJSON_Delete(req);
