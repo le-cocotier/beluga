@@ -728,6 +728,36 @@ int os_file_info(const char *path, OsFileInfo *info) {
   return 0;
 }
 
+int os_file_flush(FILE *f) {
+  if (fflush(f) != 0)
+    return -1;
+  return fsync(fileno(f)) == 0 ? 0 : -1;
+}
+
+int os_replace_file(const char *tmp, const char *dest, char *err,
+                    size_t err_size) {
+  struct stat st;
+  // Same rule as writing it in place: a file without write permission
+  // isn't replaced, even though the directory would allow the rename.
+  if (access(dest, F_OK) == 0 && access(dest, W_OK) != 0) {
+    snprintf(err, err_size, "%s is read-only", dest);
+    return -1;
+  }
+  // Keep the original's mode (an executable script stays executable). Its
+  // owner can't be kept without privileges; the group is tried.
+  if (stat(dest, &st) == 0) {
+    chmod(tmp, st.st_mode & 07777);
+    if (chown(tmp, (uid_t)-1, st.st_gid) != 0) {
+      // not the group's member: the file gets the user's default group
+    }
+  }
+  if (rename(tmp, dest) != 0) {
+    snprintf(err, err_size, "%s", strerror(errno));
+    return -1;
+  }
+  return 0;
+}
+
 char *os_realpath(const char *path) { return realpath(path, NULL); }
 
 char *os_getcwd(void) {

@@ -1590,6 +1590,39 @@ int os_file_info(const char *path, OsFileInfo *info)
     return 0;
 }
 
+int os_file_flush(FILE *f)
+{
+    if (fflush(f) != 0)
+        return -1;
+    return _commit(_fileno(f)) == 0 ? 0 : -1;
+}
+
+int os_replace_file(const char *tmp, const char *dest, char *err, size_t err_size)
+{
+    wchar_t *wtmp = toWide(tmp);
+    wchar_t *wdest = toWide(dest);
+    DWORD attrs;
+    int ok;
+    if (!wtmp || !wdest)
+    {
+        free(wtmp);
+        free(wdest);
+        snprintf(err, err_size, "out of memory");
+        return -1;
+    }
+    // Keep the original's attributes (hidden, ...). A read-only file isn't
+    // replaced: MoveFileEx refuses it, as on Unix without write permission.
+    attrs = GetFileAttributesW(wdest);
+    if (attrs != INVALID_FILE_ATTRIBUTES)
+        SetFileAttributesW(wtmp, attrs & ~FILE_ATTRIBUTE_READONLY);
+    ok = MoveFileExW(wtmp, wdest, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    if (!ok)
+        snprintf(err, err_size, "can't replace the file (error %lu)", (unsigned long) GetLastError());
+    free(wtmp);
+    free(wdest);
+    return ok ? 0 : -1;
+}
+
 /**
  * @brief The absolute, canonical path of an existing file, with forward
  * slashes. GetFinalPathNameByHandle resolves links and corrects the case,
