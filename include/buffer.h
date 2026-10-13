@@ -115,6 +115,9 @@ void bufferDeleteRegion(struct buffer_t* buf, int start_row, int start_col,
 // new_text (may contain '\n' and be any length, including empty — a pure
 // deletion). Goes through the same undo-recorded primitives as normal
 // typing, so LSP edits are undoable like anything else.
+// Inserts `text` (may contain '\n') at the cursor of `buf` as one undo
+// step, leaving the cursor after it. Used by paste.
+void bufferInsertText(struct buffer_t* buf, const char* text);
 void bufferApplyTextEdit(struct buffer_t* buf, int start_row, int start_col,
                          int end_row, int end_col, const char* new_text);
 
