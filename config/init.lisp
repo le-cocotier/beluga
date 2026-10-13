@@ -36,7 +36,10 @@
 ;; Bundled packages come with beluga (packages/ in its repo) and install.sh
 ;; puts them in ~/.beluga/packages/ — all of the ones named in this file.
 ;; A package that isn't there (your own, or a third-party one: git clone it
-;; into ~/.beluga/packages/<name>) makes (add-package ...) a silent no-op.
+;; into ~/.beluga/packages/<name>) is reported at startup, and so is any
+;; error in this file or a package: the status bar names the file and line,
+;; the *config-errors* buffer (CTRL-x b) lists them all, and the rest of the
+;; file still loads.
 (add-package "smart_delimiters")
 (add-package "outline")
 (add-package "explorer")

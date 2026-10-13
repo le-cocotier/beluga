@@ -11,6 +11,7 @@
 
 #include "include/buffer.h"
 #include "include/builtins.h"
+#include "include/config_load.h"
 #include "include/data.h"
 #include "include/define.h"
 #include "include/editor_op.h"
@@ -77,6 +78,8 @@ int main(const int argc, char *argv[]) {
 
   gfree(splash_screen); // Now guaranteed safe
   editorSetStatusMessage("HELP: Ctrl-x Ctrl-s = save | Ctrl-x Ctrl-c = quit");
+  // After the HELP line, so a config mistake is what the status bar shows.
+  configShowErrors();
 
   while (!E.exit_requested) {
     editorRunLoop();
