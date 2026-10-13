@@ -149,6 +149,17 @@ Utf8Char *fileCompletion(Utf8Char *path) {
  */
 Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder,
                        char bPathMode) {
+  return editorPromptEx(prompt, placeHolder, bPathMode, 0);
+}
+
+/**
+ * @brief editorPrompt(), optionally accepting an empty answer
+ * @param allowEmpty If non-zero, ENTER on an empty input returns an empty
+ * string (only ESC returns NULL) — for answers where "nothing" is valid,
+ * like the replacement text of a query-replace.
+ */
+Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
+                         char bPathMode, int allowEmpty) {
   Utf8Char *buf = gcalloc(PATH_MAX, sizeof(Utf8Char));
   int buf_len = 0;
   Utf8Char *c = NULL;
@@ -180,7 +191,7 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder,
       E.prompt_input = NULL;
       return NULL;
     } else if (*c->character == '\r') {
-      if (buf_len != 0) {
+      if (buf_len != 0 || allowEmpty) {
         editorSetStatusMessage("");
         gfree(c);
         E.prompt_input = NULL;

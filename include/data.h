@@ -540,6 +540,9 @@ typedef struct buffer_t
     UndoList undo_stack;
     UndoList redo_stack;
     int undo_next_group_id;
+    // While set (bufferUndoGroupBegin/End), every recorded edit joins the
+    // current group, so a multi-edit command undoes in one step.
+    int undo_group_hold;
     int undo_group_open;    // can the tail of undo_stack still be extended?
     UndoKind undo_last_kind;
     int undo_last_row, undo_last_col;

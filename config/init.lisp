@@ -300,6 +300,8 @@
 (map-key "u" editor-undo "user")
 (map-key "U" editor-redo "user")
 (map-key "s" project-search "user")
+(map-key "r" query-replace "user")          ; y/n per match, ! rest, q stop
+(map-key "R" project-query-replace "user")  ; same over the project (A = all files)
 (if (app-debug?) (map-key "m" memory-inspector "user"))
 
 ;; config

@@ -19,6 +19,7 @@
 #include "../include/memory_inspector.h"
 #include "../include/output.h"
 #include "../include/project_search.h"
+#include "../include/replace.h"
 #include "../include/split_screen.h"
 #include "../include/subprocess.h"
 #include "../include/terminal.h"
@@ -2031,6 +2032,34 @@ Lisp l_projectSearch(Lisp args, LispError *e, LispContext ctx) {
   (void)e;
   (void)ctx;
   projectSearchPrompt();
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function: query-replace in the current buffer
+ * @details (query-replace) prompts for the text and its replacement, then
+ * asks at each match from the cursor on. See replace.c.
+ * @return lisp_null()
+ */
+Lisp l_queryReplace(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  queryReplacePrompt();
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function: query-replace across the project
+ * @details (project-query-replace) — same, over every file project-search
+ * would find the text in. Buffers are left unsaved. See replace.c.
+ * @return lisp_null()
+ */
+Lisp l_projectQueryReplace(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  projectQueryReplacePrompt();
   return lisp_null();
 }
 

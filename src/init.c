@@ -122,6 +122,8 @@ void initBuiltins(void) {
   registerBuiltin("editor-explorer-close", editorExplorerClose);
   registerBuiltin("project-search", l_projectSearch);
   registerBuiltin("project-search-goto", l_projectSearchGoto);
+  registerBuiltin("query-replace", l_queryReplace);
+  registerBuiltin("project-query-replace", l_projectQueryReplace);
   registerBuiltin("find-file", l_findFile);
   registerBuiltin("syntax-define-language", l_syntaxDefineLanguage);
   registerBuiltin("syntax-add-keyword", l_syntaxAddKeyword);

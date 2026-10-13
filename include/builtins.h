@@ -6,6 +6,8 @@
 struct prefix_t find_prefix(const char prefix_name[64]);
 
 Lisp l_projectSearch(Lisp args, LispError *e, LispContext ctx);
+Lisp l_queryReplace(Lisp args, LispError *e, LispContext ctx);
+Lisp l_projectQueryReplace(Lisp args, LispError *e, LispContext ctx);
 Lisp l_projectSearchGoto(Lisp args, LispError *e, LispContext ctx);
 Lisp l_findFile(Lisp args, LispError *e, LispContext ctx);
 Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx);
