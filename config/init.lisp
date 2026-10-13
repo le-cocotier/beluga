@@ -300,6 +300,11 @@
 (map-key "u" editor-undo "user")
 (map-key "U" editor-redo "user")
 (map-key "s" project-search "user")
+;; Keyboard macros: CTRL-x ( starts recording, CTRL-x ) stops, CTRL-x x
+;; replays. (macro-run 10) replays ten times.
+(map-key "(" macro-start "user")
+(map-key ")" macro-end "user")
+(map-key "x" macro-run "user")
 (if (app-debug?) (map-key "m" memory-inspector "user"))
 
 ;; config

@@ -1,4 +1,5 @@
 #include "../include/terminal.h"
+#include "../include/macro.h"
 
 #include <ctype.h>
 
@@ -148,7 +149,12 @@ Utf8Char * editorReadKey()
 {
     Utf8Char* c;
 
+    // A macro being replayed comes first, then the terminal.
+    c = macroNextReplayedKey();
+    if (c)
+        return c;
     c = readUtf8Char();
+    macroRecordKey(c);
     return c;
 }
 

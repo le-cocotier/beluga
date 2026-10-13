@@ -1,4 +1,5 @@
 #include "../include/input.h"
+#include "../include/macro.h"
 #include "../include/buffer.h"
 #include "../include/builtins.h"
 #include "../include/completion.h"
@@ -334,7 +335,7 @@ static void maybeRequestSignatureHelp(struct buffer_t *buf, const Utf8Char *key)
  * keys
  */
 void editorProcessKeypress() {
-  Utf8Char *c = editorReadKey();
+  Utf8Char *c;
   EditorPane *active;
   struct buffer_t *buf;
   CompletionItem *item;
@@ -349,6 +350,9 @@ void editorProcessKeypress() {
   int trig_len;
   int match;
   int k;
+
+  macroNoteKeySequenceStart();
+  c = editorReadKey();
 
   // Modal: while the buffer switcher is open, it owns every key —
   // checked before anything else so it can't be shadowed by a

@@ -7,6 +7,7 @@
  */
 
 #include "../include/builtins.h"
+#include "../include/macro.h"
 #include "../include/async_process.h"
 #include "../include/buffer.h"
 #include "../include/data.h"
@@ -2946,4 +2947,47 @@ Lisp editorGetPaneWitdh(Lisp args, LispError *e, LispContext ctx) {
 Lisp editorGetPaneHeight(Lisp args, LispError *e, LispContext ctx) {
   EditorPane *active = splitScreenGetActivePane();
   return lisp_make_int(active->height);
+}
+
+/**
+ * @brief Lisp function to start recording a keyboard macro.
+ * @return lisp_null()
+ * @see macroStartRecording()
+ */
+Lisp macroStart(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  macroStartRecording();
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to stop recording the keyboard macro.
+ * @return lisp_null()
+ * @see macroStopRecording()
+ */
+Lisp macroEnd(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  macroStopRecording();
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to replay the last keyboard macro, (macro-run) once
+ * or (macro-run n) n times.
+ * @return lisp_null()
+ * @see macroRun()
+ */
+Lisp macroRunBuiltin(Lisp args, LispError *e, LispContext ctx) {
+  int times;
+  (void)e;
+  (void)ctx;
+  times = 1;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT)
+    times = (int)lisp_int(lisp_car(args));
+  macroRun(times);
+  return lisp_null();
 }
