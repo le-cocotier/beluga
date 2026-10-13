@@ -583,6 +583,10 @@ typedef struct buffer_t
     // scratch buffer got before this existed.
     char focus_prefix[64];
 
+    // buffer-local-set / buffer-local (builtins_edit.c): an alist of
+    // (symbol . value). lisp_null() — all zero — when empty.
+    Lisp locals;
+
     struct buffer_t* next;
     struct buffer_t* prev;
 

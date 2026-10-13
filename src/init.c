@@ -98,6 +98,14 @@ void initBuiltins(void) {
 
   registerBuiltin("add-hook", addHook);
   registerBuiltin("line-text", lineTextAt);
+  registerBuiltin("buffer-insert-string", l_bufferInsertString);
+  registerBuiltin("buffer-delete-range", l_bufferDeleteRange);
+  registerBuiltin("buffer-replace-range", l_bufferReplaceRange);
+  registerBuiltin("buffer-text", l_bufferText);
+  registerBuiltin("set-cursor", l_setCursor);
+  registerBuiltin("region-bounds", l_regionBounds);
+  registerBuiltin("buffer-local-set", l_bufferLocalSet);
+  registerBuiltin("buffer-local", l_bufferLocal);
   registerBuiltin("cursor-row", cursorRowLisp);
   registerBuiltin("cursor-col", cursorColLisp);
   registerBuiltin("buffer-line-count", bufferLineCountLisp);

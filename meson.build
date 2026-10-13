@@ -84,6 +84,7 @@ src_files = files(
   'src/row_op.c',
   'src/terminal.c',
   'src/builtins.c',
+  'src/builtins_edit.c',
   'src/buffer.c',
   'src/split_screen.c',
   'src/utf8.c',
