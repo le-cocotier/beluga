@@ -161,6 +161,31 @@ static void lsp_free_diag_cache(void)
     g_diag_cache_count = 0;
 }
 
+/**
+ * @brief Records how the server wants documents synced, from the
+ * capabilities in its initialize response.
+ * @details textDocumentSync is either a number or an object with a
+ * "change" field: 1 is full text, 2 is incremental. positionEncoding is
+ * only present when the server picked one of the encodings we offered.
+ */
+static void lspReadSyncCapabilities(LspClient *lsp, cJSON *caps)
+{
+    cJSON *sync;
+    cJSON *change;
+    cJSON *encoding;
+    lsp->sync_incremental = 0;
+    lsp->utf8_positions = 0;
+    if (!caps)
+        return;
+    sync = cJSON_GetObjectItem(caps, "textDocumentSync");
+    change = (sync && cJSON_IsObject(sync)) ? cJSON_GetObjectItem(sync, "change") : sync;
+    if (change && cJSON_IsNumber(change) && change->valueint == 2)
+        lsp->sync_incremental = 1;
+    encoding = cJSON_GetObjectItem(caps, "positionEncoding");
+    if (encoding && cJSON_IsString(encoding) && strcmp(encoding->valuestring, "utf-8") == 0)
+        lsp->utf8_positions = 1;
+}
+
 static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
 {
     cJSON *init_root;
@@ -197,6 +222,7 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
                 lsp->num_trigger_chars++;
             }
         }
+        lspReadSyncCapabilities(lsp, caps);
         cJSON_Delete(init_root);
     }
     if (lsp->num_trigger_chars == 0)
@@ -1374,6 +1400,114 @@ static int lspDocumentVersion(const struct buffer_t* buf)
     return buf->edit_seq + 1;
 }
 
+/**
+ * @brief Keeps `text` (which bufferToText() allocated) as what the server
+ * now has for `buf`, or frees it when the server syncs full text anyway.
+ */
+static void lspRememberSentText(LspClient* lsp, struct buffer_t* buf, char* text)
+{
+    gfree(buf->lsp_sent_text);
+    buf->lsp_sent_text = NULL;
+    buf->lsp_sent_len = 0;
+    if (!lsp->sync_incremental)
+    {
+        gfree(text);
+        return;
+    }
+    buf->lsp_sent_text = text;
+    buf->lsp_sent_len = strlen(text);
+}
+
+/**
+ * @brief The LSP position of byte `offset` in `text`.
+ * @details "character" counts UTF-8 bytes when the server agreed to
+ * utf-8 positions, UTF-16 code units otherwise (the LSP default): one per
+ * code point, two for a code point outside the BMP (4-byte sequences).
+ */
+static cJSON* lspPositionAt(const LspClient* lsp, const char* text, size_t offset)
+{
+    cJSON* pos;
+    size_t i;
+    size_t line_start;
+    int line;
+    int character;
+    unsigned char c;
+    line = 0;
+    line_start = 0;
+    for (i = 0; i < offset; i++)
+    {
+        if (text[i] == '\n')
+        {
+            line++;
+            line_start = i + 1;
+        }
+    }
+    character = 0;
+    for (i = line_start; i < offset; i++)
+    {
+        c = (unsigned char)text[i];
+        if (lsp->utf8_positions)
+            character++;
+        else if ((c & 0xC0) != 0x80)
+            character += (c >= 0xF0) ? 2 : 1;
+    }
+    pos = cJSON_CreateObject();
+    cJSON_AddNumberToObject(pos, "line", line);
+    cJSON_AddNumberToObject(pos, "character", character);
+    return pos;
+}
+
+/**
+ * @brief One incremental contentChanges entry turning `old_text` into
+ * `new_text`, or NULL when they are the same.
+ * @details Rather than logging every edit, this compares the text the
+ * server has with the buffer's: everything between the common prefix and
+ * the common suffix is the changed range. A burst of edits in different
+ * places becomes one larger range, which is still correct. Both ends are
+ * moved off the middle of a UTF-8 sequence so the positions are valid.
+ */
+static cJSON* lspIncrementalChange(const LspClient* lsp,
+                                   const char* old_text, size_t old_len,
+                                   const char* new_text, size_t new_len)
+{
+    size_t prefix;
+    size_t suffix;
+    size_t max_suffix;
+    cJSON* change;
+    cJSON* range;
+    char* inserted;
+    prefix = 0;
+    while (prefix < old_len && prefix < new_len && old_text[prefix] == new_text[prefix])
+        prefix++;
+    if (prefix == old_len && prefix == new_len)
+        return NULL;
+    while (prefix > 0 && ((unsigned char)old_text[prefix] & 0xC0) == 0x80)
+        prefix--;
+
+    max_suffix = (old_len < new_len ? old_len : new_len) - prefix;
+    suffix = 0;
+    while (suffix < max_suffix &&
+           old_text[old_len - 1 - suffix] == new_text[new_len - 1 - suffix])
+        suffix++;
+    while (suffix > 0 && ((unsigned char)old_text[old_len - suffix] & 0xC0) == 0x80)
+        suffix--;
+
+    inserted = galloc(new_len - suffix - prefix + 1);
+    if (!inserted)
+        return NULL;
+    memcpy(inserted, new_text + prefix, new_len - suffix - prefix);
+    inserted[new_len - suffix - prefix] = '\0';
+
+    range = cJSON_CreateObject();
+    cJSON_AddItemToObject(range, "start", lspPositionAt(lsp, old_text, prefix));
+    cJSON_AddItemToObject(range, "end", lspPositionAt(lsp, old_text, old_len - suffix));
+    change = cJSON_CreateObject();
+    cJSON_AddItemToObject(change, "range", range);
+    cJSON_AddStringToObject(change, "text", inserted);
+    gfree(inserted);
+    return change;
+}
+
 void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
 {
     char uri[PATH_MAX + 8];
@@ -1426,7 +1560,7 @@ void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
     msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
 
-    gfree(text);
+    lspRememberSentText(lsp, buf, text);
     gfree(msg);
     cJSON_Delete(root);
 }
@@ -1435,6 +1569,7 @@ void lspDidChange(LspClient* lsp, struct buffer_t* buf)
 {
     char uri[PATH_MAX + 8];
     char* text;
+    size_t len;
     cJSON* root;
     cJSON* params;
     cJSON* textDoc;
@@ -1449,6 +1584,24 @@ void lspDidChange(LspClient* lsp, struct buffer_t* buf)
 
     text = bufferToText(buf);
     if (!text) return;
+    len = strlen(text);
+
+    if (lsp->sync_incremental && buf->lsp_sent_text)
+    {
+        change = lspIncrementalChange(lsp, buf->lsp_sent_text,
+                                      buf->lsp_sent_len, text, len);
+        if (!change)
+        {
+            // Edits that cancel out (type, then delete) leave nothing to send.
+            gfree(text);
+            return;
+        }
+    }
+    else
+    {
+        change = cJSON_CreateObject();
+        cJSON_AddStringToObject(change, "text", text); // full-document sync
+    }
 
     root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "jsonrpc", "2.0");
@@ -1461,8 +1614,6 @@ void lspDidChange(LspClient* lsp, struct buffer_t* buf)
     cJSON_AddItemToObject(params, "textDocument", textDoc);
 
     changes = cJSON_CreateArray();
-    change = cJSON_CreateObject();
-    cJSON_AddStringToObject(change, "text", text); // full-document sync
     cJSON_AddItemToArray(changes, change);
     cJSON_AddItemToObject(params, "contentChanges", changes);
 
@@ -1471,7 +1622,7 @@ void lspDidChange(LspClient* lsp, struct buffer_t* buf)
     msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
 
-    gfree(text);
+    lspRememberSentText(lsp, buf, text);
     gfree(msg);
     cJSON_Delete(root);
 }
@@ -1501,6 +1652,10 @@ void lspDidClose(LspClient* lsp, struct buffer_t* buf)
 
     msg = cJSON_PrintUnformatted(root);
     lsp_send(lsp, msg);
+
+    gfree(buf->lsp_sent_text);
+    buf->lsp_sent_text = NULL;
+    buf->lsp_sent_len = 0;
 
     gfree(msg);
     cJSON_Delete(root);
