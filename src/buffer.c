@@ -213,6 +213,7 @@ void bufferUndo(struct buffer_t *buf) {
       0; // the next fresh edit must not merge into what's left
   if (buf->type != TERMINAL_BUFF)
     buf->dirty++;
+    buf->edit_seq++;
   editorSetStatusMessage("Undo");
 }
 
@@ -257,6 +258,7 @@ void bufferRedo(struct buffer_t *buf) {
   buf->undo_group_open = 0;
   if (buf->type != TERMINAL_BUFF)
     buf->dirty++;
+    buf->edit_seq++;
   editorSetStatusMessage("Redo");
 }
 
@@ -400,6 +402,7 @@ void bufferDeleteRegion(struct buffer_t *buf, int start_row, int start_col,
   buf->y = start_row;
   if (buf->type != TERMINAL_BUFF)
     buf->dirty++;
+    buf->edit_seq++;
 }
 
 /***********************************************************************************************************************
@@ -469,6 +472,7 @@ void bufferApplyTextEdit(struct buffer_t *buf, int start_row, int start_col,
   buf->y = row;
   if (buf->type != TERMINAL_BUFF)
     buf->dirty++;
+    buf->edit_seq++;
 }
 
 /***********************************************************************************************************************
@@ -1244,13 +1248,13 @@ void bufferMaybeSyncLsp(struct buffer_t *buf) {
   // buffer's already-open document instead of sending a second one.
   if (bufferFindOtherLspOpen(buf) != -1) {
     buf->b_lsp_open = 1;
-    buf->lsp_synced_dirty = buf->dirty;
+    buf->lsp_synced_seq = buf->edit_seq;
     return;
   }
 
   lspDidOpen(E.lsp_client, buf);
   buf->b_lsp_open = 1;
-  buf->lsp_synced_dirty = buf->dirty;
+  buf->lsp_synced_seq = buf->edit_seq;
 }
 
 /**
@@ -1529,6 +1533,7 @@ void bufferInsertRow(struct buffer_t *buffer, int at, Utf8Char *string,
   buffer->numrows++;
   if (buffer->type != TERMINAL_BUFF) {
     buffer->dirty++;
+    buffer->edit_seq++;
   }
   syntaxHighlighterInvalidateAfter(buffer, at - 1);
 }
@@ -1596,6 +1601,7 @@ void bufferRowInsertChar(struct buffer_t *buffer, Row *row, int at,
   END_OF_STRING(row->characters[row->size]);
   if (buffer->type != TERMINAL_BUFF) {
     ++buffer->dirty;
+    buffer->edit_seq++;
   }
   syntaxHighlighterInvalidateAfter(buffer, rowIndexOf(buffer, row));
 }
@@ -1696,6 +1702,7 @@ void bufferDelChar(void) {
   }
   if (buf->type != TERMINAL_BUFF) {
     buf->dirty++;
+    buf->edit_seq++;
   }
 }
 

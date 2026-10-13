@@ -78,7 +78,7 @@ void lspCompletionDebounceTick(void);
 // ── Document sync debounce ───────────────────────────────────────────────────
 // Needs no schedule call from the input path — call once per editorRunLoop
 // iteration, alongside lspCompletionDebounceTick(). It notices ANY edit to
-// the active buffer (by comparing buf->dirty to buf->lsp_synced_dirty) and
+// the active buffer (by comparing buf->edit_seq to buf->lsp_synced_seq) and
 // resyncs it to the server shortly after edits stop, independent of whether
 // that edit would also have triggered completion. See its doc comment in
 // completion.c for why this exists separately from the completion debounce.
