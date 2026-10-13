@@ -40,7 +40,7 @@
 ;; language server. If you want schema-aware JSON, that's a separate
 ;; server — `npm install -g vscode-langservers-extracted`, then
 ;; (lsp-server "json" "json" "vscode-json-language-server" "--stdio").
-;; Remember only one server runs per session, whichever matches first.
+;; It runs alongside this one: each language server gets its own process.
 
 ;; ─── Comment toggle ─────────────────────────────────────────────────────────
 ;; Dispatches on the file's extension rather than hardcoding "// ". The

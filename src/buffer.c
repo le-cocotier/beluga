@@ -1014,6 +1014,7 @@ static int bufferConfirmKill(struct buffer_t *buf) {
  */
 int bufferClose(int buff_id) {
   struct buffer_t *buf = bufferFindById(buff_id);
+  LspClient *lsp;
   int other;
   struct buffer_t *other_buf;
   struct buffer_t *replacement;
@@ -1070,9 +1071,9 @@ int bufferClose(int buff_id) {
   // the same file open, and drop its diagnostics — buffer ids are never
   // reused, so nothing would ever replace them.
   if (buf->b_lsp_open) {
-    if (bufferFindOtherLspOpen(buf) == -1 && E.lsp_client &&
-        E.lsp_client->state == LSP_READY)
-      lspDidClose(E.lsp_client, buf);
+    lsp = lspClientForBuffer(buf);
+    if (bufferFindOtherLspOpen(buf) == -1 && lsp && lsp->state == LSP_READY)
+      lspDidClose(lsp, buf);
     buf->b_lsp_open = 0;
   }
   diags = &E.lsp_diagnostics;
@@ -1140,36 +1141,108 @@ struct lspServerConfig_t *lspServerConfigFor(Utf8Char *filename) {
 }
 
 /**
- * @brief On the first file opened in a session whose extension has a
- * registered lsp-server, ask the user whether to start it and where the
- * project root is. Only asks once — a decline (or ESC) sets state to
- * LSP_SHUTDOWN so it won't ask again.
+ * @brief The client for the server `cfg` names, or NULL if that server
+ * hasn't been asked about yet this session.
+ * @details One client per server command, not per lsp-server entry: a
+ * server registered for several extensions (typescript-language-server for
+ * ts and js, Angular's for ts and html) is one process for all of them.
+ */
+LspClient *lspClientForConfig(const struct lspServerConfig_t *cfg) {
+  int i;
+  if (!cfg || !cfg->argv[0])
+    return NULL;
+  for (i = 0; i < E.number_of_lsp_clients; i++)
+    if (strcmp(E.lsp_clients[i]->command, cfg->argv[0]) == 0)
+      return E.lsp_clients[i];
+  return NULL;
+}
+
+/**
+ * @brief The client `buf`'s file belongs to (by its extension's
+ * lsp-server), whatever its state, or NULL.
+ * @note The type check stays first: only a FILE_BUFF is guaranteed a
+ * fullname (a scratch EXPLORER_BUFF has it NULL by design).
+ */
+LspClient *lspClientForBuffer(struct buffer_t *buf) {
+  if (!buf || buf->type != FILE_BUFF || !E.constantes.LSP)
+    return NULL;
+  return lspClientForConfig(lspServerConfigFor(buf->fullname));
+}
+
+/**
+ * @brief The client of the buffer in the active pane, or NULL.
+ */
+LspClient *lspActiveClient(void) {
+  EditorPane *active = splitScreenGetActivePane();
+  return active ? lspClientForBuffer(bufferFindById(active->buffer_id)) : NULL;
+}
+
+/**
+ * @brief A new, not yet started client for `cfg`'s server, registered in
+ * E.lsp_clients. NULL when LSP_MAX_CLIENTS servers are already known.
+ */
+static LspClient *lspNewClient(const struct lspServerConfig_t *cfg) {
+  LspClient *lsp;
+  if (E.number_of_lsp_clients >= LSP_MAX_CLIENTS)
+    return NULL;
+  lsp = (LspClient *)gcalloc(1, sizeof(LspClient));
+  if (!lsp)
+    return NULL;
+  lsp->state = LSP_NOT_STARTED;
+  lsp->proc = NULL;
+  lsp->sync_debounce_buffer_id = -1;
+  strncpy(lsp->language_id, cfg->language_id, sizeof(lsp->language_id) - 1);
+  strncpy(lsp->command, cfg->argv[0], sizeof(lsp->command) - 1);
+  E.lsp_clients[E.number_of_lsp_clients++] = lsp;
+  return lsp;
+}
+
+/**
+ * @brief The first time a file whose extension has a registered lsp-server
+ * is opened, ask whether to start that server and where the project root
+ * is. Asked once per server: each language gets its own server, running
+ * side by side, and a decline (or ESC) leaves that server's client in
+ * LSP_SHUTDOWN so it isn't asked about again this session.
  * @note Called before editorOpen() loads the buffer's content — it only
  * needs the filename, not the text. See bufferMaybeSyncLsp() for buffers
- * created *after* the server's already running, which does need the text
+ * created *after* their server's already running, which does need the text
  * and so must run after editorOpen().
  */
 void bufferMaybeStartLsp(struct buffer_t *buf) {
   struct lspServerConfig_t *cfg;
+  LspClient *lsp;
   Utf8Char *answer;
   Utf8Char *default_root;
   Utf8Char *root;
   char *root_str;
+  char question[256];
   if (!E.constantes.LSP)
     return;
-  if (E.lsp_client->state != LSP_NOT_STARTED)
-    return; // already asked, already running, or shut down
 
   cfg = lspServerConfigFor(buf->filename);
   if (!cfg)
     return; // no server registered for this extension
+  if (lspClientForConfig(cfg))
+    return; // already asked about this server: running, starting or declined
 
-  answer = editorPrompt("Start LSP server for this project? (y/n): %u", NULL, 0);
+  lsp = lspNewClient(cfg);
+  if (!lsp) {
+    editorSetStatusMessage("Too many language servers (%d) - not starting %s",
+                           LSP_MAX_CLIENTS, cfg->argv[0]);
+    return;
+  }
+
+  // The server's name in the question: with several languages it's no
+  // longer obvious which one is meant. No % from the command: the
+  // question is a format string.
+  snprintf(question, sizeof(question),
+           "Start the %s language server for this project? (y/n): %%u",
+           strchr(cfg->argv[0], '%') ? "configured" : cfg->argv[0]);
+  answer = editorPrompt(question, NULL, 0);
   if (!answer || answer->length != 1 ||
       (answer->character[0] != 'y' && answer->character[0] != 'Y')) {
     gfree(answer);
-    E.lsp_client->state =
-        LSP_SHUTDOWN; // declined — don't ask again this session
+    lsp->state = LSP_SHUTDOWN; // declined — don't ask again this session
     return;
   }
   gfree(answer);
@@ -1178,38 +1251,23 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   root = editorPrompt("Project root: %u", default_root,
                                 1); // bPathMode=1: Tab completes paths
   if (!root) {
-    E.lsp_client->state = LSP_SHUTDOWN;
+    lsp->state = LSP_SHUTDOWN;
     return;
   }
 
   root_str = (char *)utf8ToString(root);
   gfree(root);
 
-  strncpy(E.lsp_client->language_id, cfg->language_id,
-          sizeof(E.lsp_client->language_id) - 1);
-  E.lsp_client->language_id[sizeof(E.lsp_client->language_id) - 1] = '\0';
-  strncpy(E.lsp_client->command, cfg->argv[0],
-          sizeof(E.lsp_client->command) - 1);
-  E.lsp_client->command[sizeof(E.lsp_client->command) - 1] = '\0';
-
-  if (lspStart(E.lsp_client, root_str, cfg->argv) != 0)
-    editorSetStatusMessage("Failed to start LSP server");
+  if (lspStart(lsp, root_str, cfg->argv) != 0)
+    editorSetStatusMessage("Failed to start %s", cfg->argv[0]);
 
   gfree(root_str);
 }
 
-int lspServerConfigMatchesRunning(const struct lspServerConfig_t *cfg) {
-  if (!cfg || !cfg->argv[0] || !E.lsp_client)
-    return 0;
-  if (E.lsp_client->state == LSP_NOT_STARTED ||
-      E.lsp_client->state == LSP_SHUTDOWN)
-    return 0;
-  return strcmp(cfg->argv[0], E.lsp_client->command) == 0;
-}
-
 /**
- * @brief Syncs a newly-opened buffer with an LSP server that's already
- * running (e.g. a second file opened after the first one started it).
+ * @brief Syncs a newly-opened buffer with its LSP server when that server
+ * is already running (e.g. a second file opened after the first one
+ * started it).
  * @note Must run after editorOpen() — it sends the buffer's actual text,
  * so the rows need to already be loaded. The one-time startup flow in
  * bufferMaybeStartLsp() runs *before* editorOpen() instead, since the
@@ -1218,26 +1276,12 @@ int lspServerConfigMatchesRunning(const struct lspServerConfig_t *cfg) {
  * bufferCreate() call has fully returned) covers the very first buffer.
  */
 void bufferMaybeSyncLsp(struct buffer_t *buf) {
-  struct lspServerConfig_t *cfg;
-  if (!E.constantes.LSP || !E.lsp_client)
-    return;
-  if (E.lsp_client->state != LSP_READY)
-    return; // not ready yet — the retroactive didOpen loop will cover it
+  LspClient *lsp = lspClientForBuffer(buf);
+  if (!lsp || lsp->state != LSP_READY)
+    return; // none, declined, or not ready yet — the retroactive didOpen
+            // loop will cover it
   if (buf->b_lsp_open)
     return; // already synced
-
-  cfg = lspServerConfigFor(buf->filename);
-  if (!cfg)
-    return; // no server registered for this extension
-  // ...and that server has to be the one actually running — "only one
-  // language server runs at a time" means a file whose own registered
-  // server is something else (e.g. this is a .c file but a LaTeX
-  // buffer opened first and started digestif) must not be forwarded to
-  // whatever's running instead. It used to be: any registered extension
-  // was enough, so the second file's content went to the wrong server
-  // tagged with the wrong languageId.
-  if (!lspServerConfigMatchesRunning(cfg))
-    return;
 
   // Same file already open (and synced) in another buffer — the server
   // only expects one didOpen per URI, so just piggyback on that
@@ -1248,7 +1292,7 @@ void bufferMaybeSyncLsp(struct buffer_t *buf) {
     return;
   }
 
-  lspDidOpen(E.lsp_client, buf);
+  lspDidOpen(lsp, buf);
   buf->b_lsp_open = 1;
   buf->lsp_synced_dirty = buf->dirty;
 }

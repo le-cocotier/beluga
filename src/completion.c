@@ -247,7 +247,7 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
             // every buffer in the list and dereferenced that NULL the
             // moment a handshake completed with a sidebar open.
             if (b->type == FILE_BUFF && !b->b_lsp_open &&
-                lspServerConfigMatchesRunning(lspServerConfigFor(b->fullname)))
+                lspClientForBuffer(b) == lsp)
             {
                 // Same reasoning as bufferMaybeSyncLsp(): if another
                 // buffer already has this exact file open and synced,
@@ -907,6 +907,9 @@ static void lsp_on_rename_response(LspClient *lsp, const char *result_json)
 // The last textDocument/codeAction result (an array of Command |
 // CodeAction), kept until the user picks one from the popup.
 static cJSON *g_code_actions = NULL;
+// The server that sent them: applying one talks to that server, whatever
+// buffer is active by the time the user picks.
+static LspClient *g_code_actions_client = NULL;
 
 static void lsp_on_execute_command_response(LspClient *lsp, const char *result_json)
 {
@@ -964,6 +967,8 @@ void lspApplyCodeAction(LspClient *lsp, const int index)
     cJSON *action;
     cJSON *edit;
     cJSON *command;
+    if (!lsp)
+        lsp = g_code_actions_client;
     if (!lsp || lsp->state != LSP_READY || !g_code_actions)
         return;
     action = cJSON_GetArrayItem(g_code_actions, index);
@@ -997,7 +1002,6 @@ static void lsp_on_code_action_response(LspClient *lsp, const char *result_json)
     cJSON *title;
     Lisp items;
     int i;
-    (void) lsp;
     root = cJSON_Parse(result_json);
     if (!root) return;
 
@@ -1011,6 +1015,7 @@ static void lsp_on_code_action_response(LspClient *lsp, const char *result_json)
 
     cJSON_Delete(g_code_actions);
     g_code_actions = cJSON_DetachItemFromObject(root, "result");
+    g_code_actions_client = lsp;
 
     // (title . index) pairs, built back to front so they keep the
     // server's order — clangd lists quick fixes before refactorings.
@@ -1970,9 +1975,10 @@ int lspAwaitResponse(LspClient *lsp, const int request_id, const int timeout_ms)
  */
 static void lsp_fire_completion_now(void)
 {
+    LspClient *lsp = lspActiveClient();
     EditorPane *active;
     struct buffer_t *buf;
-    if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+    if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
         return;
 
     active = splitScreenGetActivePane();
@@ -1980,24 +1986,26 @@ static void lsp_fire_completion_now(void)
     if (!buf || buf->type != FILE_BUFF || !buf->b_lsp_open)
         return;
 
-    lspDidChange(E.lsp_client, buf);
+    lspDidChange(lsp, buf);
     buf->lsp_synced_dirty = buf->dirty;
-    lspRequestCompletion(E.lsp_client, buf, buf->y, buf->x,
+    lspRequestCompletion(lsp, buf, buf->y, buf->x,
                           active->cursor_x + active->origin_x + editorGutterWidth(buf),
                           active->cursor_y + active->origin_y);
 }
 
 void lspScheduleCompletion(void)
 {
-    if (!E.lsp_client) return;
-    E.lsp_client->completion_debounce_pending = 1;
-    E.lsp_client->completion_debounce_deadline_ms = monotonic_ms() + LSP_COMPLETION_DEBOUNCE_MS;
+    LspClient *lsp = lspActiveClient();
+    if (!lsp) return;
+    lsp->completion_debounce_pending = 1;
+    lsp->completion_debounce_deadline_ms = monotonic_ms() + LSP_COMPLETION_DEBOUNCE_MS;
 }
 
 void lspCancelScheduledCompletion(void)
 {
-    if (!E.lsp_client) return;
-    E.lsp_client->completion_debounce_pending = 0;
+    LspClient *lsp = lspActiveClient();
+    if (!lsp) return;
+    lsp->completion_debounce_pending = 0;
 }
 
 /**
@@ -2006,12 +2014,13 @@ void lspCancelScheduledCompletion(void)
  */
 void lspCompletionDebounceTick(void)
 {
-    if (!E.lsp_client || !E.lsp_client->completion_debounce_pending)
+    LspClient *lsp = lspActiveClient();
+    if (!lsp || !lsp->completion_debounce_pending)
         return;
-    if (monotonic_ms() < E.lsp_client->completion_debounce_deadline_ms)
+    if (monotonic_ms() < lsp->completion_debounce_deadline_ms)
         return;
 
-    E.lsp_client->completion_debounce_pending = 0;
+    lsp->completion_debounce_pending = 0;
     lsp_fire_completion_now();
 }
 
@@ -2032,10 +2041,11 @@ void lspCompletionDebounceTick(void)
  */
 void lspSyncDebounceTick(void)
 {
+    LspClient *lsp = lspActiveClient();
     EditorPane *active;
     struct buffer_t *buf;
     long now;
-    if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+    if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
         return;
 
     active = splitScreenGetActivePane();
@@ -2044,25 +2054,25 @@ void lspSyncDebounceTick(void)
         return;
 
     if (buf->dirty == buf->lsp_synced_dirty) {
-        E.lsp_client->sync_debounce_pending = 0;
+        lsp->sync_debounce_pending = 0;
         return;
     }
 
     now = monotonic_ms();
-    if (!E.lsp_client->sync_debounce_pending ||
-        E.lsp_client->sync_debounce_buffer_id != buf->buffer_id) {
-        E.lsp_client->sync_debounce_pending = 1;
-        E.lsp_client->sync_debounce_buffer_id = buf->buffer_id;
-        E.lsp_client->sync_debounce_deadline_ms = now + LSP_SYNC_DEBOUNCE_MS;
+    if (!lsp->sync_debounce_pending ||
+        lsp->sync_debounce_buffer_id != buf->buffer_id) {
+        lsp->sync_debounce_pending = 1;
+        lsp->sync_debounce_buffer_id = buf->buffer_id;
+        lsp->sync_debounce_deadline_ms = now + LSP_SYNC_DEBOUNCE_MS;
         return;
     }
 
-    if (now < E.lsp_client->sync_debounce_deadline_ms)
+    if (now < lsp->sync_debounce_deadline_ms)
         return;
 
-    lspDidChange(E.lsp_client, buf);
+    lspDidChange(lsp, buf);
     buf->lsp_synced_dirty = buf->dirty;
-    E.lsp_client->sync_debounce_pending = 0;
+    lsp->sync_debounce_pending = 0;
 }
 
 /**
@@ -2107,7 +2117,8 @@ void lspShutdown(LspClient *lsp)
         b = E.buffers;
         do
         {
-            if (b->b_lsp_open)
+            // Only this server's documents: the others stay open on theirs.
+            if (b->b_lsp_open && lspClientForBuffer(b) == lsp)
             {
                 // Symmetric with the didOpen dedup: only send didClose
                 // once every buffer sharing this URI has been accounted
@@ -2162,8 +2173,12 @@ void lspShutdown(LspClient *lsp)
     gfree(lsp->recv_buf);
     lsp->recv_buf = NULL;
     lsp_free_diag_cache();
-    cJSON_Delete(g_code_actions);
-    g_code_actions = NULL;
+    if (g_code_actions_client == lsp)
+    {
+        cJSON_Delete(g_code_actions);
+        g_code_actions = NULL;
+        g_code_actions_client = NULL;
+    }
     lsp->recv_len = 0;
     lsp->recv_cap = 0;
 

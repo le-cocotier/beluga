@@ -382,20 +382,9 @@ void initEditor() {
 
   initConfig();
   initStartupConstants();
-  E.lsp_client = (LspClient *)gcalloc(1, sizeof(LspClient));
-  E.lsp_client->state = LSP_NOT_STARTED;
-  // Left as garbage otherwise until lspStart() actually runs, but
-  // editorRunLoop() waits on the server's output as soon as LSP is
-  // enabled — well before the user is even asked whether to start one.
-  E.lsp_client->proc = NULL;
-  // Also left as garbage otherwise — lspSyncDebounceTick() (completion.c)
-  // reads sync_debounce_pending/deadline before any lspScheduleCompletion-
-  // style call would ever overwrite them, since it self-arms rather than
-  // waiting to be told to. An uninitialized deadline that happens to land
-  // far in the future would silently stall diagnostics resyncing forever.
-  E.lsp_client->sync_debounce_pending = 0;
-  E.lsp_client->sync_debounce_deadline_ms = 0;
-  E.lsp_client->sync_debounce_buffer_id = -1;
+  // Clients are created per server, the first time a matching file is
+  // opened (bufferMaybeStartLsp()).
+  E.number_of_lsp_clients = 0;
 
   E.quit_times_buffer = E.constantes.QUIT_TIMES;
 }
@@ -427,10 +416,14 @@ void deInitEditor() {
     gfree(E.languages[i].words);
   gfree(E.languages);
 
-  // free lsp_client
-  if (E.lsp_client) {
-    lspCleanup(E.lsp_client);
-  }
+  // Shut every LSP server down before freeing any client: shutting one
+  // down looks up which client each buffer belongs to, which walks all of
+  // them.
+  for (i = 0; i < E.number_of_lsp_clients; i++)
+    lspShutdown(E.lsp_clients[i]);
+  for (i = 0; i < E.number_of_lsp_clients; i++)
+    lspCleanup(E.lsp_clients[i]);
+  E.number_of_lsp_clients = 0;
 
   temp = &E.theme.BACKGROUND_COLOR;
   for (i = 0; i < 8; ++i) {

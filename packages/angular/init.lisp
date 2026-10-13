@@ -17,12 +17,11 @@
 ;;
 ;; "ts" and "html" are registered against the exact same command
 ;; ("ngserver"), so opening both a component's .ts and its .html share
-;; one running server instance instead of each starting their own — see
-;; lspServerConfigMatchesRunning() in buffer.c, which only compares
-;; argv[0]. Only one language server runs per session (a beluga-wide
-;; constraint, not specific to this package), so load THIS package
-;; instead of "nodejs" for Angular work, not alongside it — both claim
-;; "ts", and whichever add-package ran first wins that extension.
+;; one running server instance instead of each starting their own — a
+;; client is per command (lspClientForConfig() in buffer.c compares
+;; argv[0]). Load THIS package instead of "nodejs" for Angular work, not
+;; alongside it — both claim "ts", and whichever add-package ran first
+;; wins that extension.
 ;; Non-Angular TypeScript/JS projects should keep using "nodejs".
 ;;
 ;; --ngProbeLocations/--tsProbeLocations tell ngserver where to find

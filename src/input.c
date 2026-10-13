@@ -311,8 +311,9 @@ static void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
  */
 static void maybeRequestSignatureHelp(struct buffer_t *buf, const Utf8Char *key) {
   unsigned char ch;
-  if (!E.constantes.LSP || !E.constantes.LSP_SIGNATURE_HELP || !E.lsp_client ||
-      E.lsp_client->state != LSP_READY || !buf || !buf->b_lsp_open)
+  LspClient *lsp = lspClientForBuffer(buf);
+  if (!E.constantes.LSP || !E.constantes.LSP_SIGNATURE_HELP || !lsp ||
+      lsp->state != LSP_READY || !buf || !buf->b_lsp_open)
     return;
   if (key->length != 1 || (key->character[0] != '(' && key->character[0] != ','))
     return;
@@ -321,7 +322,7 @@ static void maybeRequestSignatureHelp(struct buffer_t *buf, const Utf8Char *key)
   ch = buf->row[buf->y].characters[buf->x - 1].character[0];
   if (ch != key->character[0])
     return;
-  lspRequestSignatureHelp(E.lsp_client, buf, buf->y, buf->x);
+  lspRequestSignatureHelp(lsp, buf, buf->y, buf->x);
 }
 
 /**
@@ -349,6 +350,7 @@ void editorProcessKeypress() {
   int trig_len;
   int match;
   int k;
+  LspClient *lsp;
 
   // Modal: while the buffer switcher is open, it owns every key —
   // checked before anything else so it can't be shadowed by a
@@ -378,7 +380,7 @@ void editorProcessKeypress() {
 
   if (E.constantes.LSP && buf->b_lsp_open) {
 
-    if (E.lsp_client && E.lsp_completion.visible) {
+    if (lspClientForBuffer(buf) && E.lsp_completion.visible) {
       if (*c->character == '\r') {
         item = &E.lsp_completion.items[E.lsp_completion.selected];
         lspAcceptCompletion(buf, item);
@@ -466,14 +468,15 @@ void editorProcessKeypress() {
   // fires on punctuation instead. Check the server's own advertised
   // trigger strings against the text ending at the cursor now that
   // this keystroke has actually been inserted.
+  lsp = lspClientForBuffer(buf);
   if (!should_trigger_completion && E.constantes.LSP && buf->b_lsp_open &&
-      is_printable && E.lsp_client && buf->numrows > 0 &&
+      is_printable && lsp && buf->numrows > 0 &&
       buf->y < buf->numrows) {
     row = &buf->row[buf->y];
     for (i = 0;
-         i < E.lsp_client->num_trigger_chars && !should_trigger_completion;
+         i < lsp->num_trigger_chars && !should_trigger_completion;
          i++) {
-      trig = E.lsp_client->trigger_chars[i];
+      trig = lsp->trigger_chars[i];
       trig_len = (int)strlen(trig);
       if (trig_len == 0 || trig_len > buf->x)
         continue;
@@ -499,8 +502,8 @@ void editorProcessKeypress() {
   // Debounced: this only (re)starts an idle timer. The actual
   // didChange+completion round-trip fires from lspCompletionDebounceTick()
   // once typing pauses, instead of on every single keystroke.
-  if (E.constantes.LSP && E.lsp_client) {
-    if (should_trigger_completion && E.lsp_client->state == LSP_READY)
+  if (E.constantes.LSP && lsp) {
+    if (should_trigger_completion && lsp->state == LSP_READY)
       lspScheduleCompletion();
     else
       lspCancelScheduledCompletion();
