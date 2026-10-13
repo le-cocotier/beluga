@@ -90,6 +90,7 @@ void initBuiltins(void) {
   registerBuiltin("lsp-format-buffer", lspFormatBuffer);
   registerBuiltin("editor-open-terminal", editorOpenTerminal);
   registerBuiltin("editor-undo", editorUndo);
+  registerBuiltin("editor-redraw", editorRedraw);
   registerBuiltin("editor-redo", editorRedo);
   registerBuiltin("editor-set-mark", editorSetMark);
   registerBuiltin("editor-kill-region", editorKillRegion);

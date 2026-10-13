@@ -18,6 +18,7 @@
 #include "../include/list_popup.h"
 #include "../include/which_key.h"
 #include "../include/row_op.h"
+#include "../include/screen_diff.h"
 #include "../include/split_screen.h"
 #include "../include/syntax_highlighter.h"
 #include "../include/term_render.h"
@@ -760,6 +761,7 @@ static void screenFrameCache(const char *buf, int len) {
 }
 
 void editorFreeScreenCache(void) {
+  screenDiffFree();
   gfree(g_prev_frame);
   g_prev_frame = NULL;
   g_prev_frame_len = 0;
@@ -839,7 +841,7 @@ void editorRefreshScreen() {
   abAppend(&ab, SHOW_CURSOR, 6);
 
   if (screenFrameChanged(ab.b, ab.len)) {
-    os_term_write(ab.b, (size_t)ab.len);
+    screenDiffWrite(ab.b, ab.len, E.screenrows + 2, E.screencols);
     screenFrameCache(ab.b, ab.len);
   }
   abFree(&ab);

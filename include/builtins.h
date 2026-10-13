@@ -210,4 +210,7 @@ Lisp l_memoryInspectorCycleSort(Lisp args, LispError *e, LispContext ctx);
 Lisp l_memoryInspectorExport(Lisp args, LispError *e, LispContext ctx);
 #endif
 
+// Full repaint on the next frame — see screen_diff.c
+Lisp editorRedraw(Lisp args, LispError *e, LispContext ctx);
+
 #endif
