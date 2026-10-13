@@ -207,6 +207,19 @@ static int readBoolConst(const char *name, int fallback) {
 }
 
 /**
+ * @brief Read an integer setting from init.lisp, falling back to
+ * `fallback` when the symbol isn't defined or isn't an integer.
+ */
+static int readIntConst(const char *name, int fallback) {
+  int present = 0;
+  const Lisp val =
+      lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(name, E.ctx), &present);
+  if (!present || lisp_type(val) != LISP_INT)
+    return fallback;
+  return (int)lisp_int(val);
+}
+
+/**
  * @brief Reads non-color startup constants (LSP, LINE-NUMBERS, WHICH-KEY,
  * TAB-LENGTH, QUIT-TIMES) out of the Lisp environment initConfig() just
  * finished loading, into E.constantes.
@@ -226,6 +239,7 @@ static void initStartupConstants(void) {
   E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
   E.constantes.WHICH_KEY = readBoolConst("WHICH-KEY", 1);
   E.constantes.LSP_SIGNATURE_HELP = readBoolConst("LSP-SIGNATURE-HELP", 1);
+  E.constantes.AUTOSAVE_INTERVAL = readIntConst("AUTOSAVE-INTERVAL", 15);
   appDebug("LSP ON : %d", E.constantes.LSP);
   E.constantes.TAB_LENGTH =
       (int)lisp_eval(lisp_read("TAB-LENGTH", &E.ctx_error, E.ctx), &E.ctx_error,

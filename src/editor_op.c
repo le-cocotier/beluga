@@ -1,4 +1,5 @@
 #include "../include/editor_op.h"
+#include "../include/autosave.h"
 #include "../include/async_process.h"
 #include "../include/galloc.h"
 
@@ -217,6 +218,7 @@ void editorRunLoop(void) {
       lspCompletionDebounceTick();
       lspSyncDebounceTick();
     }
+    autosaveTick();
 
     // A keypress handled above may have requested the exit; drawing one
     // more frame here would just repaint the UI we're about to leave.

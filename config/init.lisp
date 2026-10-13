@@ -21,6 +21,12 @@
 ;; CTRL-x p s shows it on demand either way. Omitting this leaves it on.
 (define LSP-SIGNATURE-HELP #t)
 
+;; Every AUTOSAVE-INTERVAL seconds, files with unsaved changes are copied to
+;; ~/.beluga/autosave/. Saving (or killing the buffer) removes the copy; after
+;; a crash or a closed terminal, opening the file again offers to recover it.
+;; 0 turns autosave off. Omitting this means 15.
+(define AUTOSAVE-INTERVAL 15)
+
 ;; Prefixes need to exist before anything below tries to (map-key ... "user")
 ;; or "term" — including packages, which load next. A package that tried to
 ;; bind under a not-yet-registered prefix would silently fall back to

@@ -7,6 +7,8 @@
  */
 
 #include "../include/file_io.h"
+#include "../include/autosave.h"
+#include "../include/syntax_highlighter.h"
 #include "../include/galloc.h"
 #include "../include/editor_op.h"
 #include "../include/input.h"
@@ -173,10 +175,39 @@ Utf8Char* expandTabsForLine(const Utf8Char* line, int len, int* out_len)
  * @note Newline characters are stripped from loaded lines
  * @see editorInsertRow()
  */
+static void editorLoadRows(struct buffer_t* buffer, const Utf8Char* path);
+
 void editorOpen(struct buffer_t* buffer) {
+  editorLoadRows(buffer, buffer->fullname);
+}
 
+/**
+ * @brief Replaces a buffer's content with the file at `path`
+ * @details For content that isn't the buffer's own file (an autosave copy).
+ * Rows, undo/redo history and the cursor are reset; the buffer's name and
+ * path are left alone. dirty ends up 0, as after editorOpen().
+ */
+void editorReloadFrom(struct buffer_t* buffer, const Utf8Char* path) {
+  int i;
+  for (i = 0; i < buffer->numrows; i++)
+    bufferFreeRow(&buffer->row[i]);
+  gfree(buffer->row);
+  buffer->row = NULL;
+  buffer->numrows = 0;
+  buffer->x = 0;
+  buffer->y = 0;
+  // The entries point at rows and columns of the old content.
+  buffer->undo_stack.count = 0;
+  buffer->redo_stack.count = 0;
+  editorLoadRows(buffer, path);
+  syntaxHighlighterInvalidateAfter(buffer, -1);
+}
 
-  Utf8Char* file_content = utf8ReadFile(buffer->fullname);
+/**
+ * @brief Appends the lines of the file at `path` to `buffer`'s rows
+ */
+static void editorLoadRows(struct buffer_t* buffer, const Utf8Char* path) {
+  Utf8Char* file_content = utf8ReadFile(path);
   Utf8Char* pFileContent;
   Utf8Char* pEndLine;
   int line_length;
@@ -302,6 +333,7 @@ void editorSave() {
     }
     buffer->dirty = 0;
     fclose(fd);
+    autosaveDiscard(buffer);
     runHooks("after-save", lisp_cons(lisp_make_string2(string_path, E.ctx), lisp_null(), E.ctx));
     bufferRefreshGitInfo(buffer);
     gfree(string_path);
