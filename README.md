@@ -87,6 +87,8 @@ The rest of the editor is plain C99 plus `os.h`: no `<unistd.h>`, no `<windows.h
 feature-test macros and with `-Werror=implicit-function-declaration`, so calling a POSIX or
 Windows function outside `src/os/` doesn't build, and `meson test` runs
 `tools/check_os_boundary.sh` to catch OS headers and platform `#ifdef`s.
+It also runs the unit tests in `test/` (UTF-8 helpers, buffer edits with undo/redo, the
+terminal output parser), which link the editor's code without `main.c`.
 
 As a result, behaviour is the same everywhere:
 

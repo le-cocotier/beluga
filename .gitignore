@@ -3,6 +3,5 @@ build-windows/*
 doc/*
 beluga.wiki
 .*/*
-test/*
 *.log
 *.err

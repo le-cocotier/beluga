@@ -73,7 +73,6 @@ if is_windows
 endif
 
 src_files = files(
-  'main.c',
   'src/append_buffer.c',
   'src/editor_op.c',
   'src/syntax_highlighter.c',
@@ -107,10 +106,18 @@ src_files = files(
   'src/file_finder.c'
 )
 
-executable('beluga',
-  src_files + extra_sources,
+# Everything but main(), so the unit tests link the same code.
+core_lib = static_library('beluga-core',
+  src_files,
   c_args : core_args,
   link_with : os_lib,
+  dependencies : [m]
+)
+
+executable('beluga',
+  files('main.c') + extra_sources,
+  c_args : core_args,
+  link_with : [core_lib, os_lib],
   dependencies : [m],
   link_args : link_args
 )
@@ -118,3 +125,14 @@ executable('beluga',
 # The OS boundary, checked: no file outside src/os/ includes an OS header.
 test('os-boundary', find_program('tools/check_os_boundary.sh'),
   args : [meson.current_source_dir()])
+
+# Unit tests (test/): each is a small program linked against the editor's
+# code; test/test.c stands in for main.c's globals.
+foreach t : ['utf8', 'buffer', 'ansi_parser']
+  test(t, executable('test_' + t,
+    files('test/test_' + t + '.c', 'test/test.c'),
+    c_args : core_args,
+    link_with : [core_lib, os_lib],
+    dependencies : [m],
+    link_args : link_args))
+endforeach
