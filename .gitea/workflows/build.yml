@@ -17,7 +17,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build gcc
+          sudo apt-get install -y meson ninja-build gcc python3
 
       - name: Configure Meson
         run: meson setup build
@@ -33,6 +33,31 @@ jobs:
         with:
           name: beluga
           path: build/beluga
+
+  sanitizers:
+    runs-on: giorgio-runner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          tokens: ${{ secrets.GITEA_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build gcc python3
+
+      # AddressSanitizer (with LeakSanitizer) and UBSan. meson test sets
+      # halt_on_error, so any report fails the unit tests or the smoke test.
+      - name: Configure Meson (ASan + UBSan)
+        run: meson setup build-san -Db_sanitize=address,undefined -Db_lundef=false
+
+      - name: Build project
+        run: meson compile -C build-san
+
+      - name: Run tests under the sanitizers
+        run: meson test -C build-san --print-errorlogs
 
   build-windows:
     runs-on: giorgio-runner
