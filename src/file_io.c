@@ -14,10 +14,14 @@
 #include "../include/data.h"
 #include "../include/split_screen.h"
 #include "../include/row_op.h"
+#include "../include/completion.h"
+#include "../include/os.h"
+#include "../include/syntax_highlighter.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "../include/utf8.h"
 #include "../include/builtins.h"
@@ -173,9 +177,18 @@ Utf8Char* expandTabsForLine(const Utf8Char* line, int len, int* out_len)
  * @note Newline characters are stripped from loaded lines
  * @see editorInsertRow()
  */
+static void editorLoadRows(struct buffer_t* buffer);
+static int askYesNo(const char* question, const struct buffer_t* buffer);
+
 void editorOpen(struct buffer_t* buffer) {
+  editorLoadRows(buffer);
+  fileRememberDiskState(buffer);
+}
 
-
+/**
+ * @brief Appends the lines of buffer->fullname to the buffer's rows
+ */
+static void editorLoadRows(struct buffer_t* buffer) {
   Utf8Char* file_content = utf8ReadFile(buffer->fullname);
   Utf8Char* pFileContent;
   Utf8Char* pEndLine;
@@ -277,6 +290,13 @@ void editorSave() {
       return;
     }
   }
+  if ((fileChangedOnDisk(buffer) || buffer->disk_conflict) &&
+      !askYesNo("%s changed on disk since it was opened. Overwrite it? (y/n): %%u",
+                buffer)) {
+    editorSetStatusMessage("Save cancelled");
+    return;
+  }
+
   string_path = (char *)utf8ToString(buffer->fullname);
 
   runHooks("before-save", lisp_cons(lisp_make_string2(string_path, E.ctx), lisp_null(), E.ctx));
@@ -302,9 +322,151 @@ void editorSave() {
     }
     buffer->dirty = 0;
     fclose(fd);
+    fileRememberDiskState(buffer);
     runHooks("after-save", lisp_cons(lisp_make_string2(string_path, E.ctx), lisp_null(), E.ctx));
     bufferRefreshGitInfo(buffer);
     gfree(string_path);
   }
   editorSetStatusMessage("File saved");
+}
+
+/***********************************************************************************************************************
+ *
+ *                                                 Files changed on disk
+ *
+ **********************************************************************************************************************/
+
+// The check runs on the run loop's ~50ms tick; files are looked at at most
+// once a second.
+static time_t s_last_disk_check = 0;
+
+void fileRememberDiskState(struct buffer_t* buffer) {
+  char* path;
+  OsFileInfo info;
+  buffer->disk_known = 0;
+  buffer->disk_conflict = 0;
+  if (buffer->type != FILE_BUFF || !buffer->fullname)
+    return;
+  path = (char*) utf8ToString(buffer->fullname);
+  if (path && os_file_info(path, &info) == 0 && !info.is_dir) {
+    buffer->disk_known = 1;
+    buffer->disk_mtime = info.mtime;
+    buffer->disk_size = info.size;
+  }
+  gfree(path);
+}
+
+int fileChangedOnDisk(struct buffer_t* buffer) {
+  char* path;
+  OsFileInfo info;
+  int changed;
+  // A file that didn't exist when opened (a new file) has nothing to
+  // compare against; one deleted since is left alone too: saving
+  // recreates it.
+  if (buffer->type != FILE_BUFF || !buffer->disk_known || !buffer->fullname)
+    return 0;
+  path = (char*) utf8ToString(buffer->fullname);
+  changed = path && os_file_info(path, &info) == 0 && !info.is_dir &&
+            (info.mtime != buffer->disk_mtime || info.size != buffer->disk_size);
+  gfree(path);
+  return changed;
+}
+
+/**
+ * @brief editorPrompt() for a y/n question naming `buffer`.
+ * @param question Format with one %s (the file name) and the prompt's %%u.
+ */
+static int askYesNo(const char* question, const struct buffer_t* buffer) {
+  char prompt[512];
+  char* name;
+  char* c;
+  Utf8Char* answer;
+  int yes;
+  // editorPrompt() treats the prompt as a format: keep the name's own %
+  // out of it.
+  name = (char*) utf8ToString(buffer->filename);
+  for (c = name; c && *c; c++)
+    if (*c == '%')
+      *c = '?';
+  snprintf(prompt, sizeof(prompt), question, name ? name : "This file");
+  gfree(name);
+  // Asked from inside CTRL-x CTRL-s: with the prefix still pending, the
+  // which-key panel would cover the question.
+  E.prefix_state = 0;
+  answer = editorPrompt(prompt, NULL, 0);
+  yes = answer && answer->length == 1 &&
+        (answer->character[0] == 'y' || answer->character[0] == 'Y');
+  gfree(answer);
+  return yes;
+}
+
+void editorReload(struct buffer_t* buffer) {
+  int i;
+  const int y = buffer->y;
+  const int x = buffer->x;
+  for (i = 0; i < buffer->numrows; i++)
+    bufferFreeRow(&buffer->row[i]);
+  gfree(buffer->row);
+  buffer->row = NULL;
+  buffer->numrows = 0;
+  // The entries point at rows and columns of the old content.
+  buffer->undo_stack.count = 0;
+  buffer->redo_stack.count = 0;
+  editorLoadRows(buffer);
+  fileRememberDiskState(buffer);
+  syntaxHighlighterInvalidateAfter(buffer, -1);
+
+  // Same place, as far as the new content allows.
+  buffer->y = y < buffer->numrows ? y : (buffer->numrows > 0 ? buffer->numrows - 1 : 0);
+  buffer->x = 0;
+  if (buffer->numrows > 0)
+    buffer->x = x < buffer->row[buffer->y].size ? x : buffer->row[buffer->y].size;
+
+  // dirty is back to 0, which may equal what was last synced: send the
+  // new text explicitly.
+  if (buffer->b_lsp_open && E.lsp_client) {
+    lspDidChange(E.lsp_client, buffer);
+    buffer->lsp_synced_dirty = buffer->dirty;
+  }
+  bufferRefreshGitInfo(buffer);
+}
+
+void fileCheckDiskChanges(void) {
+  const time_t now = time(NULL);
+  EditorPane* pane;
+  struct buffer_t* buf;
+  int i;
+  int j;
+  int seen;
+
+  if (now == s_last_disk_check || E.prompt_input != NULL)
+    return;
+  s_last_disk_check = now;
+
+  // Only what's on screen: a hidden buffer is checked when it's shown.
+  for (i = 0; i < E.layout.num_panes; i++) {
+    pane = &E.layout.panes[i];
+    seen = 0;
+    for (j = 0; j < i; j++)
+      if (E.layout.panes[j].buffer_id == pane->buffer_id)
+        seen = 1;
+    buf = seen ? NULL : bufferFindById(pane->buffer_id);
+    if (!buf || !fileChangedOnDisk(buf))
+      continue;
+
+    if (!buf->dirty) {
+      editorReload(buf);
+      editorSetStatusMessage("Reloaded (changed on disk)");
+    } else if (askYesNo("%s changed on disk. Reload it and lose your changes? (y/n): %%u",
+                        buf)) {
+      editorReload(buf);
+      editorSetStatusMessage("Reloaded (changed on disk)");
+    } else {
+      // Keep the user's version; ask again only if it changes again. A save
+      // will still ask before overwriting.
+      fileRememberDiskState(buf);
+      buf->disk_conflict = 1;
+      editorSetStatusMessage("Kept your version; saving will ask before overwriting");
+    }
+  }
 }

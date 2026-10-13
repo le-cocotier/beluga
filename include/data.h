@@ -583,6 +583,14 @@ typedef struct buffer_t
     // scratch buffer got before this existed.
     char focus_prefix[64];
 
+    // The file as last read or written (file_io.c, fileChangedOnDisk()):
+    // disk_known is 0 for a file that didn't exist yet. disk_conflict: it
+    // changed on disk and the user kept their version, so saving asks.
+    int disk_known;
+    long long disk_mtime;
+    long long disk_size;
+    int disk_conflict;
+
     struct buffer_t* next;
     struct buffer_t* prev;
 
