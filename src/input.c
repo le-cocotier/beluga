@@ -98,7 +98,7 @@ Utf8Char *fileCompletion(Utf8Char *path) {
   if (*(last_slash + 1)->character == '\0') {
     // path is a directory
     utf8Printf(directory, PATH_MAX, "%u", path);
-    END_OF_STRING(directory[utf8StringLen(directory) - 2])
+    END_OF_STRING(directory[utf8StringLen(directory) - 2]);
   } else {
     utf8NCpy(directory, path, (int)(last_slash - path));
     predict_len = utf8Printf(predict, PATH_MAX, "%u", last_slash + 1);
