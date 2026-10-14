@@ -58,10 +58,10 @@ is actually left to do.
   reproduces on older binaries too, so it's not a regression. Start from
   `ptyForwardKey()` (`src/input.c`) and the input read in
   `editorRunLoop()` (`src/editor_op.c`).
-- [ ] **[bug]** `map-key` (`src/builtins.c`, `mapKey()`) copies the key
-  with `strncpy(dst, src, 50)` into a `galloc(256)` buffer that isn't
-  zeroed. A key sequence of 50+ characters has no terminator. Copy with a
-  bound of `255` and terminate it explicitly, or `strdup` it.
+- [x] **[bug]** `map-key` (`src/builtins.c`, `mapKey()`) copied the key
+  with `strncpy(dst, src, 50)`, leaving 50+ character sequences
+  unterminated. Now bounded at 255 and terminated. (Re-binding a key also
+  overwrote the wrong binding; fixed too.)
 - [ ] **[bug]** ANSI parser gaps in the terminal buffer (`src/ansi_parser.c`):
   - `ESC[1K` (erase from start of line to cursor) is ignored.
   - Unknown CSI sequences and C0 control characters are silently dropped.

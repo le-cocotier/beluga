@@ -26,14 +26,14 @@
 ;; Unlike the c/python/rust packages, whose toggles each hardcode one
 ;; comment prefix, this one looks at the file's extension and picks the
 ;; right prefix. Those packages all bind CTRL-d under "no-prefix" and the
-;; first binding registered wins, so with several language packages loaded
+;; last binding registered wins, so with several language packages loaded
 ;; exactly one toggle is ever reachable — and a hardcoded one then happily
 ;; inserts "// " into a .tex file. Dispatching on the extension means it
 ;; doesn't matter which package won the key.
 ;;
-;; Load this package BEFORE c/python/rust in your init.lisp if you want
-;; that behavior; load it after and their (correct, but single-language)
-;; toggle keeps the key instead.
+;; Load this package AFTER c/python/rust in your init.lisp if you want
+;; that behavior; load it before and their (correct, but single-language)
+;; toggle takes the key instead.
 
 (define latex--comment-styles
   (list (cons "tex" "% ") (cons "sty" "% ") (cons "cls" "% ") (cons "bib" "% ")

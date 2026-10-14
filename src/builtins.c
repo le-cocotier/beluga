@@ -105,8 +105,10 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
   for (i = 0; i < E.number_of_keybinds; ++i) {
     if (strcmp(E.key_binds[i].key_sequence, key_sequence) == 0) {
       if (E.key_binds[i].prefix_id == prefix.prefix_id) {
-        // Keybind found, just change the function
-        E.key_binds[E.number_of_keybinds - 1].command = func;
+        // Keybind found: the new binding replaces it. (This used to
+        // write the last binding in the table instead of this one, so
+        // re-binding a key silently re-bound some other key.)
+        E.key_binds[i].command = func;
         whichKeyInvalidate();
         return lisp_null();
       }
@@ -121,7 +123,8 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
   E.key_binds[E.number_of_keybinds - 1].key_sequence =
       (char *)galloc(256 * sizeof(char));
 
-  strncpy(E.key_binds[E.number_of_keybinds - 1].key_sequence, key_sequence, 50);
+  strncpy(E.key_binds[E.number_of_keybinds - 1].key_sequence, key_sequence, 255);
+  E.key_binds[E.number_of_keybinds - 1].key_sequence[255] = '\0';
 
   E.key_binds[E.number_of_keybinds - 1].command = func;
   E.key_binds[E.number_of_keybinds - 1].prefix_id = prefix.prefix_id;
