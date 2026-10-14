@@ -97,17 +97,7 @@ int editorMoveCursor(const int key) {
 // The system clipboard (os_clipboard_*), as galloc'd text the callers
 // gfree(). Line endings are LF on our side whatever the platform uses.
 char *editorGetClipboard(void) {
-  char *text = os_clipboard_get();
-  size_t len;
-  char *buf;
-  if (!text)
-    return NULL;
-  len = strlen(text);
-  buf = galloc(len + 1);
-  if (buf)
-    memcpy(buf, text, len + 1);
-  free(text);
-  return buf;
+  return os_clipboard_get();
 }
 
 void editorSetClipboard(const char *text, const int len) {

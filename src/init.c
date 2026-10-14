@@ -1,6 +1,5 @@
 #include "../include/init.h"
 #include "../include/builtins.h"
-#include "../include/cJSON.h"
 #include "../include/color.h"
 #include "../include/completion.h"
 #include "../include/config_load.h"
@@ -305,22 +304,6 @@ static void initStartupConstants(void) {
 }
 
 /**
- * @brief cJSON's allocation hooks: route its nodes and printed strings
- * through galloc, so they show up in the memory inspector and the exit
- * report like everything else. galloc is a macro, hence the wrapper.
- * cJSON_InitHooks() with a non-malloc allocator drops realloc, so cJSON's
- * print buffers grow by allocate + copy + free, all through these two.
- */
-static void *cjsonAlloc(size_t size) { return galloc(size); }
-
-static void initJsonHooks(void) {
-  cJSON_Hooks hooks;
-  hooks.malloc_fn = cjsonAlloc;
-  hooks.free_fn = gfree;
-  cJSON_InitHooks(&hooks);
-}
-
-/**
  * @brief Init all editor variable
  * @note Dynamic allocation for :\n
  *   - E.status_msg \n
@@ -330,9 +313,6 @@ static void initJsonHooks(void) {
 void initEditor() {
   const char *home = os_home_dir();
   EditorPane *active = NULL;
-
-  // Before anything can build a cJSON object (the LSP client, later on).
-  initJsonHooks();
 
   if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
     E.screencols = 80;

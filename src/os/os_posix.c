@@ -358,7 +358,7 @@ OsProc *os_proc_spawn(const OsSpawn *o) {
 
   if (!o || !o->argv || !o->argv[0])
     return NULL;
-  p = calloc(1, sizeof(*p));
+  p = gcalloc(1, sizeof(*p));
   if (!p)
     return NULL;
   if (pipe(out) != 0 || (o->stdin_pipe && pipe(in) != 0)) {
@@ -481,12 +481,12 @@ void os_proc_free(OsProc *p) {
 }
 
 char **os_shell_argv(const char *command) {
-  char **argv = calloc(4, sizeof(char *));
+  char **argv = gcalloc(4, sizeof(char *));
   if (!argv)
     return NULL;
-  argv[0] = strdup("/bin/sh");
-  argv[1] = strdup("-c");
-  argv[2] = strdup(command);
+  argv[0] = gstrdup("/bin/sh");
+  argv[1] = gstrdup("-c");
+  argv[2] = gstrdup(command);
   if (!argv[0] || !argv[1] || !argv[2]) {
     os_free_argv(argv);
     return NULL;
@@ -548,7 +548,7 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols) {
   int master;
   const char *sh;
 
-  p = calloc(1, sizeof(*p));
+  p = gcalloc(1, sizeof(*p));
   if (!p)
     return NULL;
   memset(&ws, 0, sizeof(ws));
@@ -670,7 +670,7 @@ OsDirEntry *os_list_dir(const char *path, int *count) {
       list = grown;
     }
     snprintf(full, sizeof(full), "%s/%s", path, entry->d_name);
-    list[n].name = strdup(entry->d_name);
+    list[n].name = gstrdup(entry->d_name);
     if (!list[n].name)
       break;
     list[n].is_dir = stat(full, &st) == 0 && S_ISDIR(st.st_mode);
@@ -774,11 +774,21 @@ int os_replace_file(const char *tmp, const char *dest, char *err,
   return 0;
 }
 
-char *os_realpath(const char *path) { return realpath(path, NULL); }
+// realpath() allocates with the C library's malloc; hand back a galloc'd
+// copy so the caller's gfree() and the memory inspector see it.
+char *os_realpath(const char *path) {
+  char *raw = realpath(path, NULL);
+  char *copy;
+  if (!raw)
+    return NULL;
+  copy = gstrdup(raw);
+  free(raw); // galloc: raw — realpath() malloc'd it
+  return copy;
+}
 
 char *os_getcwd(void) {
   char buf[OS_PATH_MAX];
-  return getcwd(buf, sizeof(buf)) ? strdup(buf) : NULL;
+  return getcwd(buf, sizeof(buf)) ? gstrdup(buf) : NULL;
 }
 
 const char *os_home_dir(void) {
@@ -963,7 +973,7 @@ static int copyEntry(const char *src, const char *dst, char *err,
  * recurse forever (cp -R a a/b).
  */
 static int insideItself(const char *src, const char *target) {
-  char *rs = realpath(src, NULL);
+  char *rs = os_realpath(src);
   char parent[OS_PATH_MAX];
   char *rp;
   char *slash;
@@ -976,7 +986,7 @@ static int insideItself(const char *src, const char *target) {
   slash = strrchr(parent, '/');
   if (slash && slash != parent)
     *slash = '\0';
-  rp = realpath(parent, NULL);
+  rp = os_realpath(parent);
   if (rp) {
     len = strlen(rs);
     inside = strncmp(rp, rs, len) == 0 && (rp[len] == '/' || rp[len] == '\0');

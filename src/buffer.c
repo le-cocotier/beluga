@@ -922,7 +922,7 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
     real = os_realpath(expanded);
     // File doesn't exist yet, or path invalid — fall back to the raw path
     snprintf(fullname, sizeof(fullname), "%s", real ? real : expanded);
-    free(real);
+    gfree(real);
 
     new_buf->fullname = stringToUtf8((unsigned char *)fullname);
     utilDirname(fullname, directory, sizeof(directory));

@@ -337,7 +337,7 @@ void fileFinderOpen(void) {
   output = listProjectFiles(root);
   if (!output) {
     editorSetStatusMessage("find-file: no files found under %s", root);
-    free(root);
+    gfree(root);
     return;
   }
   ownPaths(output);
@@ -345,11 +345,11 @@ void fileFinderOpen(void) {
 
   if (E.file_finder.path_count == 0) {
     editorSetStatusMessage("find-file: no files found under %s", root);
-    free(root);
+    gfree(root);
     fileFinderClose();
     return;
   }
-  free(root);
+  gfree(root);
 
   rebuildMatches();
   E.file_finder.visible = 1;
@@ -379,7 +379,7 @@ static int findOpenBuffer(const char *rel_path) {
     if (!cwd)
       return -1;
     snprintf(want, sizeof(want), "%s/%s", cwd, rel_path);
-    free(cwd);
+    gfree(cwd);
   }
 
   first = E.buffers->buffer_id;

@@ -177,7 +177,7 @@ static int plainSearchFile(const char *rel, const char *full, void *ctx) {
   got = data ? fread(data, 1, (size_t)size, f) : 0;
   fclose(f);
   if (!data || memchr(data, '\0', got < 8192 ? got : 8192)) {
-    free(data);
+    gfree(data);
     return 0;
   }
 
@@ -193,7 +193,7 @@ static int plainSearchFile(const char *rel, const char *full, void *ctx) {
     if (utilMemmem(line, line_len, ps->pattern, ps->pattern_len))
       plainSearchAppend(ps, rel, line_no, line, line_len);
   }
-  free(data);
+  gfree(data);
   return ps->stop;
 }
 
@@ -485,7 +485,7 @@ int projectSearchRun(const char *pattern, const char *root) {
     if (!cwd)
       return -1;
     snprintf(resolved, sizeof(resolved), "%s", cwd);
-    free(cwd);
+    gfree(cwd);
   }
 
   // Strip a trailing slash so the "is this path under the root" prefix
@@ -722,7 +722,7 @@ void projectSearchShowLocations(const char *title, const SearchLocation *locs,
     s_hit_count++;
   }
   s_truncated = n > s_hit_count;
-  free(cwd);
+  gfree(cwd);
 
   snprintf(s_title, sizeof(s_title), "%s%s", title,
            s_truncated ? " (truncated)" : "");
@@ -771,7 +771,7 @@ int projectSearchFiles(const char *pattern, const char *root,
     if (!cwd)
       return -1;
     snprintf(resolved, sizeof(resolved), "%s", cwd);
-    free(cwd);
+    gfree(cwd);
   }
   rlen = strlen(resolved);
   while (rlen > 1 && resolved[rlen - 1] == '/')

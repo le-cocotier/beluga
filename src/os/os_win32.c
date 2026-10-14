@@ -29,6 +29,7 @@
 #define NTDDI_VERSION 0x0A000006 // Windows 10 1809: ConPTY
 #endif
 
+#include "../../include/galloc.h"
 #include "../../include/os.h"
 
 #include <windows.h>
@@ -61,10 +62,10 @@ static wchar_t *toWide(const char *s)
     n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
     if (n <= 0)
         return NULL;
-    w = malloc((size_t) n * sizeof(wchar_t));
+    w = galloc((size_t) n * sizeof(wchar_t));
     if (w && MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n) <= 0)
     {
-        free(w);
+        gfree(w);
         return NULL;
     }
     return w;
@@ -82,10 +83,10 @@ static char *toUtf8(const wchar_t *w)
     n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
     if (n <= 0)
         return NULL;
-    s = malloc((size_t) n);
+    s = galloc((size_t) n);
     if (s && WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL) <= 0)
     {
-        free(s);
+        gfree(s);
         return NULL;
     }
     return s;
@@ -180,7 +181,7 @@ static int wbufAppendN(WBuf *b, const wchar_t *s, const size_t n)
         cap = b->cap ? b->cap : 256;
         while (b->len + n + 1 > cap)
             cap *= 2;
-        grown = realloc(b->s, cap * sizeof(wchar_t));
+        grown = grealloc(b->s, cap * sizeof(wchar_t));
         if (!grown)
             return 0;
         b->s = grown;
@@ -348,7 +349,7 @@ static int resolveProgram(const char *name, wchar_t *out, const DWORD out_len, i
                                      out_len);
         }
     }
-    free(wname);
+    gfree(wname);
 
     if (found)
     {
@@ -418,7 +419,7 @@ static int buildCommandLine(char *const argv[], wchar_t *app, const DWORD app_le
     {
         warg = toWide(argv[i]);
         ok = warg && wbufAppend(cmd, L" ") && appendQuotedArg(cmd, warg, is_batch);
-        free(warg);
+        gfree(warg);
     }
     if (ok && is_batch)
         ok = wbufAppend(cmd, L"\"");
@@ -444,7 +445,7 @@ static wchar_t *environmentWith(const wchar_t *extra)
     for (p = env; *p; p += wcslen(p) + 1)
         ;
     len = (size_t) (p - env);
-    block = malloc((len + extra_len + 1) * sizeof(wchar_t));
+    block = galloc((len + extra_len + 1) * sizeof(wchar_t));
     if (block)
     {
         memcpy(block, env, len * sizeof(wchar_t));
@@ -984,7 +985,7 @@ static HANDLE openAppend(const char *path)
     if (w)
         h = CreateFileW(w, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                         &sa, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    free(w);
+    gfree(w);
     return h;
 }
 
@@ -1020,14 +1021,14 @@ OsProc *os_proc_spawn(const OsSpawn *o)
 
     if (!o || !o->argv || !o->argv[0])
         return NULL;
-    p = calloc(1, sizeof(*p));
+    p = gcalloc(1, sizeof(*p));
     if (!p)
         return NULL;
     p->exit_code = -1;
 
     if (!buildCommandLine((char *const *) o->argv, app, sizeof(app) / sizeof(app[0]), &cmd))
     {
-        free(cmd.s);
+        gfree(cmd.s);
         if (errno == ENOENT)
         {
             // Not found: behave like Unix, where the child's execvp()
@@ -1037,7 +1038,7 @@ OsProc *os_proc_spawn(const OsSpawn *o)
             p->exit_code = 127;
             return p;
         }
-        free(p);
+        gfree(p);
         return NULL;
     }
 
@@ -1062,7 +1063,7 @@ OsProc *os_proc_spawn(const OsSpawn *o)
     if (err_h != out_w)
         handles[n_handles++] = err_h;
     InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
-    attrs = malloc(attr_size);
+    attrs = galloc(attr_size);
     if (!attrs || !InitializeProcThreadAttributeList(attrs, 1, 0, &attr_size) ||
         !UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
                                    (SIZE_T) n_handles * sizeof(HANDLE), NULL, NULL))
@@ -1101,11 +1102,11 @@ fail:
     if (attrs)
     {
         DeleteProcThreadAttributeList(attrs);
-        free(attrs);
+        gfree(attrs);
     }
-    free(env);
-    free(cwd);
-    free(cmd.s);
+    gfree(env);
+    gfree(cwd);
+    gfree(cmd.s);
     // The child's ends: it has its own copies now (or failed to start).
     if (err_h && err_h != out_w && err_h != INVALID_HANDLE_VALUE) CloseHandle(err_h);
     if (out_w) CloseHandle(out_w);
@@ -1114,7 +1115,7 @@ fail:
     {
         if (out_r) CloseHandle(out_r);
         if (in_w) CloseHandle(in_w);
-        free(p);
+        gfree(p);
         return NULL;
     }
     return p;
@@ -1188,7 +1189,7 @@ void os_proc_free(OsProc *p)
     }
     if (p->job)
         CloseHandle(p->job); // KILL_ON_JOB_CLOSE takes any stragglers with it
-    free(p);
+    gfree(p);
 }
 
 static const char *powerShell(void)
@@ -1203,14 +1204,6 @@ static const char *powerShell(void)
 
 static char *powerShellEncode(const char *script);
 
-static char *dupString(const char *s)
-{
-    size_t n = strlen(s) + 1;
-    char *d = malloc(n);
-    if (d)
-        memcpy(d, s, n);
-    return d;
-}
 
 char **os_shell_argv(const char *command)
 {
@@ -1223,25 +1216,25 @@ char **os_shell_argv(const char *command)
     static const char epilogue[] =
         "\n$__beluga_ok = $?; if ($LASTEXITCODE) { exit $LASTEXITCODE }; "
         "if (-not $__beluga_ok) { exit 1 }";
-    char **argv = calloc(6, sizeof(char *));
+    char **argv = gcalloc(6, sizeof(char *));
     size_t len = sizeof(prologue) + strlen(command) + sizeof(epilogue);
-    char *script = malloc(len);
+    char *script = galloc(len);
 
     if (!argv || !script)
     {
-        free(argv);
-        free(script);
+        gfree(argv);
+        gfree(script);
         return NULL;
     }
     snprintf(script, len, "%s%s%s", prologue, command, epilogue);
     // -EncodedCommand: base64 of the UTF-16 script, which no layer of
     // command-line quoting can alter.
-    argv[0] = dupString(powerShell());
-    argv[1] = dupString("-NoProfile");
-    argv[2] = dupString("-NonInteractive");
-    argv[3] = dupString("-EncodedCommand");
+    argv[0] = gstrdup(powerShell());
+    argv[1] = gstrdup("-NoProfile");
+    argv[2] = gstrdup("-NonInteractive");
+    argv[3] = gstrdup("-EncodedCommand");
     argv[4] = powerShellEncode(script);
-    free(script);
+    gfree(script);
     if (!argv[0] || !argv[1] || !argv[2] || !argv[3] || !argv[4])
     {
         os_free_argv(argv);
@@ -1256,8 +1249,8 @@ void os_free_argv(char **argv)
     if (!argv)
         return;
     for (a = argv; *a; a++)
-        free(*a);
-    free(argv);
+        gfree(*a);
+    gfree(argv);
 }
 
 char *os_shell_quote(const char *s)
@@ -1266,7 +1259,7 @@ char *os_shell_quote(const char *s)
     // the typographic ones (U+2018-U+201B), which PowerShell also treats
     // as quote characters.
     const unsigned char *p;
-    char *out = malloc(strlen(s) * 2 + 3);
+    char *out = galloc(strlen(s) * 2 + 3);
     size_t o = 0;
     if (!out)
         return NULL;
@@ -1345,7 +1338,7 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
     WBuf cmd = { NULL, 0, 0 };
     wchar_t *wshell;
     wchar_t *env = NULL;
-    OsPty *p = calloc(1, sizeof(*p));
+    OsPty *p = gcalloc(1, sizeof(*p));
 
     if (!p)
         return NULL;
@@ -1358,7 +1351,7 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
         goto fail;
 
     InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
-    attrs = malloc(attr_size);
+    attrs = galloc(attr_size);
     if (!attrs || !InitializeProcThreadAttributeList(attrs, 1, 0, &attr_size) ||
         !UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, console,
                                    sizeof(console), NULL, NULL))
@@ -1369,7 +1362,7 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
         wshell = toWide(shell);
         if (wshell)
             appendQuotedArg(&cmd, wshell, 0);
-        free(wshell);
+        gfree(wshell);
     }
     else
         defaultShellCommand(&cmd);
@@ -1402,25 +1395,25 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
     CloseHandle(in_read);
     CloseHandle(out_write);
     DeleteProcThreadAttributeList(attrs);
-    free(attrs);
-    free(env);
-    free(cmd.s);
+    gfree(attrs);
+    gfree(env);
+    gfree(cmd.s);
     return p;
 
 fail:
     if (attrs)
     {
         DeleteProcThreadAttributeList(attrs);
-        free(attrs);
+        gfree(attrs);
     }
-    free(env);
-    free(cmd.s);
+    gfree(env);
+    gfree(cmd.s);
     if (console) ClosePseudoConsole(console);
     if (in_read) CloseHandle(in_read);
     if (in_write) CloseHandle(in_write);
     if (out_read) CloseHandle(out_read);
     if (out_write) CloseHandle(out_write);
-    free(p);
+    gfree(p);
     return NULL;
 }
 
@@ -1474,7 +1467,7 @@ void os_pty_close(OsPty *p)
     CloseHandle(p->process);
     if (p->job)
         CloseHandle(p->job);
-    free(p);
+    gfree(p);
 }
 
 /***********************************************************************************************************************
@@ -1507,19 +1500,19 @@ OsDirEntry *os_list_dir(const char *path, int *count)
     int n = 0;
 
     *count = 0;
-    spec = malloc(len + 3);
+    spec = galloc(len + 3);
     if (!spec)
         return NULL;
     snprintf(spec, len + 3, "%s%s*", path, (len && (path[len - 1] == '/' || path[len - 1] == '\\')) ? "" : "/");
     pattern = toWide(spec);
-    free(spec);
+    gfree(spec);
     if (!pattern)
         return NULL;
     find = FindFirstFileExW(pattern, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, 0);
-    free(pattern);
+    gfree(pattern);
     if (find == INVALID_HANDLE_VALUE)
         return NULL;
-    list = malloc((size_t) cap * sizeof(*list));
+    list = galloc((size_t) cap * sizeof(*list));
     if (!list)
     {
         FindClose(find);
@@ -1532,7 +1525,7 @@ OsDirEntry *os_list_dir(const char *path, int *count)
         if (n == cap)
         {
             cap *= 2;
-            grown = realloc(list, (size_t) cap * sizeof(*list));
+            grown = grealloc(list, (size_t) cap * sizeof(*list));
             if (!grown)
                 break;
             list = grown;
@@ -1554,8 +1547,8 @@ void os_free_dir(OsDirEntry *entries, const int count)
     if (!entries)
         return;
     for (i = 0; i < count; i++)
-        free(entries[i].name);
-    free(entries);
+        gfree(entries[i].name);
+    gfree(entries);
 }
 
 int os_file_info(const char *path, OsFileInfo *info)
@@ -1568,7 +1561,7 @@ int os_file_info(const char *path, OsFileInfo *info)
 
     memset(info, 0, sizeof(*info));
     ok = w && GetFileAttributesExW(w, GetFileExInfoStandard, &data);
-    free(w);
+    gfree(w);
     if (!ok)
         return -1;
 
@@ -1585,7 +1578,7 @@ int os_file_info(const char *path, OsFileInfo *info)
     if (info->is_link && (target = os_realpath(path)) != NULL)
     {
         snprintf(info->link_target, sizeof(info->link_target), "%s", target);
-        free(target);
+        gfree(target);
     }
     return 0;
 }
@@ -1605,8 +1598,8 @@ int os_replace_file(const char *tmp, const char *dest, char *err, size_t err_siz
     int ok;
     if (!wtmp || !wdest)
     {
-        free(wtmp);
-        free(wdest);
+        gfree(wtmp);
+        gfree(wdest);
         snprintf(err, err_size, "out of memory");
         return -1;
     }
@@ -1618,8 +1611,8 @@ int os_replace_file(const char *tmp, const char *dest, char *err, size_t err_siz
     ok = MoveFileExW(wtmp, wdest, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
     if (!ok)
         snprintf(err, err_size, "can't replace the file (error %lu)", (unsigned long) GetLastError());
-    free(wtmp);
-    free(wdest);
+    gfree(wtmp);
+    gfree(wdest);
     return ok ? 0 : -1;
 }
 
@@ -1641,7 +1634,7 @@ char *os_realpath(const char *path)
         return NULL;
     h = CreateFileW(wpath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
                     OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-    free(wpath);
+    gfree(wpath);
     if (h == INVALID_HANDLE_VALUE)
         return NULL;
     n = GetFinalPathNameByHandleW(h, final, OS_PATH_MAX, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -1683,7 +1676,7 @@ const char *os_home_dir(void)
         profile = _wgetenv(L"USERPROFILE");
         home = profile ? toUtf8(profile) : NULL;
         if (!home)
-            home = dupString("C:/");
+            home = gstrdup("C:/");
         backslashesToSlashes(home);
     }
     return home;
@@ -1714,8 +1707,8 @@ int os_path_equal(const char *a, const char *b)
     wchar_t *wa = toWide(a);
     wchar_t *wb = toWide(b);
     int equal = wa && wb && CompareStringOrdinal(wa, -1, wb, -1, TRUE) == CSTR_EQUAL;
-    free(wa);
-    free(wb);
+    gfree(wa);
+    gfree(wb);
     return equal;
 }
 
@@ -1745,7 +1738,7 @@ static void win32ErrorMessage(const DWORD code, char *err, const size_t err_size
                            msg[len - 1] == '.'))
             msg[--len] = '\0';
         snprintf(err, err_size, "%s", msg);
-        free(msg);
+        gfree(msg);
     }
     else
         snprintf(err, err_size, "error %lu", (unsigned long) code);
@@ -1769,23 +1762,23 @@ static wchar_t *doubleNulList(const char *const *paths, const int count)
         w = toWide(paths[i]);
         if (!w || !GetFullPathNameW(w, OS_PATH_MAX, full, NULL))
         {
-            free(w);
-            free(list.s);
+            gfree(w);
+            gfree(list.s);
             return NULL;
         }
-        free(w);
+        gfree(w);
         for (p = full; *p; p++)
             if (*p == L'/')
                 *p = L'\\';
         if (!wbufAppend(&list, full) || !wbufAppendN(&list, &nul, 1))
         {
-            free(list.s);
+            gfree(list.s);
             return NULL;
         }
     }
     if (!wbufAppendN(&list, &nul, 1)) // the list's terminator (wbuf adds one more)
     {
-        free(list.s);
+        gfree(list.s);
         return NULL;
     }
     return list.s;
@@ -1808,8 +1801,8 @@ static int fileOperation(const int op, const char *const *paths, const int count
         to = dest ? doubleNulList(&dest, 1) : NULL;
     if (!from || (op != FILEOP_DELETE && !to))
     {
-        free(from);
-        free(to);
+        gfree(from);
+        gfree(to);
         snprintf(err, err_size, "invalid path");
         return ERROR_INVALID_NAME;
     }
@@ -1835,8 +1828,8 @@ static int fileOperation(const int op, const char *const *paths, const int count
         else
             win32ErrorMessage((DWORD) result, err, err_size);
     }
-    free(from);
-    free(to);
+    gfree(from);
+    gfree(to);
     return result;
 }
 
@@ -1851,11 +1844,11 @@ static int makeDirectories(const char *path, char *err, const size_t err_size)
         err[0] = '\0';
     if (!w || !GetFullPathNameW(w, OS_PATH_MAX, full, NULL))
     {
-        free(w);
+        gfree(w);
         snprintf(err, err_size, "invalid path");
         return ERROR_INVALID_NAME;
     }
-    free(w);
+    gfree(w);
     for (p = full; *p; p++)
         if (*p == L'/')
             *p = L'\\';
@@ -1904,9 +1897,9 @@ static int insideItself(const char *src, const char *dest)
             rp[len] = '\0';
             inside = os_path_equal(rp, rs);
         }
-        free(rp);
+        gfree(rp);
     }
-    free(rs);
+    gfree(rs);
     return inside;
 }
 
@@ -2016,7 +2009,7 @@ static int clipboardSet(const char *text, const size_t len)
     int wlen;
     int ok = 0;
 
-    crlf = malloc(len * 2 + 1); // LF -> CRLF, what Windows apps expect
+    crlf = galloc(len * 2 + 1); // LF -> CRLF, what Windows apps expect
     if (!crlf)
         return 0;
     for (i = 0; i < len; i++)
@@ -2027,7 +2020,7 @@ static int clipboardSet(const char *text, const size_t len)
     }
     crlf[j] = '\0';
     wide = toWide(crlf);
-    free(crlf);
+    gfree(crlf);
     if (!wide)
         return 0;
 
@@ -2046,7 +2039,7 @@ static int clipboardSet(const char *text, const size_t len)
     }
     if (!ok && mem)
         GlobalFree(mem); // on success the clipboard owns it
-    free(wide);
+    gfree(wide);
     return ok;
 }
 
@@ -2077,7 +2070,7 @@ static char *powerShellEncode(const char *script)
         return NULL;
     bytes = (const unsigned char *) w; // UTF-16LE: wchar_t is little-endian here
     n = wcslen(w) * sizeof(wchar_t);
-    out = malloc((n + 2) / 3 * 4 + 1);
+    out = galloc((n + 2) / 3 * 4 + 1);
     if (out)
     {
         for (i = 0; i < n; i += 3)
@@ -2092,6 +2085,6 @@ static char *powerShellEncode(const char *script)
         }
         out[o] = '\0';
     }
-    free(w);
+    gfree(w);
     return out;
 }

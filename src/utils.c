@@ -37,7 +37,7 @@ char *utilStrndup(const char *s, const size_t n)
     char *copy;
     while (len < n && s[len])
         len++;
-    copy = malloc(len + 1);
+    copy = galloc(len + 1);
     if (!copy)
         return NULL;
     memcpy(copy, s, len);
@@ -89,7 +89,7 @@ char *utilFormat(const char *fmt, ...)
     va_end(ap);
     if (len < 0)
         return NULL;
-    out = malloc((size_t) len + 1);
+    out = galloc((size_t) len + 1);
     if (!out)
         return NULL;
     va_start(ap, fmt);

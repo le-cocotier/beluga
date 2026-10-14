@@ -14,8 +14,9 @@
  * - Strings are UTF-8. Paths use '/' as separator (Windows accepts it
  *   everywhere; the Windows backend converts what it hands back, so
  *   "C:/Users/me/x.c" is a normal absolute path to the editor).
- * - Memory returned to the caller is malloc'd: release it with free(),
- *   or with the matching os_free_*() where one exists.
+ * - Memory returned to the caller comes from galloc (include/galloc.h), so
+ *   the memory inspector sees it: release it with gfree(), or with the
+ *   matching os_free_*() where one exists.
  * - Keyboard input arrives as the byte sequences an xterm sends
  *   ("\x1b[A" for Up, "\x1b[1;5D" for Ctrl+Left, 0x00 for Ctrl+Space, ...),
  *   so there is one key parser for every platform.
@@ -184,7 +185,7 @@ void os_proc_free(OsProc *p);
 char **os_shell_argv(const char *command);
 void os_free_argv(char **argv);
 
-// `s` quoted as one literal word for that shell. malloc'd.
+// `s` quoted as one literal word for that shell. galloc'd.
 char *os_shell_quote(const char *s);
 
 /***********************************************************************************************************************

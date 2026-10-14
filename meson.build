@@ -138,6 +138,10 @@ beluga_exe = executable('beluga',
 test('os-boundary', find_program('tools/check_os_boundary.sh'),
   args : [meson.current_source_dir()])
 
+# Every allocation goes through galloc, so the memory inspector sees it.
+test('galloc', find_program('tools/check_galloc.sh'),
+  args : [meson.current_source_dir()])
+
 # Unit tests (test/): each is a small program linked against the editor's
 # code; test/test.c stands in for main.c's globals. On Windows they get
 # beluga.exe's manifest too, so file names are UTF-8 for them as well.

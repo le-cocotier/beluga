@@ -13,6 +13,8 @@ void * galloc_impl(size_t size, const char * file, int line, const char * func);
 void * gcalloc_impl(size_t num, size_t size, const char * file, int line, const char * func);
 void * grealloc_impl(void * address, size_t size, const char * file, int line, const char * func);
 void gfree(void * data);
+// strdup() through galloc, attributed to the caller like galloc().
+char * gstrdup_impl(const char * s, const char * file, int line, const char * func);
 
 /**
  * Writes every block still tracked to `out`, grouped by the line that
@@ -26,6 +28,7 @@ int gReportMemory(FILE * out);
 #define galloc(size) galloc_impl((size), __FILE__, __LINE__, __func__)
 #define gcalloc(num, size) gcalloc_impl((num), (size), __FILE__, __LINE__, __func__)
 #define grealloc(address, size) grealloc_impl((address), (size), __FILE__, __LINE__, __func__)
+#define gstrdup(s) gstrdup_impl((s), __FILE__, __LINE__, __func__)
 
 /*
   Struct that contains addresses of allocated memory.

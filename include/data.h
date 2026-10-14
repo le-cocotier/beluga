@@ -505,7 +505,7 @@ enum buffer_type { FILE_BUFF, TERMINAL_BUFF, EXPLORER_BUFF };
 //   DELETE_TEXT (row,col,text): undo inserts `text` at (row,col); redo
 //                             deletes it again.
 // The two TEXT kinds cover bulk edits (paste, region delete, LSP edits) in
-// one entry each, however long the text; it is a gmalloc'd UTF-8 string
+// one entry each, however long the text; it is a galloc'd UTF-8 string
 // ('\n' between lines) owned by the entry.
 // Consecutive entries sharing a group_id are undone/redone together in one
 // user-facing call — see undoRecord()'s contiguity check for how a group

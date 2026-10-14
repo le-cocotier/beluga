@@ -57,6 +57,7 @@
 #endif
 
 #include "../include/cJSON.h"
+#include "../include/galloc.h"
 
 /* define our own boolean type */
 #ifdef true
@@ -154,19 +155,15 @@ typedef struct internal_hooks {
   void *(CJSON_CDECL *reallocate)(void *pointer, size_t size);
 } internal_hooks;
 
-#if defined(_MSC_VER)
-/* work around MSVC error C2322: '...' address of dllimport '...' is not static
- */
-static void *CJSON_CDECL internal_malloc(size_t size) { return malloc(size); }
-static void CJSON_CDECL internal_free(void *pointer) { free(pointer); }
+/* beluga: the default hooks allocate through galloc (include/galloc.h), so
+ * cJSON's nodes and printed strings show up in the memory inspector and the
+ * exit report like everything else, from the first parse on. galloc is a
+ * macro, hence the wrappers. */
+static void *CJSON_CDECL internal_malloc(size_t size) { return galloc(size); }
+static void CJSON_CDECL internal_free(void *pointer) { gfree(pointer); }
 static void *CJSON_CDECL internal_realloc(void *pointer, size_t size) {
-  return realloc(pointer, size);
+  return grealloc(pointer, size);
 }
-#else
-#define internal_malloc malloc
-#define internal_free free
-#define internal_realloc realloc
-#endif
 
 /* strlen of character literals resolved at compile time */
 #define static_strlen(string_literal) (sizeof(string_literal) - sizeof(""))
@@ -196,26 +193,27 @@ static unsigned char *cJSON_strdup(const unsigned char *string,
 CJSON_PUBLIC(void) cJSON_InitHooks(cJSON_Hooks *hooks) {
   if (hooks == NULL) {
     /* Reset hooks */
-    global_hooks.allocate = malloc;
-    global_hooks.deallocate = free;
-    global_hooks.reallocate = realloc;
+    global_hooks.allocate = internal_malloc;
+    global_hooks.deallocate = internal_free;
+    global_hooks.reallocate = internal_realloc;
     return;
   }
 
-  global_hooks.allocate = malloc;
+  global_hooks.allocate = internal_malloc;
   if (hooks->malloc_fn != NULL) {
     global_hooks.allocate = hooks->malloc_fn;
   }
 
-  global_hooks.deallocate = free;
+  global_hooks.deallocate = internal_free;
   if (hooks->free_fn != NULL) {
     global_hooks.deallocate = hooks->free_fn;
   }
 
   /* use realloc only if both free and malloc are used */
   global_hooks.reallocate = NULL;
-  if ((global_hooks.allocate == malloc) && (global_hooks.deallocate == free)) {
-    global_hooks.reallocate = realloc;
+  if ((global_hooks.allocate == internal_malloc) &&
+      (global_hooks.deallocate == internal_free)) {
+    global_hooks.reallocate = internal_realloc;
   }
 }
 

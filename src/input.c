@@ -264,7 +264,7 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
         appDebug("%s\n", pwd ? pwd : "");
         // Replace path by pwd + last word
         utf8Printf(path, PATH_MAX, "%s/%u", pwd ? pwd : ".", buf);
-        free(pwd);
+        gfree(pwd);
       } else {
         // already absolute path
         utf8Printf(path, PATH_MAX, "%u", buf);

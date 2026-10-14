@@ -24,15 +24,15 @@ static int runFile(const char *path) {
   fseek(f, 0, SEEK_END);
   size = ftell(f);
   fseek(f, 0, SEEK_SET);
-  data = malloc(size > 0 ? (size_t)size : 1);
+  data = galloc(size > 0 ? (size_t)size : 1);
   if (!data || fread(data, 1, (size_t)size, f) != (size_t)size) {
-    free(data);
+    gfree(data);
     fclose(f);
     return 0;
   }
   fclose(f);
   LLVMFuzzerTestOneInput(data, (size_t)size);
-  free(data);
+  gfree(data);
   return 1;
 }
 

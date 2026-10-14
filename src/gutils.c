@@ -128,6 +128,14 @@ void * gcalloc_impl(const size_t num, const size_t size, const char * file, cons
   return track(calloc(num, size), num * size, file, line, func);
 }
 
+char * gstrdup_impl(const char * s, const char * file, const int line, const char * func){
+  const size_t size = strlen(s) + 1;
+  char * copy = galloc_impl(size, file, line, func);
+  if (copy)
+    memcpy(copy, s, size);
+  return copy;
+}
+
 void * grealloc_impl(void * address, const size_t size, const char * file, const int line, const char * func){
   struct dataBlock_t * data_block;
   void * new_data;

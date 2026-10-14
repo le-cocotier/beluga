@@ -266,7 +266,7 @@ void bFree_structs(void) {
   E.number_of_buffer = 0;
 
   // (lsp-server ...) registrations: the table, and each argv string
-  // (utilStrdup — plain malloc, which gfree hands back to free()).
+  // (utilStrdup — plain malloc, which gfree hands back to gfree()).
   for (i = 0; i < E.number_of_lsp_servers; ++i)
     for (j = 0; j < LSP_SERVER_MAX_ARGS && E.lsp_servers[i].argv[j]; ++j)
       gfree(E.lsp_servers[i].argv[j]);
@@ -597,7 +597,7 @@ Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
   slashed = utilFormat("%s%s", cwd ? cwd : "",
                        (cwd && cwd[0] && cwd[strlen(cwd) - 1] != '/' &&
                         cwd[strlen(cwd) - 1] != '\\') ? "/" : "");
-  free(cwd);
+  gfree(cwd);
   pwd = stringToUtf8((unsigned char *)(slashed ? slashed : ""));
   gfree(slashed);
   filename = editorPrompt("Open : %u", pwd, 1);
@@ -728,7 +728,7 @@ Lisp editorPwd(Lisp args, LispError *e, LispContext ctx) {
   Lisp result = lisp_make_string2(cwd ? cwd : "", ctx);
   (void)args;
   (void)e;
-  free(cwd);
+  gfree(cwd);
   return result;
 }
 
@@ -762,7 +762,7 @@ Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx) {
   argv[4] = "--show-toplevel";
   argv[5] = NULL;
   out = runArgvCaptureQuiet(argv, 1000, PATH_MAX, NULL);
-  free(cwd);
+  gfree(cwd);
   if (!out)
     return lisp_make_string2("", ctx);
 
@@ -2483,7 +2483,7 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
     }
     snprintf(joined, sizeof(joined), "%s/%s", base, path);
   }
-  free(cwd);
+  gfree(cwd);
 
   os_path_to_slashes(joined); // "C:\\dir\\file" typed the Windows way
   normalizePath(joined, out, sizeof(out));
@@ -2586,7 +2586,7 @@ Lisp l_shellQuote(Lisp args, LispError *e, LispContext ctx) {
   if (!quoted)
     return lisp_null();
   result = lisp_make_string2(quoted, ctx);
-  free(quoted);
+  gfree(quoted);
   return result;
 }
 
@@ -2869,7 +2869,7 @@ Lisp l_stringSplit(Lisp args, LispError *e, LispContext ctx) {
     if (!piece)
       break;
     cell = lisp_cons(lisp_make_string2(piece, ctx), lisp_null(), ctx);
-    free(piece);
+    gfree(piece);
     if (lisp_is_null(head))
       head = cell;
     else
