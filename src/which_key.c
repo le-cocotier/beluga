@@ -11,6 +11,7 @@
 #include "../include/append_buffer.h"
 #include "../include/buffer.h"
 #include "../include/data.h"
+#include "../include/input.h"
 #include "../include/popup_ui.h"
 #include "../include/split_screen.h"
 #include "../include/utf8.h"
@@ -436,6 +437,10 @@ static void drawPrefixHelp(struct abuf *ab) {
     int i;
     char *slot;
     char title[128];
+    const struct buffer_t *buf;
+    int scope;
+    int shadowed;
+    int j;
     buildBindNames();
     if (!g_bind_names)
         return;
@@ -448,9 +453,22 @@ static void drawPrefixHelp(struct abuf *ab) {
         return;
     }
 
+    buf = bufferFindById(splitScreenGetActivePane()->buffer_id);
     n = 0;
     for (i = 0; i < E.number_of_keybinds; i++) {
         if (E.key_binds[i].prefix_id != E.prefix_state)
+            continue;
+        // Only what the key would actually run in this buffer: skip other
+        // languages' bindings, and a global one a language binding shadows.
+        scope = keyBindScope(&E.key_binds[i], buf);
+        if (scope == 0)
+            continue;
+        shadowed = 0;
+        for (j = 0; scope == 1 && j < E.number_of_keybinds && !shadowed; j++)
+            shadowed = j != i && E.key_binds[j].prefix_id == E.prefix_state &&
+                       strcmp(E.key_binds[j].key_sequence, E.key_binds[i].key_sequence) == 0 &&
+                       keyBindScope(&E.key_binds[j], buf) == 2;
+        if (shadowed)
             continue;
         slot = storage + (size_t) n * WK_ENTRY_MAX;
         snprintf(slot, WK_ENTRY_MAX, "%s → %s", E.key_binds[i].key_sequence,

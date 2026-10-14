@@ -69,28 +69,73 @@ struct prefix_t find_prefix(const char prefix_name[64]) {
 }
 
 /**
+ * @brief The 4th argument of map-key, as " ext1 ext2 " (NULL for none)
+ * @details Accepts one extension string ("py") or a list of them
+ * ('("c" "h")); a leading '.' is dropped.
+ */
+static char *keyBindExtensions(Lisp arg) {
+  size_t cap = 2;
+  size_t len;
+  char *out;
+  const char *ext;
+  Lisp it;
+
+  if (lisp_is_null(arg))
+    return NULL;
+  for (it = arg; lisp_is_pair(it); it = lisp_cdr(it))
+    cap += strlen(lisp_string(lisp_car(it))) + 1;
+  if (!lisp_is_pair(arg))
+    cap += strlen(lisp_string(arg)) + 1;
+  out = galloc(cap);
+  if (!out)
+    return NULL;
+  strcpy(out, " ");
+  for (it = arg; !lisp_is_null(it);) {
+    ext = lisp_is_pair(it) ? lisp_string(lisp_car(it)) : lisp_string(it);
+    if (*ext == '.')
+      ext++;
+    len = strlen(out);
+    snprintf(out + len, cap - len, "%s ", ext);
+    if (!lisp_is_pair(it))
+      break;
+    it = lisp_cdr(it);
+  }
+  return out;
+}
+
+static int sameExtensions(const char *a, const char *b) {
+  if (!a || !b)
+    return a == b;
+  return strcmp(a, b) == 0;
+}
+
+/**
  * @brief Lisp function to bind a command to a key sequence
  * @details Registers a keybinding with an associated Lisp command and optional
  * prefix modifier. Dynamically extends the keybind array.
- * @param args Lisp list of 3 arguments: (key-sequence command prefix-name)
+ * @param args Lisp list of 3 or 4 arguments:
+ *        (key-sequence command prefix-name [extensions])
  *        - key_sequence (string): The key or key combination to bind
  *        - command (Lisp): The Lisp command/function to execute
  *        - prefix_name (string): Prefix modifier name
+ *        - extensions (optional, string or list of strings): only bind the
+ *          key in buffers whose file has one of these extensions, e.g.
+ *          "py" or '("c" "h"). Such a binding wins over a global one there,
+ *          so every language package can bind the same key (CTRL-d).
  * @param e Error pointer for Lisp error handling
  * @param ctx Lisp context
  * @return lisp_null()
  * @note Updates global editor state E (key_binds array)
  */
 Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
-  /*
-   * 3 arguments keybind command prefix
-   */
   const char *key_sequence = lisp_string(lisp_car(args));
   int i;
   void *memory_temp;
   Lisp func;
   const char *prefix_name;
   struct prefix_t prefix;
+  char *extensions;
+  size_t key_len;
   args = lisp_cdr(args);
   // second argument
   func = lisp_car(args);
@@ -98,19 +143,21 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
   args = lisp_cdr(args);
   prefix_name = lisp_string(lisp_car(args));
   prefix = find_prefix(prefix_name);
+  // Optional fourth argument
+  args = lisp_cdr(args);
+  extensions = lisp_is_null(args) ? NULL : keyBindExtensions(lisp_car(args));
 
   // Check if key already bind
 
   for (i = 0; i < E.number_of_keybinds; ++i) {
-    if (strcmp(E.key_binds[i].key_sequence, key_sequence) == 0) {
-      if (E.key_binds[i].prefix_id == prefix.prefix_id) {
-        // Keybind found: the new binding replaces it. (This used to
-        // write the last binding in the table instead of this one, so
-        // re-binding a key silently re-bound some other key.)
-        E.key_binds[i].command = func;
-        whichKeyInvalidate();
-        return lisp_null();
-      }
+    if (strcmp(E.key_binds[i].key_sequence, key_sequence) == 0 &&
+        E.key_binds[i].prefix_id == prefix.prefix_id &&
+        sameExtensions(E.key_binds[i].extensions, extensions)) {
+      // Keybind found, just change the function
+      E.key_binds[i].command = func;
+      gfree(extensions);
+      whichKeyInvalidate();
+      return lisp_null();
     }
   }
 
@@ -119,14 +166,13 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
   E.key_binds = (struct keyBind_t *)memory_temp;
   if (!E.key_binds)
     editorQuit(args, e, ctx);
-  E.key_binds[E.number_of_keybinds - 1].key_sequence =
-      (char *)galloc(256 * sizeof(char));
-
-  strncpy(E.key_binds[E.number_of_keybinds - 1].key_sequence, key_sequence, 255);
-  E.key_binds[E.number_of_keybinds - 1].key_sequence[255] = '\0';
+  key_len = strlen(key_sequence);
+  E.key_binds[E.number_of_keybinds - 1].key_sequence = (char *)galloc(key_len + 1);
+  memcpy(E.key_binds[E.number_of_keybinds - 1].key_sequence, key_sequence, key_len + 1);
 
   E.key_binds[E.number_of_keybinds - 1].command = func;
   E.key_binds[E.number_of_keybinds - 1].prefix_id = prefix.prefix_id;
+  E.key_binds[E.number_of_keybinds - 1].extensions = extensions;
 
   // The which-key panel caches a resolved command name per binding; adding
   // one invalidates that mapping.
@@ -182,6 +228,8 @@ void bFree_structs(void) {
   for (i = 0; i < E.number_of_keybinds; ++i) {
     gfree(E.key_binds[i].key_sequence);
     E.key_binds[i].key_sequence = NULL;
+    gfree(E.key_binds[i].extensions);
+    E.key_binds[i].extensions = NULL;
   }
   gfree(E.key_binds);
   E.key_binds = NULL;

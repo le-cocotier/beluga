@@ -68,9 +68,6 @@ is actually left to do.
 
 ## Configuration and packages
 
-- [ ] **[feature]** Per-language (buffer-local) keymaps, so the comment toggle
-  and similar commands pick the right behaviour for the file type instead of
-  whichever package loaded first.
 - [ ] **[feature]** `add-package` of a package that isn't installed is a
   silent no-op, and so is a Lisp error inside a package. Show a status-bar
   message (and write to the debug log) naming the package and the error.

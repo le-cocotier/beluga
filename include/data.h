@@ -151,6 +151,10 @@ struct keyBind_t
     char* key_sequence;
     int prefix_id;
     Lisp command;
+    // NULL: global. Otherwise " ext1 ext2 " (space-delimited both ends):
+    // the binding only applies in buffers with one of these extensions, and
+    // there it wins over a global binding of the same key.
+    char* extensions;
 };
 
 /**

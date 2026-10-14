@@ -38,6 +38,7 @@ void fileCompletionFree(FileCompletion *fc);
 int editorMoveCursor(int key);
 
 int executeKeyBind(char *key_sequence);
+int keyBindScope(const struct keyBind_t *kb, const struct buffer_t *buf);
 
 /**
  * \fn void editorProcessKeypress()

@@ -280,9 +280,27 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder,
 }
 
 /**
+ * @brief Does this binding apply in `buf`?
+ * @return 0 if it doesn't, 1 for a global binding, 2 for one scoped to the
+ * buffer's file extension (which takes precedence over a global one)
+ */
+int keyBindScope(const struct keyBind_t *kb, const struct buffer_t *buf) {
+  char ext[32];
+  char needle[34];
+  if (!kb->extensions)
+    return 1;
+  if (!buf || !utf8FilenameExtension(buf->filename, ext, sizeof(ext)))
+    return 0;
+  snprintf(needle, sizeof(needle), " %s ", ext);
+  return strstr(kb->extensions, needle) ? 2 : 0;
+}
+
+/**
  * @brief Executes the command bound to a key sequence
  * @details Searches the keybinding table for a matching key sequence and
- * prefix state, then evaluates the associated Lisp command.
+ * prefix state, then evaluates the associated Lisp command. A binding
+ * scoped to the active buffer's extension (map-key's 4th argument) wins
+ * over a global one.
  * @param key_sequence The string representation of the key sequence
  * @return 1 if a matching keybinding was found and executed, 0 otherwise
  * @note Updates global editor state E (prefix_state)
@@ -291,27 +309,37 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder,
 int executeKeyBind(char *key_sequence) {
   int i;
   int previous_state = 0;
+  int found = -1;
+  int found_scope = 0;
+  int scope;
+  const struct buffer_t *buf = bufferFindById(splitScreenGetActivePane()->buffer_id);
   for (i = 0; i < E.number_of_keybinds; ++i) {
-    if (!strcmp(key_sequence, E.key_binds[i].key_sequence)) {
-      if ((E.key_binds[i].prefix_id != starPrefixId()) &&
-          (E.prefix_state != E.key_binds[i].prefix_id)) {
-        continue;
-      }
-      previous_state = E.prefix_state;
-      // It's a symbol, create a function call
-      lisp_eval(lisp_cons(E.key_binds[i].command, lisp_null(), E.ctx),
-                &E.ctx_error, E.ctx);
-      // Sticky prefixes (see add-prefix) skip the auto-reset — they're
-      // meant to stay active across keystrokes that don't themselves
-      // change the prefix (e.g. arrow-key navigation in a sidebar),
-      // unlike a one-shot "user"-style CTRL-x <key> prefix.
-      if (E.prefix_state == previous_state &&
-          !E.prefix[E.key_binds[i].prefix_id].sticky)
-        E.prefix_state = 0;
-      return 1;
+    if (strcmp(key_sequence, E.key_binds[i].key_sequence) != 0)
+      continue;
+    if ((E.key_binds[i].prefix_id != starPrefixId()) &&
+        (E.prefix_state != E.key_binds[i].prefix_id))
+      continue;
+    scope = keyBindScope(&E.key_binds[i], buf);
+    if (scope > found_scope) {
+      found = i;
+      found_scope = scope;
     }
   }
-  return 0;
+  if (found < 0)
+    return 0;
+
+  previous_state = E.prefix_state;
+  // It's a symbol, create a function call
+  lisp_eval(lisp_cons(E.key_binds[found].command, lisp_null(), E.ctx),
+            &E.ctx_error, E.ctx);
+  // Sticky prefixes (see add-prefix) skip the auto-reset — they're
+  // meant to stay active across keystrokes that don't themselves
+  // change the prefix (e.g. arrow-key navigation in a sidebar),
+  // unlike a one-shot "user"-style CTRL-x <key> prefix.
+  if (E.prefix_state == previous_state &&
+      !E.prefix[E.key_binds[found].prefix_id].sticky)
+    E.prefix_state = 0;
+  return 1;
 }
 
 static void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
