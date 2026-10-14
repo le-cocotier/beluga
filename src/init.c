@@ -168,9 +168,16 @@ void initBuiltins(void) {
  * resulting environment.
  */
 static void initConfig(void) {
+  char *lisp_log_path;
 
   E.ctx = lisp_init();
-  E.ctx.p->err_port = fopen("lisp_log.err", "w");
+  // In ~/.beluga, not the directory beluga was started from (where it
+  // used to leave a lisp_log.err behind in every project).
+  lisp_log_path = utilFormat("%s/.beluga/lisp_log.err", os_home_dir());
+  E.ctx.p->err_port = lisp_log_path ? fopen(lisp_log_path, "w") : NULL;
+  gfree(lisp_log_path);
+  if (!E.ctx.p->err_port)
+    E.ctx.p->err_port = tmpfile();
   lisp_lib_load(E.ctx);
   // Init builtins lisp functions
   initBuiltins();
