@@ -49,12 +49,6 @@
 (add-package "theme-dark")
 ;; (add-package "theme-light")
 
-;; Your own modifications, kept out of this file so an update can replace it
-;; without erasing them: ~/.beluga/packages/personal-config/init.lisp,
-;; created once by install.sh and never overwritten. Loaded here — after the
-;; theme so its colors win, before the key bindings below so its map-keys win.
-(add-package "personal-config")
-
 ;; Per-language packages: each registers its own
 ;; (lsp-server "ext" "language-id" "command" "arg1" ...) — which spawns
 ;; that language server the first time a matching file is opened — plus
@@ -337,3 +331,9 @@
     (map-key "w" memory-inspector-export "memory")
     (map-key "CTRL-x" '(editor-set-prefix "user") "memory")))
 
+;; Your own modifications, kept out of this file so an update can replace it
+;; without erasing them: ~/.beluga/packages/personal-config/init.lisp,
+;; created once by install.sh and never overwritten. Loaded last, so its
+;; settings, colors and key bindings win over everything above, and every
+;; function defined in this file is there to bind.
+(add-package "personal-config")

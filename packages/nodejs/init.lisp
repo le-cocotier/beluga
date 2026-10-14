@@ -45,8 +45,8 @@
 ;; ─── Comment toggle ─────────────────────────────────────────────────────────
 ;; Dispatches on the file's extension rather than hardcoding "// ". The
 ;; c/python/rust packages each bind CTRL-d under "no-prefix" with a
-;; single-language toggle, and the first binding registered wins — so with
-;; several loaded, exactly one is reachable. Load this package before those
+;; single-language toggle, and the last binding registered wins — so with
+;; several loaded, exactly one is reachable. Load this package after those
 ;; if you want the extension-aware behavior to be the one that wins.
 
 (define nodejs--comment-styles
