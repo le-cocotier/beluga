@@ -3111,3 +3111,18 @@ Lisp macroRunBuiltin(Lisp args, LispError *e, LispContext ctx) {
   macroRun(times);
   return lisp_null();
 }
+
+/**
+ * @brief Lisp function to repaint the whole screen on the next frame, for
+ * when something else drew over it.
+ * @return lisp_null()
+ * @see editorFreeScreenCache()
+ */
+Lisp editorRedraw(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  // Dropping both caches makes the next frame go out in full.
+  editorFreeScreenCache();
+  return lisp_null();
+}

@@ -97,6 +97,7 @@ void initBuiltins(void) {
   registerBuiltin("macro-start", macroStart);
   registerBuiltin("macro-end", macroEnd);
   registerBuiltin("macro-run", macroRunBuiltin);
+  registerBuiltin("editor-redraw", editorRedraw);
   registerBuiltin("editor-redo", editorRedo);
   registerBuiltin("editor-set-mark", editorSetMark);
   registerBuiltin("editor-kill-region", editorKillRegion);

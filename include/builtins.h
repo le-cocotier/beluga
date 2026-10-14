@@ -229,4 +229,7 @@ Lisp macroStart(Lisp args, LispError *e, LispContext ctx);
 Lisp macroEnd(Lisp args, LispError *e, LispContext ctx);
 Lisp macroRunBuiltin(Lisp args, LispError *e, LispContext ctx);
 
+// Full repaint on the next frame — see screen_diff.c
+Lisp editorRedraw(Lisp args, LispError *e, LispContext ctx);
+
 #endif
