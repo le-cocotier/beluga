@@ -20,6 +20,11 @@
 ;; In the diff/log/commit viewer: arrows, n / p, PAGE-UP/DOWN to move, ENTER
 ;; on a log line shows that commit, q goes back to *git*.
 ;;
+;;   CTRL-x c l  the *packages* list: every package in ~/.beluga/packages,
+;;               bundled / git / local / dev link, loaded or not, and for
+;;               git ones the branch, local changes and ahead/behind.
+;;               ENTER opens *git* on that package, g refresh, q quit.
+;;
 ;; Push, pull and fetch run with process-start, so the editor stays usable
 ;; while they talk to the remote; everything else is local and quick, and
 ;; runs with process-run. Nothing can prompt for a password (the commands
@@ -474,6 +479,109 @@
         (begin (editor-switch-to-buffer git-buffer-id) (git-refresh))
         '())))
 
+;; ─── the *packages* list ────────────────────────────────────────────────────
+;; Every package in ~/.beluga/packages: where it comes from, whether it's
+;; loaded, and for the ones under git their branch, local changes and
+;; commits ahead of / behind their upstream. ENTER opens *git* on the
+;; package's repository (for a --dev link, the beluga checkout itself).
+
+(define git-packages-buffer-id -1)
+(define git--package-dirs (list->vector '()))   ; one directory (or "") per row
+
+(define (git--col s width) (git--pad (string-append s " ") width))
+
+(define (git--in dir . args) (apply process-run (append (list "git" "-C" dir) args)))
+
+(define (git--package-kind name dir attrs)
+  (cond ((string=? name "personal-config") "personal")
+        ((car (cdr attrs)) "dev link")                    ; install.sh --dev
+        ((file-attributes (string-append dir "/.git")) "git")
+        ((file-attributes (string-append dir "/.bundled")) "bundled")
+        (else "local")))
+
+;; "ahead 2, behind 1" from `rev-list --left-right --count @{u}...HEAD`
+;; ("1\t2"), or "" when there's no upstream.
+(define (git--ahead-behind dir)
+  (let ((r (git--in dir "rev-list" "--left-right" "--count" "@{u}...HEAD")))
+    (if (git--ok? r)
+        (let ((counts (string-split (car (git--lines (cdr r))) "\t")))
+          (if (= (length counts) 2)
+              (let ((behind (car counts)) (ahead (car (cdr counts))))
+                (cond ((and (string=? ahead "0") (string=? behind "0")) "up to date")
+                      ((string=? behind "0") (string-append "ahead " ahead))
+                      ((string=? ahead "0") (string-append "behind " behind))
+                      (else (string-append "ahead " ahead ", behind " behind))))
+              ""))
+        "")))
+
+;; Branch, changes and sync for a directory inside a git work tree; #f
+;; when it isn't in one.
+(define (git--package-repo-state dir)
+  (let ((branch (git--in dir "rev-parse" "--abbrev-ref" "HEAD")))
+    (if (git--ok? branch)
+        (let ((changes (git--in dir "status" "--porcelain" "--" ".")))
+          (list (car (git--lines (cdr branch)))
+                (if (and (git--ok? changes) (not (string=? (cdr changes) ""))) "modified" "clean")
+                (git--ahead-behind dir)))
+        #f)))
+
+(define (git--package-row name)
+  (let* ((dir (expand-path (string-append "~/.beluga/packages/" name)))
+         (attrs (file-attributes dir))
+         (kind (git--package-kind name dir attrs))
+         (loaded (if (package-loaded? name) "yes" "no"))
+         (repo (if (member kind (list "git" "dev link")) (git--package-repo-state dir) #f)))
+    (cons (string-append " " (git--col name 20) (git--col kind 10) (git--col loaded 8)
+                         (if repo
+                             (string-append (git--col (car repo) 16) (git--col (car (cdr repo)) 10)
+                                            (car (cdr (cdr repo))))
+                             ""))
+          (if repo dir ""))))
+
+(define (git--package-names)
+  (sort (map1 car (filter (lambda (entry) (cdr entry))
+                          (list-directory (expand-path "~/.beluga/packages"))))
+        string<?))
+
+(define (git--packages-render)
+  (let ((rows (map1 git--package-row (git--package-names))))
+    (begin
+      (set! git--package-dirs (list->vector (append (list "" "") (map1 cdr rows))))
+      (editor-scratch-set-lines
+       git-packages-buffer-id
+       (append (list (string-append " " (git--col "Package" 20) (git--col "Kind" 10) (git--col "Loaded" 8)
+                                    (git--col "Branch" 16) (git--col "Changes" 10) "Upstream")
+                     "")
+               (map1 car rows)
+               (list "" " ENTER git status   g refresh   q quit"))))))
+
+(define (git-packages)
+  (begin
+    (if (< git-packages-buffer-id 0)
+        (begin
+          (set! git-packages-buffer-id (editor-scratch-open "*packages*"))
+          (editor-scratch-set-prefix git-packages-buffer-id "packages"))
+        '())
+    (editor-switch-to-buffer git-packages-buffer-id)
+    (editor-message "Reading packages…")
+    (git--packages-render)
+    (editor-goto-line 2 0)
+    (editor-message "")))
+
+(define (git-packages-refresh)
+  (let ((row (cursor-row)))
+    (begin (git--packages-render) (editor-goto-line row 0))))
+
+(define (git-packages-open)
+  (let ((row (cursor-row)))
+    (if (and (< row (vector-length git--package-dirs))
+             (not (string=? (vector-ref git--package-dirs row) "")))
+        (git-status-dir (vector-ref git--package-dirs row))
+        (editor-message "Not under git: nothing to show"))))
+
+(define (git-packages-quit)
+  (if (>= git-packages-buffer-id 0) (editor-kill-buffer git-packages-buffer-id) '()))
+
 ;; ─── misc ───────────────────────────────────────────────────────────────────
 
 (define (git-open-at-point)
@@ -494,6 +602,7 @@
           (lambda (name id)
             (cond ((= id git-buffer-id) (set! git-buffer-id -1))
                   ((= id git-view-buffer-id) (set! git-view-buffer-id -1))
+                  ((= id git-packages-buffer-id) (set! git-packages-buffer-id -1))
                   (else '()))))
 
 ;; ─── keys ───────────────────────────────────────────────────────────────────
@@ -539,3 +648,15 @@
 (map-key "q" git-view-quit "git-view")
 (map-key "CTRL-x" '(editor-set-prefix "user") "git-view")
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "git-view")
+
+(map-key "l" git-packages "config")   ; CTRL-x c l
+(add-prefix "packages" #t)
+(map-key "n" '(move-cursor "down") "packages")
+(map-key "p" '(move-cursor "up") "packages")
+(map-key "ARROW-DOWN" '(move-cursor "down") "packages")
+(map-key "ARROW-UP" '(move-cursor "up") "packages")
+(map-key "ENTER" git-packages-open "packages")
+(map-key "g" git-packages-refresh "packages")
+(map-key "q" git-packages-quit "packages")
+(map-key "CTRL-x" '(editor-set-prefix "user") "packages")
+(map-key "ESCAPE" '(editor-set-prefix "no-prefix") "packages")

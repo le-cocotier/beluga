@@ -245,8 +245,9 @@ install_package() {
     elif [ -d "$dest/.git" ]; then
         backup_package "$dest" "$name" "was a git clone (now bundled)"
     elif [ -d "$dest" ]; then
-        if diff -rq -x lisp_log.err -x .DS_Store "$src" "$dest" >/dev/null 2>&1; then
+        if diff -rq -x lisp_log.err -x .DS_Store -x .bundled "$src" "$dest" >/dev/null 2>&1; then
             if [ "$DEV_MODE" -eq 0 ]; then
+                : > "$dest/.bundled"   # an install from before the marker
                 return 0
             fi
             rm -rf "$dest"   # identical to the bundled copy: nothing to keep
@@ -262,6 +263,9 @@ install_package() {
         echo "  $name -> $src"
     else
         cp -R "$src" "$dest"
+        # Marks it as beluga's own (the *packages* list shows it as
+        # "bundled"); a --dev link is recognised as a link instead.
+        : > "$dest/.bundled"
         echo "  $name"
     fi
 }

@@ -75,9 +75,6 @@ is actually left to do.
   loaded. `personal-config` loads before the helper functions defined further
   down the default config (`enter-and-tab`, `editor-buffer-picker`, …), so it
   can't bind them today.
-- [ ] **[feature]** A `*packages*` buffer listing every package (bundled /
-  git / local, loaded?, branch, dirty, ahead/behind), opening the `*git*`
-  view (`git-status-dir`) on a package's repository.
 - [ ] **[feature]** git package: multi-line commit messages (today's prompt
   is one line), hunk-level staging, colored diffs (the highlighter is
   keyword-based and can't color `+`/`-` lines yet).
