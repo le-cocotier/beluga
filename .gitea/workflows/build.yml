@@ -17,7 +17,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build gcc python3
+          sudo apt-get install -y meson ninja-build gcc python3 python3-pyte less vim-tiny
 
       - name: Configure Meson
         run: meson setup build
@@ -46,7 +46,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build gcc python3
+          sudo apt-get install -y meson ninja-build gcc python3 python3-pyte less vim-tiny
 
       # AddressSanitizer (with LeakSanitizer) and UBSan. meson test sets
       # halt_on_error, so any report fails the unit tests or the smoke test.

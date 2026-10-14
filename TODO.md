@@ -12,12 +12,7 @@ incomplete · **[feature]** new capability.
 
 ## From the code
 
-These are the `TODO:` comments that were in the sources, restated with what
-is actually left to do.
-
-- [ ] **[feature]** Tab path completion in prompts — `src/input.c`, `fileCompletion()` / `editorPrompt()` *(was "TODO: upgrade this")*
-  - TAB completes the common prefix and a repeated TAB cycles through the
-    matches. What's left: showing the list of matches while cycling.
+Nothing open right now.
 
 ---
 
@@ -33,15 +28,22 @@ is actually left to do.
     straight from the fd), so a key can't be lost between ticks. Likely
     macOS-specific; next step is a repro there (which shell, which
     terminal app, what was typed).
-- [ ] **[feature]** Full-screen programs in the terminal buffer
-  (`src/ansi_parser.c`): `htop`, `vim` and `less` need scroll regions
-  (`ESC[r`), the alternate screen (`ESC[?1049h`), insert/delete line
-  (`ESC[L` / `ESC[M`) and 256-color/truecolor SGR (`38;5;n`, `38;2;r;g;b`).
-  The parser's cursor also counts characters, not columns, so a shell
-  positioning the cursor on a line with wide characters lands off by one
-  per wide character (file buffers are column-aware).
-  Today DEC private sequences are recognised and skipped, and other unknown
-  final bytes are ignored.
+  - `tools/pty_tests.py` (`meson test`, the `pty` test) now types into a
+    terminal pane in one burst and 2 ms apart, so the Linux case is
+    checked on every run.
+- [ ] **[feature]** `ESCAPE` in a terminal pane always goes back to the
+  editor (`config/init.lisp`, the `term` prefix), so it never reaches a
+  program: in vim, only CTRL-c leaves insert mode (CTRL-[ is the same
+  byte as `ESCAPE`, so the pane takes it too). Options:
+  send `ESCAPE` to the program while it's on the alternate screen (vim,
+  less, htop) and use another key to leave the pane there, or a double
+  `ESCAPE`. A choice for the keymap, not a parser problem.
+- [ ] **[feature]** The terminal parser doesn't wrap: it doesn't know the
+  pane's width, so a line longer than the pane stays one row and is cut at
+  the pane's edge (`src/ansi_parser.c`, `putChar()`). Wrapping needs the
+  width in `TermParserState` (set where `pane_height` is) and xterm's
+  pending-wrap rule (the cursor stays on the last column until the next
+  character).
 
 ---
 
@@ -53,6 +55,4 @@ Nothing open right now.
 
 ## Tooling and housekeeping
 
-- [ ] **[debt]** Commit the pty regression harness (pyte, openpty sized
-  before fork, SIGALRM watchdog) as a `meson test` target. For now it only
-  exists as throwaway scripts, and `test/` is gitignored.
+Nothing open right now.

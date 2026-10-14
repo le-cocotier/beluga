@@ -10,3 +10,4 @@ beluga.wiki
 .DS_Store
 *.log
 *.err
+__pycache__/

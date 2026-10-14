@@ -154,14 +154,20 @@ foreach t : ['utf8', 'buffer', 'ansi_parser', 'os', 'completion']
     link_args : link_args))
 endforeach
 
-# Headless smoke test (POSIX): open a file in a pseudo-terminal, type,
-# save, quit. Under a sanitizer build it fails on any report, leaks
-# included.
+# Headless tests (POSIX), beluga in a pseudo-terminal. The smoke test opens
+# a file, types, saves and quits; under a sanitizer build it fails on any
+# report, leaks included.
 python3 = find_program('python3', required : false)
 if python3.found() and not is_windows
   test('smoke', python3,
     args : [files('tools/smoke_test.py'), beluga_exe, meson.current_source_dir()],
     timeout : 60)
+  # What's on screen, through pyte (tools/pty_harness.py): TAB completion,
+  # and full-screen programs (less, vim) in a terminal pane. Skipped
+  # without pyte (python3-pyte).
+  test('pty', python3,
+    args : [files('tools/pty_tests.py'), beluga_exe, meson.current_source_dir()],
+    timeout : 300)
 endif
 
 # Fuzz targets (test/fuzz/). By default each is built with a small main()
