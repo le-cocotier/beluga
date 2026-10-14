@@ -797,6 +797,58 @@ struct buffer_t *bufferFindById(int buff_id) {
 }
 
 /**
+ * @brief Points a file buffer at `path`: sets its filename (the last part),
+ * fullname (the resolved absolute path) and path (the directory).
+ * @details "~/" is expanded to the home directory ("~" is only $HOME to a
+ * shell; to realpath()/fopen() it's a plain directory name), separators
+ * become '/', and a path that doesn't exist yet is kept as given. Used when
+ * a file is opened and by Save-as.
+ * @return 0, or -1 when out of memory (the buffer is left unchanged).
+ */
+int bufferSetPath(struct buffer_t *buf, const char *path) {
+  char expanded[PATH_MAX + 1];
+  char fullname[PATH_MAX + 1];
+  char directory[PATH_MAX + 1];
+  const char *home = os_home_dir();
+  const char *name;
+  char *real;
+  Utf8Char *new_filename;
+  Utf8Char *new_fullname;
+  Utf8Char *new_path;
+
+  if (path[0] == '~' && (path[1] == '/' || path[1] == '\0'))
+    snprintf(expanded, sizeof(expanded), "%s%s", home, path + 1);
+  else
+    snprintf(expanded, sizeof(expanded), "%s", path);
+  os_path_to_slashes(expanded); // "src\\main.c" given the Windows way
+
+  real = os_realpath(expanded);
+  // File doesn't exist yet, or path invalid — fall back to the raw path
+  snprintf(fullname, sizeof(fullname), "%s", real ? real : expanded);
+  gfree(real);
+  utilDirname(fullname, directory, sizeof(directory));
+  name = strrchr(expanded, '/');
+  name = name ? name + 1 : expanded;
+
+  new_filename = stringToUtf8((unsigned char *)name);
+  new_fullname = stringToUtf8((unsigned char *)fullname);
+  new_path = stringToUtf8((unsigned char *)directory);
+  if (!new_filename || !new_fullname || !new_path) {
+    gfree(new_filename);
+    gfree(new_fullname);
+    gfree(new_path);
+    return -1;
+  }
+  gfree(buf->filename);
+  gfree(buf->fullname);
+  gfree(buf->path);
+  buf->filename = new_filename;
+  buf->fullname = new_fullname;
+  buf->path = new_path;
+  return 0;
+}
+
+/**
  * @brief Creates a new buffer for a file or terminal
  * @details Allocates buffer slot, loads file content (file buffers only),
  * saves buffer metadata. If a file buffer for this path is already open,
@@ -816,11 +868,6 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   unsigned char temp_filename[5] = "term";
   int existing_id;
   struct buffer_t *new_buf;
-  char fullname[PATH_MAX + 1];
-  char expanded[PATH_MAX + 1];
-  char directory[PATH_MAX + 1];
-  char *real;
-  const char *home;
   char *path_str;
   char *fullname_str;
   Lisp hook_args;
@@ -906,27 +953,8 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
 
   if (type == FILE_BUFF) {
     path_str = (char *)utf8ToString(path);
-
-    // "~" is only $HOME to a shell — to realpath()/fopen() it's a plain
-    // directory name, so "~/.beluga/..." from a keybind or typed at the
-    // open-file prompt used to become a new empty buffer for a file
-    // under ./~/ instead of opening the real one.
-    home = os_home_dir();
-    if (path_str[0] == '~' && (path_str[1] == '/' || path_str[1] == '\0'))
-      snprintf(expanded, sizeof(expanded), "%s%s", home, path_str + 1);
-    else
-      snprintf(expanded, sizeof(expanded), "%s", path_str);
+    bufferSetPath(new_buf, path_str);
     gfree(path_str);
-    os_path_to_slashes(expanded); // "src\\main.c" given the Windows way
-
-    real = os_realpath(expanded);
-    // File doesn't exist yet, or path invalid — fall back to the raw path
-    snprintf(fullname, sizeof(fullname), "%s", real ? real : expanded);
-    gfree(real);
-
-    new_buf->fullname = stringToUtf8((unsigned char *)fullname);
-    utilDirname(fullname, directory, sizeof(directory));
-    new_buf->path = stringToUtf8((unsigned char *)directory);
 
     // bufferMaybeStartLsp() checks itself whether a server is
     // registered for this extension — no need to gate the call here too.

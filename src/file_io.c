@@ -332,23 +332,46 @@ void editorSave() {
   int in_place;
   int ok;
   int buffer_id;
+  Utf8Char *answer;
+  char *answer_str;
 
   // EXPLORER_BUFF has no real fullname (NULL) — it's generated content,
-  // not a file, so there's nothing sensible to write.
-  if (buffer->type == EXPLORER_BUFF) {
+  // not a file, so there's nothing sensible to write. A terminal's
+  // fullname is the placeholder "term", not a file either.
+  if (buffer->type != FILE_BUFF) {
     editorSetStatusMessage("Not a file — nothing to save");
     return;
   }
 
-  if (buffer->filename == NULL) {
+  if (buffer->filename == NULL || buffer->fullname == NULL) {
     // NULL, not "": the parameter is a Utf8Char* (a 5-byte struct array),
     // so a 1-byte "" literal makes editorPrompt's "%u" read past the end of
     // the object. NULL is how it already spells "no placeholder".
-    buffer->filename = editorPrompt("Save as: %u (ESC to cancel)", NULL, 1);
-    if (buffer->filename == NULL) {
+    answer = editorPrompt("Save as: %u (ESC to cancel)", NULL, 1);
+    answer_str = answer ? (char *)utf8ToString(answer) : NULL;
+    gfree(answer);
+    if (answer_str == NULL || answer_str[0] == '\0') {
+      gfree(answer_str);
       editorSetStatusMessage("Save aborted");
       return;
     }
+    // The write goes to fullname: set it (and the directory) from the
+    // answer, not just the name shown on the status bar.
+    if (bufferSetPath(buffer, answer_str) != 0) {
+      gfree(answer_str);
+      editorSetStatusMessage("Can't save: out of memory");
+      return;
+    }
+    gfree(answer_str);
+    // A new target: nothing on disk to compare against yet, except a file
+    // that is already there, which Save-as must not silently replace.
+    fileRememberDiskState(buffer);
+    if (buffer->disk_known &&
+        !askYesNo("%s already exists. Overwrite it? (y/n): %%u", buffer)) {
+      editorSetStatusMessage("Save cancelled");
+      return;
+    }
+    buffer->disk_known = 0;
   }
   if ((fileChangedOnDisk(buffer) || buffer->disk_conflict) &&
       !askYesNo("%s changed on disk since it was opened. Overwrite it? (y/n): %%u",

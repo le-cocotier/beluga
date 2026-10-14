@@ -16,6 +16,8 @@
  * @return Buffer ID on success, -1 on failure
  */
 int bufferCreate(const Utf8Char* path, enum bufferStatus_e state, enum buffer_type type);
+// Points a file buffer at `path` (filename, fullname, directory); 0 or -1.
+int bufferSetPath(struct buffer_t *buf, const char *path);
 /**
  * @brief Switches to a specific buffer by ID
  * @param buff_id The buffer ID to switch to

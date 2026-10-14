@@ -6,6 +6,10 @@
 #include "test.h"
 #include "../include/buffer.h"
 #include "../include/galloc.h"
+#include "../include/os.h"
+#include "../include/utf8.h"
+
+#include <stdio.h>
 
 // Checks the buffer holds `expected`.
 #define CHECK_TEXT(buf, expected)                                              \
@@ -104,6 +108,27 @@ static void testReadOnly(void) {
   bufferFree(buf);
 }
 
+// Save-as goes through bufferSetPath(): the name, the full path the write
+// goes to, and the directory all follow the answer.
+static void testSetPath(void) {
+  Buffer *buf = testBufferFromText("text");
+  char expected[1024];
+  char *s;
+  snprintf(expected, sizeof(expected), "%s/beluga-no-such-dir/new.c", os_home_dir());
+  CHECK_INT(bufferSetPath(buf, "~/beluga-no-such-dir/new.c"), 0);
+  s = (char *)utf8ToString(buf->filename);
+  CHECK_STR(s, "new.c");
+  gfree(s);
+  s = (char *)utf8ToString(buf->fullname);
+  CHECK_STR(s, expected);
+  gfree(s);
+  snprintf(expected, sizeof(expected), "%s/beluga-no-such-dir", os_home_dir());
+  s = (char *)utf8ToString(buf->path);
+  CHECK_STR(s, expected);
+  gfree(s);
+  bufferFree(buf);
+}
+
 int main(void) {
   testInit();
   testReplaceOnOneLine();
@@ -114,5 +139,6 @@ int main(void) {
   testUndoRedo();
   testFormatterEdits();
   testReadOnly();
+  testSetPath();
   return testDone();
 }

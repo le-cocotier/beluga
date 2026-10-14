@@ -19,11 +19,6 @@ is actually left to do.
   - TAB completes the common prefix and a repeated TAB cycles through the
     matches. What's left: showing the list of matches while cycling.
 
-- [ ] **[bug]** Save-as — `src/file_io.c`, `editorSave()`: the prompt fills
-  in `buffer->filename` while the write uses `buffer->fullname`. No buffer
-  seems to reach it without a file today; check, and set `fullname` from
-  the prompt if one can.
-
 ---
 
 ## Known bugs (not marked in the code)
