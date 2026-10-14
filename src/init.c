@@ -412,6 +412,9 @@ void initEditor() {
   E.prefix_state = 0;
   E.prompt_input = NULL;
   E.prompt_is_command = 0;
+  E.prompt_matches = NULL;
+  E.prompt_match_count = 0;
+  E.prompt_match_selected = -1;
   E.exit_requested = 0;
 
   // Fallback theme (the old hardcoded "dark" palette), live before

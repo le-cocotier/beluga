@@ -312,9 +312,11 @@ static int abAppendPadded(struct abuf *ab, const char *s, const int width, const
 /**
  * @brief Draw `count` "label" strings as a multi-column grid filling the
  * bottom of the pane area, plus a title line.
+ * @param selected an entry to highlight, or -1. When the list is longer
+ * than the panel, the page holding it is shown.
  */
 static void drawPanel(struct abuf *ab, const char *title,
-                      char **entries, const int count) {
+                      char **entries, const int count, const int selected) {
     int longest;
     int i;
     int len;
@@ -331,6 +333,7 @@ static void drawPanel(struct abuf *ab, const char *title,
     int used;
     int idx;
     int budget;
+    int first;
     if (count <= 0)
         return;
 
@@ -368,6 +371,7 @@ static void drawPanel(struct abuf *ab, const char *title,
     shown = rows * cols;
     if (shown > count)
         shown = count;
+    first = selected > 0 ? selected / shown * shown : 0;
 
     // A thin accent-colored rule, so the panel reads as a distinct surface
     // dropped over the editor rather than text that happens to appear at
@@ -379,8 +383,9 @@ static void drawPanel(struct abuf *ab, const char *title,
 
     ab_move(ab, top + 1, 1);
     ab_sgr(ab, style.title);
-    if (truncated && shown < count)
-        snprintf(header, sizeof(header), " %s  (+%d more)", title, count - shown);
+    if (truncated && first + shown < count)
+        snprintf(header, sizeof(header), " %s  (+%d more)", title,
+                 count - first - shown);
     else
         snprintf(header, sizeof(header), " %s", title);
     abAppendPadded(ab, header, E.screencols, E.screencols);
@@ -392,13 +397,19 @@ static void drawPanel(struct abuf *ab, const char *title,
         used = 0;
         for (c = 0; c < cols; c++) {
             // Column-major so the list reads top-to-bottom, like Emacs'.
-            idx = c * rows + r;
+            idx = first + c * rows + r;
             if (idx >= count)
                 break;
             budget = E.screencols - used;
             if (budget <= 0)
                 break;
+            if (idx == selected)
+                ab_sgr(ab, style.row_sel);
             used += abAppendPadded(ab, entries[idx], col_w, budget);
+            if (idx == selected) {
+                AB_RESET(ab);
+                ab_sgr(ab, style.row);
+            }
         }
         for (; used < E.screencols; used++)
             abAppend(ab, " ", 1);
@@ -438,7 +449,7 @@ static void drawCommandHelp(struct abuf *ab) {
              typed_len ? " matching " : "", typed_len ? typed : "");
 
     if (n > 0)
-        drawPanel(ab, title, matches, n);
+        drawPanel(ab, title, matches, n, -1);
 
     gfree(matches);
     gfree(typed);
@@ -496,7 +507,7 @@ static void drawPrefixHelp(struct abuf *ab) {
     if (n > 0) {
         snprintf(title, sizeof(title), " %s — %d key%s (CTRL-g to cancel)",
                  E.prefix[E.prefix_state].prefix_name, n, n == 1 ? "" : "s");
-        drawPanel(ab, title, entries, n);
+        drawPanel(ab, title, entries, n, -1);
     }
 
     gfree(entries);
@@ -509,6 +520,20 @@ void whichKeyDraw(struct abuf *ab) {
     static int last_prefix = 0;
     static long pending_since = 0;
     long now;
+    char title[128];
+    // TAB completion in a prompt with several matches: they're the answer
+    // to "what can I type?", shown whatever the which-key setting.
+    if (E.prompt_matches && E.prompt_match_count > 1) {
+        if (E.prompt_match_selected >= 0)
+            snprintf(title, sizeof(title), " %d/%d matches (TAB for the next)",
+                     E.prompt_match_selected + 1, E.prompt_match_count);
+        else
+            snprintf(title, sizeof(title), " %d matches (TAB to cycle)",
+                     E.prompt_match_count);
+        drawPanel(ab, title, E.prompt_matches, E.prompt_match_count,
+                  E.prompt_match_selected);
+        return;
+    }
     if (!E.constantes.WHICH_KEY)
         return;
 
@@ -519,7 +544,10 @@ void whichKeyDraw(struct abuf *ab) {
         return;
     }
 
-    if (E.prefix_state == 0)
+    // A prompt opened by a chord (CTRL-x f) runs with the prefix still
+    // set: the keys under it are no help for what to type, and would
+    // cover the prompt's own panel.
+    if (E.prefix_state == 0 || E.prompt_input)
         return;
 
     // A terminal pane parks prefix_state on "term" for as long as it's

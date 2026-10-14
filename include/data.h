@@ -721,6 +721,12 @@ typedef struct editor_config_t
     // commands rather than file paths or free text.
     Utf8Char* prompt_input;
     int prompt_is_command;
+    // TAB completion's matches in a path prompt, shown in the help panel
+    // while TAB is being pressed (borrowed from editorPrompt(), NULL
+    // otherwise), and the one the prompt holds (-1: their common prefix).
+    char** prompt_matches;
+    int prompt_match_count;
+    int prompt_match_selected;
 
     int exit_requested;
 

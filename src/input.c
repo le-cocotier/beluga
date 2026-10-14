@@ -177,6 +177,16 @@ static int setPromptPath(Utf8Char *buf, const char *dir, const char *name,
 }
 
 /**
+ * @brief Shows TAB completion's matches in the help panel (see
+ * whichKeyDraw()), or hides them when `fc` is NULL.
+ */
+static void showMatches(const FileCompletion *fc, const int selected) {
+  E.prompt_matches = fc ? fc->names : NULL;
+  E.prompt_match_count = fc ? fc->count : 0;
+  E.prompt_match_selected = fc ? selected : -1;
+}
+
+/**
  * @brief Displays an interactive prompt and returns user input
  * @details Allows the user to enter text in a prompt with optional path
  * completion via Tab key. Supports backspace, delete, and escape key handling.
@@ -237,6 +247,7 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
       editorSetStatusMessage("Aborted");
       gfree(c);
       fileCompletionFree(&fc);
+      showMatches(NULL, -1);
       E.prompt_input = NULL;
       return NULL;
     } else if (*c->character == '\r') {
@@ -244,6 +255,7 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
         editorSetStatusMessage("");
         gfree(c);
         fileCompletionFree(&fc);
+        showMatches(NULL, -1);
         E.prompt_input = NULL;
         return buf;
       }
@@ -284,7 +296,15 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
       memcpy((buf + buf_len)->character, c->character, c->length);
       buf_len++;
     }
-    last_was_tab = bPathMode && *c->character == '\t';
+    // A 0 character is editorReadKey()'s "no key came in time": it
+    // mustn't end a run of TABs, or a second TAB pressed after a pause
+    // completed again instead of cycling.
+    if (*c->character) {
+      last_was_tab = bPathMode && *c->character == '\t';
+      // The list stays up while TAB is pressed; any other key edits the
+      // path, which makes it stale.
+      showMatches(last_was_tab ? &fc : NULL, cycle);
+    }
     gfree(c);
   }
 }
