@@ -83,8 +83,8 @@ is actually left to do.
   `init.lisp` or a package, is reported with its file and line (status bar
   plus a `*config-errors*` buffer); the rest of the file still loads
   (`src/config_load.c`).
-- [ ] **[feature]** An `after-init` hook, fired once all of `init.lisp` has
-  loaded. `personal-config` loads before the helper functions defined further
+- [x] **[feature]** An `after-init` hook, fired once all of `init.lisp` has
+  loaded (and the files named on the command line are open). `personal-config` loads before the helper functions defined further
   down the default config (`enter-and-tab`, `editor-buffer-picker`, …), so it
   can't bind them today.
 - [x] ~~`install.sh --update`~~: bundled packages now live in `packages/` and

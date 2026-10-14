@@ -96,6 +96,8 @@
 ;;   "after-save"    (filename)           - buffer was just written
 ;;   "lsp-ready"     ()                   - LSP handshake completed
 ;;   "buffer-killed" (name buffer-id)     - a buffer was killed (CTRL-x k)
+;;   "after-init"    ()                   - all of the config has loaded and
+;;                                          the startup files are open
 ;;
 ;; Example: log every save to the status bar.
 ;; (add-hook "after-save" (lambda (filename) (editor-set-prefix "no-prefix")))
