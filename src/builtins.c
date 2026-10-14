@@ -1150,6 +1150,8 @@ Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
   const char *home;
   char *package_dir;
   FILE *fd_package;
+  Lisp code;
+  LispError package_error = LISP_ERROR_NONE;
   appDebug("%s\n", package_name);
   if (packageAlreadyLoaded(package_name))
     return lisp_null();
@@ -1161,6 +1163,11 @@ Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
 
   fd_package = fopen(package_dir, "r");
   if (!fd_package) {
+    // personal-config is optional: having none isn't worth a message.
+    if (strcmp(package_name, "personal-config") != 0)
+      editorSetStatusMessage("add-package: \"%s\" isn't installed (no %s)",
+                             package_name, package_dir);
+    appDebug("[PACKAGE] %s: can't open %s\n", package_name, package_dir);
     gfree(package_dir);
     return lisp_null();
   }
@@ -1173,8 +1180,17 @@ Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
     s_loaded_package_count++;
   }
 
-  lisp_eval(lisp_read_file(fd_package, &E.ctx_error, E.ctx), &E.ctx_error,
-            E.ctx);
+  // A local error, so a broken package is reported and init.lisp carries on
+  // with the next form.
+  code = lisp_read_file(fd_package, &package_error, E.ctx);
+  if (package_error == LISP_ERROR_NONE)
+    lisp_eval(code, &package_error, E.ctx);
+  if (package_error != LISP_ERROR_NONE) {
+    editorSetStatusMessage("add-package: error in \"%s\": %s", package_name,
+                           lisp_error_string(package_error));
+    appDebug("[PACKAGE] %s: %s\n", package_name,
+             lisp_error_string(package_error));
+  }
   fclose(fd_package);
   gfree(package_dir);
 
