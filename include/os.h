@@ -25,6 +25,7 @@
 #define BELUGA_OS_H_
 
 #include <stddef.h>
+#include <stdio.h> // FILE, for os_file_flush()
 
 // Big enough for any path the editor handles (buffers sized by it).
 #define OS_PATH_MAX 4096
@@ -286,6 +287,20 @@ int os_delete_tree(const char *path, char *err, size_t err_size);
 int os_move(const char *const *sources, int count, const char *dest, char *err, size_t err_size);
 int os_copy_tree(const char *const *sources, int count, const char *dest, char *err, size_t err_size);
 int os_mkdirs(const char *path, char *err, size_t err_size);
+
+/**
+ * Saving a file safely: write the new content to a temporary file next to
+ * it, os_file_flush() it, then os_replace_file() it over the original.
+ *  - flush: fflush plus fsync (Windows: _commit), so the data is on disk
+ *    before the rename makes it visible. 0 or -1.
+ *  - replace: gives `tmp` the permissions of `dest` when `dest` exists,
+ *    then renames `tmp` to `dest` in one step, so a crash or a full disk
+ *    leaves either the old file or the new one, never half of it. 0, or -1
+ *    with a one-line reason in `err` (`tmp` is left for the caller to
+ *    remove).
+ */
+int os_file_flush(FILE *f);
+int os_replace_file(const char *tmp, const char *dest, char *err, size_t err_size);
 
 /***********************************************************************************************************************
  *

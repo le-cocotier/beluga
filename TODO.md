@@ -26,18 +26,12 @@ is actually left to do.
   - Only the first match is used: no common-prefix completion, no cycling
     through candidates on repeated TAB, no listing of the matches.
 
-- [ ] **[bug]** Saving — `src/file_io.c`, `editorSave()` *(was "TODO: utf8")*
-  - The UTF-8 part is done: rows go through `utf8ToString()`. What's left:
-  - When `fopen()` fails, it still shows **"File saved"**. There's no error
-    message, `string_path` leaks, and the buffer stays dirty.
-  - The write isn't atomic. A crash or full disk halfway through leaves a
-    truncated file. Write to `<file>.tmp`, `fsync`, then `rename()`.
-  - The `fwrite("\n")` result is unchecked.
-  - The Save-as prompt fills in `buffer->filename`, but the write uses
-    `buffer->fullname`. Check that a buffer without a file can reach this
-    path, and set `fullname` from the prompt if so.
-  - The file's original permissions aren't kept (`fopen` recreates it
-    as 0644 minus the umask).
+- [x] ~~Saving~~ — `src/file_io.c`, `editorSave()`: a failed open or write
+  is reported and leaves the buffer modified; the file is written to a
+  temporary file, flushed to disk and renamed over the original
+  (`os_replace_file()`), keeping its permissions. Still open: the Save-as
+  prompt fills in `buffer->filename` while the write uses
+  `buffer->fullname` (no buffer seems to reach it without a file today).
 
 - [ ] **[debt]** Cursor movement and wide characters — `src/editor_op.c`, `editorMoveCursor()` *(was "TODO: Rebuild for utf8")*
   - Movement already steps one `Utf8Char` at a time, so the rebuild itself

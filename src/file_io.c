@@ -14,6 +14,8 @@
 #include "../include/data.h"
 #include "../include/split_screen.h"
 #include "../include/row_op.h"
+#include "../include/os.h"
+#include "../include/utils.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -242,6 +244,42 @@ void editorOpen(struct buffer_t* buffer) {
 }
 
 /**
+ * @brief Writes every row of `buffer` to `fd`, then flushes it to disk and
+ * closes it.
+ * @return 1, or 0 with the reason in `err`. `fd` is closed either way.
+ */
+static int writeRows(const struct buffer_t* buffer, FILE* fd, char* err,
+                     size_t err_size) {
+  const char* eol = buffer->crlf ? "\r\n" : "\n";
+  const size_t eol_len = strlen(eol);
+  char* line;
+  size_t len;
+  int ok = 1;
+  int i;
+
+  for (i = 0; ok && i < buffer->numrows; ++i) {
+    line = (char*) utf8ToString(buffer->row[i].characters);
+    if (!line) {
+      errno = ENOMEM;
+      ok = 0;
+      break;
+    }
+    len = strlen(line);
+    ok = fwrite(line, 1, len, fd) == len && fwrite(eol, 1, eol_len, fd) == eol_len;
+    gfree(line);
+  }
+  if (ok && os_file_flush(fd) != 0)
+    ok = 0;
+  if (!ok)
+    snprintf(err, err_size, "%s", strerror(errno));
+  if (fclose(fd) != 0 && ok) {
+    snprintf(err, err_size, "%s", strerror(errno));
+    ok = 0;
+  }
+  return ok;
+}
+
+/**
  * @brief Saves the current file to disk
  * @details Prompts for filename if not set, converts all rows to a buffer,
  * writes to disk using open/ftruncate/write, and updates dirty flag.
@@ -252,13 +290,14 @@ void editorOpen(struct buffer_t* buffer) {
  * @see editorRowsToString()
  */
 void editorSave() {
-  // TODO(TODO.md): failed-open reported as saved, non-atomic write
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buffer = bufferFindById(active->buffer_id);
-  char* string_line;
   FILE *fd;
   char *string_path = NULL;
-  int i;
+  char *tmp_path = NULL;
+  char err[256];
+  int in_place;
+  int ok;
 
   // EXPLORER_BUFF has no real fullname (NULL) — it's generated content,
   // not a file, so there's nothing sensible to write.
@@ -281,30 +320,51 @@ void editorSave() {
 
   runHooks("before-save", lisp_cons(lisp_make_string2(string_path, E.ctx), lisp_null(), E.ctx));
 
-  fd = fopen(string_path, "w");
-  if (fd != NULL) {
-    for (i = 0; i < buffer->numrows; ++i)
-    {
-      string_line = (char *)utf8ToString(buffer->row[i].characters);
-      if (fwrite(string_line, 1, strlen(string_line), fd) != strlen(string_line)) {
-        fclose(fd);
-        editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
-        gfree(string_line);
-        gfree(string_path);
-        return;
-      }
-      gfree(string_line);
-      string_line = NULL;
-      if (buffer->crlf)
-        fwrite("\r\n", 1, 2, fd);
-      else
-        fwrite("\n", 1, 1, fd);
-    }
-    buffer->dirty = 0;
-    fclose(fd);
-    runHooks("after-save", lisp_cons(lisp_make_string2(string_path, E.ctx), lisp_null(), E.ctx));
-    bufferRefreshGitInfo(buffer);
+  // Written next to the file, then renamed over it (os_replace_file()): a
+  // crash or a full disk halfway through used to leave a truncated file.
+  tmp_path = utilFormat("%s.beluga-save", string_path);
+  if (!tmp_path) {
+    editorSetStatusMessage("Can't save: out of memory");
     gfree(string_path);
+    return;
   }
+
+  // A directory the user can't create files in (but whose file is
+  // writable) can't take the temporary file: write in place there, as
+  // before, still checking every write.
+  in_place = 0;
+  fd = fopen(tmp_path, "wb");
+  if (fd == NULL) {
+    in_place = 1;
+    fd = fopen(string_path, "wb");
+  }
+  if (fd == NULL) {
+    editorSetStatusMessage("Can't save %s: %s", string_path, strerror(errno));
+    gfree(tmp_path);
+    gfree(string_path);
+    return;
+  }
+
+  ok = writeRows(buffer, fd, err, sizeof(err));
+  if (ok && !in_place &&
+      os_replace_file(tmp_path, string_path, err, sizeof(err)) != 0)
+    ok = 0;
+
+  if (!ok) {
+    // Through the temporary file, the original is untouched. Either way
+    // the buffer stays modified.
+    if (!in_place)
+      remove(tmp_path);
+    editorSetStatusMessage("Can't save %s: %s", string_path, err);
+    gfree(tmp_path);
+    gfree(string_path);
+    return;
+  }
+
+  buffer->dirty = 0;
+  runHooks("after-save", lisp_cons(lisp_make_string2(string_path, E.ctx), lisp_null(), E.ctx));
+  bufferRefreshGitInfo(buffer);
+  gfree(tmp_path);
+  gfree(string_path);
   editorSetStatusMessage("File saved");
 }
