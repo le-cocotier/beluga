@@ -306,6 +306,7 @@ int utf8StringLen(const Utf8Char* character)
  */
 int utf8CreateChar(const unsigned char* string, Utf8Char* new_char)
 {
+    int i;
     // Callers may hand us galloc'd (uninitialized) storage; keep the bytes
     // past `length` deterministic for anything that copies or compares the
     // whole 4-byte array.
@@ -331,8 +332,22 @@ int utf8CreateChar(const unsigned char* string, Utf8Char* new_char)
 
     if (new_char->length > 1 ) // Getting all the remaining bytes of the character
     {
-        memcpy(new_char->character + 1, string + 1, new_char->length - 1);
-
+        // Invalid UTF-8 (a stray continuation byte, or a sequence cut short
+        // — by the string's terminator too): the lead byte stands alone.
+        // Reading the full length regardless ran past the end of the
+        // string, and swallowed the bytes that follow.
+        if (new_char->character[0] < 0xC0)
+            new_char->length = 1;
+        for (i = 1; i < new_char->length; i++)
+        {
+            if ((string[i] & 0xC0) != 0x80)
+            {
+                new_char->length = 1;
+                break;
+            }
+        }
+        if (new_char->length > 1)
+            memcpy(new_char->character + 1, string + 1, new_char->length - 1);
     }
 
     return new_char->length;

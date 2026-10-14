@@ -10,6 +10,11 @@
 #include <string.h>
 #include <stdlib.h>
 
+// The pane's width isn't known here; cursor columns are clamped to this
+// instead, so a stray "move right 100000" can't make huge rows.
+#define TERM_MAX_COLUMNS 1024
+#define TERM_MAX_PARAM 100000
+
 /**
  * @brief Ensure row->attrs is allocated and covers at least row->size elements.
  * Lazy allocation: file buffers never call this, so their rows stay NULL/untouched.
@@ -151,11 +156,16 @@ static void dispatchCsi(struct buffer_t* buf, char final)
         if (ts->cursor_y < ts->screen_top_row) ts->cursor_y = ts->screen_top_row;
         break;
 
-    case 'B': // Cursor Down
+    case 'B': // Cursor Down — clamped at the screen's bottom row, like a
+        // terminal; unclamped, a large count made rows up to it.
+        height = ts->pane_height > 0 ? ts->pane_height : 24;
         ts->cursor_y += (p0 ? p0 : 1);
+        if (ts->cursor_y > ts->screen_top_row + height - 1)
+            ts->cursor_y = ts->screen_top_row + height - 1;
         break;
 
     case 'C': ts->cursor_x += (p0 ? p0 : 1);
+        if (ts->cursor_x > TERM_MAX_COLUMNS - 1) ts->cursor_x = TERM_MAX_COLUMNS - 1;
         break;
     case 'D': ts->cursor_x -= (p0 ? p0 : 1);
         if (ts->cursor_x < 0) ts->cursor_x = 0;
@@ -166,6 +176,11 @@ static void dispatchCsi(struct buffer_t* buf, char final)
         {
             row = ts->nparams > 0 ? ts->params[0] : 1;
             col = ts->nparams > 1 ? ts->params[1] : 1;
+            // Clamped to the screen, as a terminal does: "\x1b[99999;1H"
+            // must not make 99999 rows.
+            height = ts->pane_height > 0 ? ts->pane_height : 24;
+            if (row > height) row = height;
+            if (col > TERM_MAX_COLUMNS) col = TERM_MAX_COLUMNS;
             ts->cursor_y = ts->screen_top_row + (row > 0 ? row - 1 : 0);
             ts->cursor_x = (col > 0 ? col - 1 : 0);
             break;
@@ -337,7 +352,10 @@ void ansiParserFeed(struct buffer_t* buf, const unsigned char* data, size_t len)
             if (byte >= '0' && byte <= '9')
             {
                 if (ts->nparams == 0) ts->nparams = 1;
-                ts->params[ts->nparams - 1] = ts->params[ts->nparams - 1] * 10 + (byte - '0');
+                // Capped: no real sequence needs more, and an endless digit
+                // run would overflow.
+                if (ts->params[ts->nparams - 1] < TERM_MAX_PARAM)
+                    ts->params[ts->nparams - 1] = ts->params[ts->nparams - 1] * 10 + (byte - '0');
             }
             else if (byte == ';')
             {

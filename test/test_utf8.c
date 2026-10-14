@@ -21,6 +21,18 @@ static void testCreateChar(void) {
   CHECK(memcmp(c.character, "\xf0\x9f\x98\x80", 4) == 0);
 }
 
+static void testInvalid(void) {
+  Utf8Char c;
+  // Cut short by the terminator: one byte, never reading past it.
+  CHECK_INT(utf8CreateChar((const unsigned char *)"\xf0\x9f", &c), 1);
+  CHECK_INT(c.length, 1);
+  CHECK_INT(c.character[0], 0xf0);
+  // A lead byte followed by ASCII keeps the ASCII for the next character.
+  CHECK_INT(utf8CreateChar((const unsigned char *)"\xc3" "A", &c), 1);
+  // A stray continuation byte.
+  CHECK_INT(utf8CreateChar((const unsigned char *)"\x80x", &c), 1);
+}
+
 static void testRoundTrip(void) {
   const char *text = "caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80!";
   Utf8Char *u;
@@ -81,6 +93,7 @@ static void testPrintf(void) {
 int main(void) {
   testInit();
   testCreateChar();
+  testInvalid();
   testRoundTrip();
   testCompare();
   testExtension();

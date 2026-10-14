@@ -10,6 +10,7 @@
 #include <string.h>
 
 extern int test_failures;
+extern EditorConfig E; // defined in test.c, as main.c does for the editor
 
 #define CHECK(cond)                                                            \
   do {                                                                         \

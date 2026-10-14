@@ -16,6 +16,10 @@ void lspPoll(LspClient* lsp);
 // ── Message dispatch (internal to completion.c's lspPoll, but exposed
 // in case lsp_ui.c or tests need to feed a message directly) ────────────────
 void lspHandleMessage(LspClient* lsp, const char* json);
+// Feeds bytes read from the server into the client's Content-Length
+// framing, dispatching each complete message (the run loop's reader, and
+// test/fuzz/fuzz_lsp.c).
+void lspFeed(LspClient* lsp, const char* data, size_t len);
 
 // ── Document sync — call these from your buffer open/save/edit hooks ────────
 void lspDidOpen(LspClient* lsp, struct buffer_t* buf);

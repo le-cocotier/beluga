@@ -17,6 +17,11 @@ add_project_arguments('-g', language : 'c')
 # header aren't flagged, so keep to the rule by hand there too.
 add_project_arguments('-Wdeclaration-after-statement', language : 'c')
 
+# Fuzzing builds instrument all the code for libFuzzer's coverage feedback.
+if get_option('fuzzers')
+  add_project_arguments('-fsanitize=fuzzer-no-link', language : 'c')
+endif
+
 # ─── The OS layer ─────────────────────────────────────────────────────────────
 # Everything beluga needs from the operating system is declared in
 # include/os.h and implemented by exactly one of two libraries:
@@ -135,4 +140,26 @@ foreach t : ['utf8', 'buffer', 'ansi_parser']
     link_with : [core_lib, os_lib],
     dependencies : [m],
     link_args : link_args))
+endforeach
+
+# Fuzz targets (test/fuzz/). By default each is built with a small main()
+# that runs it over its seed corpus, as a regression test. With clang and
+# -Dfuzzers=true they're libFuzzer programs instead; see test/fuzz/README.md.
+foreach f : ['ansi_parser', 'lsp']
+  if get_option('fuzzers')
+    executable('fuzz_' + f,
+      files('test/fuzz/fuzz_' + f + '.c', 'test/test.c'),
+      c_args : core_args,
+      link_with : [core_lib, os_lib],
+      dependencies : [m],
+      link_args : ['-fsanitize=fuzzer'])
+  else
+    test('fuzz-corpus-' + f, executable('fuzz_' + f,
+      files('test/fuzz/fuzz_' + f + '.c', 'test/fuzz/run_corpus.c', 'test/test.c'),
+      c_args : core_args,
+      link_with : [core_lib, os_lib],
+      dependencies : [m],
+      link_args : link_args),
+      args : [meson.current_source_dir() / 'test/fuzz/corpus' / f])
+  endif
 endforeach

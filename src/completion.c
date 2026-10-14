@@ -307,7 +307,7 @@ static void (*lsp_pop_pending(LspClient *lsp, const int id))(LspClient*, const c
  * Content-Length/JSON parser. Non-blocking: only acts on complete
  * messages; partial messages persist in recv_buf across calls.
  */
-static void lsp_feed(LspClient *lsp, const char *data, size_t len)
+void lspFeed(LspClient *lsp, const char *data, size_t len)
 {
     // Grow the persistent receive buffer and append
     const size_t needed = lsp->recv_len + len;
@@ -331,6 +331,8 @@ static void lsp_feed(LspClient *lsp, const char *data, size_t len)
         lsp->recv_buf = grown;
         lsp->recv_cap = new_cap;
     }
+    if (len == 0)
+        return;
     memcpy(lsp->recv_buf + lsp->recv_len, data, len);
     lsp->recv_len += len;
 
@@ -350,7 +352,16 @@ static void lsp_feed(LspClient *lsp, const char *data, size_t len)
         if (cl) content_length = atoi(cl + 16);
 
         body_start = header_len + 4;
-        if (content_length <= 0 || lsp->recv_len < (size_t) body_start + (size_t) content_length)
+        if (content_length <= 0)
+        {
+            // No usable Content-Length (missing, 0, or garbage): there is
+            // no body to wait for. Drop the header and carry on, or every
+            // later message would wait behind it forever.
+            memmove(lsp->recv_buf, lsp->recv_buf + body_start, lsp->recv_len - (size_t) body_start);
+            lsp->recv_len -= (size_t) body_start;
+            continue;
+        }
+        if (lsp->recv_len < (size_t) body_start + (size_t) content_length)
             break; // body not fully arrived yet
 
         // Full message available — extract and dispatch
@@ -758,6 +769,22 @@ static int flatTextEditCmpDescending(const void *a, const void *b)
 }
 
 /**
+ * @brief Reads an LSP Position ({"line": n, "character": n}).
+ * @return 0 if either field is missing, not a number, or negative — a
+ * malformed edit from a server is skipped rather than applied somewhere.
+ */
+static int lspReadPosition(const cJSON *pos, int *line, int *col)
+{
+    const cJSON *l = cJSON_GetObjectItem(pos, "line");
+    const cJSON *c = cJSON_GetObjectItem(pos, "character");
+    if (!cJSON_IsNumber(l) || !cJSON_IsNumber(c) || l->valueint < 0 || c->valueint < 0)
+        return 0;
+    *line = l->valueint;
+    *col = c->valueint;
+    return 1;
+}
+
+/**
  * @brief Applies one file's worth of LSP TextEdit[] to the (opened if
  * necessary) buffer for `uri`. Edits are applied from the end of the
  * document backward (descending start position) so applying one never
@@ -795,11 +822,9 @@ static void applyTextEditsToUri(const char *uri, const cJSON *edits_array)
         start = range ? cJSON_GetObjectItem(range, "start") : NULL;
         end = range ? cJSON_GetObjectItem(range, "end") : NULL;
         if (!start || !end || !new_text || !cJSON_IsString(new_text)) continue;
-
-        edits[n].start_line = cJSON_GetObjectItem(start, "line")->valueint;
-        edits[n].start_col = cJSON_GetObjectItem(start, "character")->valueint;
-        edits[n].end_line = cJSON_GetObjectItem(end, "line")->valueint;
-        edits[n].end_col = cJSON_GetObjectItem(end, "character")->valueint;
+        if (!lspReadPosition(start, &edits[n].start_line, &edits[n].start_col) ||
+            !lspReadPosition(end, &edits[n].end_line, &edits[n].end_col))
+            continue;
         edits[n].new_text = utilStrdup(new_text->valuestring);
         n++;
     }
@@ -1109,11 +1134,9 @@ static void lsp_on_formatting_response(LspClient *lsp, const char *result_json)
                 start = range ? cJSON_GetObjectItem(range, "start") : NULL;
                 end = range ? cJSON_GetObjectItem(range, "end") : NULL;
                 if (!start || !end || !new_text || !cJSON_IsString(new_text)) continue;
-
-                edits[n].start_line = cJSON_GetObjectItem(start, "line")->valueint;
-                edits[n].start_col = cJSON_GetObjectItem(start, "character")->valueint;
-                edits[n].end_line = cJSON_GetObjectItem(end, "line")->valueint;
-                edits[n].end_col = cJSON_GetObjectItem(end, "character")->valueint;
+                if (!lspReadPosition(start, &edits[n].start_line, &edits[n].start_col) ||
+                    !lspReadPosition(end, &edits[n].end_line, &edits[n].end_col))
+                    continue;
                 edits[n].new_text = utilStrdup(new_text->valuestring);
                 n++;
             }
@@ -2078,7 +2101,7 @@ void lspPoll(LspClient *lsp)
         return;
 
     while ((n = os_stream_read(os_proc_output(lsp->proc), chunk, sizeof(chunk), 0)) > 0)
-        lsp_feed(lsp, chunk, (size_t) n);
+        lspFeed(lsp, chunk, (size_t) n);
     if (n < 0)
     {
         // Its output has ended: the server exited (or crashed). Release it,
@@ -2158,7 +2181,7 @@ void lspShutdown(LspClient *lsp)
     lsp->state = LSP_SHUTDOWN;
 
     // Only ever reached from lspCleanup() at exit, after the main loop —
-    // never while lsp_feed() is parsing this buffer — so it's safe to free.
+    // never while lspFeed() is parsing this buffer — so it's safe to free.
     gfree(lsp->recv_buf);
     lsp->recv_buf = NULL;
     lsp_free_diag_cache();

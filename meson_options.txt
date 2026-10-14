@@ -1,0 +1,3 @@
+# Build the fuzz targets in test/fuzz/ as libFuzzer programs (needs clang;
+# see test/fuzz/README.md). Off: they run over their corpus as tests.
+option('fuzzers', type : 'boolean', value : false)
