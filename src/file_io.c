@@ -15,7 +15,6 @@
 #include "../include/buffer.h"
 #include "../include/data.h"
 #include "../include/split_screen.h"
-#include "../include/row_op.h"
 #include "../include/completion.h"
 #include "../include/os.h"
 #include "../include/utils.h"
@@ -332,6 +331,7 @@ void editorSave() {
   char err[256];
   int in_place;
   int ok;
+  int buffer_id;
 
   // EXPLORER_BUFF has no real fullname (NULL) — it's generated content,
   // not a file, so there's nothing sensible to write.
@@ -405,11 +405,16 @@ void editorSave() {
   buffer->dirty = 0;
   autosaveDiscard(buffer);
   fileRememberDiskState(buffer);
+  buffer_id = buffer->buffer_id;
+  // Before the hooks, so a message one of them leaves wins.
+  editorSetStatusMessage("File saved");
   runHooks("after-save", lisp_cons(lisp_make_string2(string_path, E.ctx), lisp_null(), E.ctx));
-  bufferRefreshGitInfo(buffer);
+  // A hook may have killed the buffer (git's commit-message buffer does).
+  buffer = bufferFindById(buffer_id);
+  if (buffer)
+    bufferRefreshGitInfo(buffer);
   gfree(tmp_path);
   gfree(string_path);
-  editorSetStatusMessage("File saved");
 }
 
 /***********************************************************************************************************************

@@ -11,14 +11,22 @@
 ;;   u / U              unstage file or section / unstage everything
 ;;   k                  discard changes (asks; deletes an untracked file)
 ;;   =                  diff of the file or section under the cursor
-;;   c                  commit staged changes (asks for the message)
+;;   c                  commit staged changes: the message is edited in a
+;;                      buffer (save to commit, CTRL-x k to cancel)
 ;;   a                  amend the last commit with the staged changes
 ;;   P / F / f          push / pull (fast-forward only) / fetch, in the background
 ;;   l                  log            b / B  switch branch / new branch
 ;;   g                  refresh        q      quit       ?  keys
 ;;
 ;; In the diff/log/commit viewer: arrows, n / p, PAGE-UP/DOWN to move, ENTER
-;; on a log line shows that commit, q goes back to *git*.
+;; on a log line shows that commit, q goes back to *git*. Diffs are colored.
+;; On a diff of unstaged changes, s stages the hunk under the cursor and k
+;; discards it (asks); on a diff of staged changes, u unstages it.
+;;
+;;   CTRL-x c l  the *packages* list: every package in ~/.beluga/packages,
+;;               bundled / git / local / dev link, loaded or not, and for
+;;               git ones the branch, local changes and ahead/behind.
+;;               ENTER opens *git* on that package, g refresh, q quit.
 ;;
 ;; Push, pull and fetch run with process-start, so the editor stays usable
 ;; while they talk to the remote; everything else is local and quick, and
@@ -327,14 +335,63 @@
 
 ;; ─── committing ─────────────────────────────────────────────────────────────
 
+;; c opens .git/COMMIT_EDITMSG in a normal buffer, so the message can have
+;; a body: save it (CTRL-x CTRL-s) to commit, kill it (CTRL-x k) to cancel.
+;; Lines starting with # are dropped, like git's own editor flow. If the
+;; commit fails, for an empty message say, the buffer stays open: fix it
+;; and save again.
+(define git--commit-file "")
+
+(define (git--commit-template)
+  (string-append
+   "\n"
+   "# Write the commit message above: a summary line, a blank line, then\n"
+   "# the body. Save (CTRL-x CTRL-s) to commit, or kill this buffer\n"
+   "# (CTRL-x k) to cancel. Lines starting with # are left out.\n"
+   "#\n"
+   "# Staged:\n"
+   (apply string-append
+          (map1 (lambda (p) (string-append "#   " p "\n")) (git--paths-of "staged")))))
+
 (define (git-commit)
   (if (null? (git--paths-of "staged"))
       (editor-message "Nothing staged — s to stage a file, S for everything")
-      (let ((message (editor-prompt "Commit message: %u" "" #f)))
-        (if message
-            (let ((result (git--run "commit" "-q" "-m" message)))
-              (git--after result (string-append "Committed: " message)))
-            (editor-message "Commit cancelled")))))
+      (let ((gitdir (git--run "rev-parse" "--absolute-git-dir")))
+        (if (git--ok? gitdir)
+            (let ((file (string-append (car (git--lines (cdr gitdir))) "/COMMIT_EDITMSG")))
+              (if (write-file file (git--commit-template))
+                  (begin
+                    (set! git--commit-file file)
+                    (editor-open-file-path file)
+                    (editor-set-prefix "no-prefix")
+                    (editor-message "Commit message: save to commit, CTRL-x k to cancel"))
+                  (editor-message (string-append "Couldn't write " file))))
+            (git--report gitdir "")))))
+
+(define (git--first-message-line lines)
+  (cond ((null? lines) "")
+        ((or (string=? (car lines) "") (git--starts-with? (car lines) "#"))
+         (git--first-message-line (cdr lines)))
+        (else (car lines))))
+
+(add-hook "after-save"
+          (lambda (filename)
+            (if (and (not (string=? git--commit-file ""))
+                     (string=? (expand-path filename) git--commit-file))
+                (let ((result (git--run "commit" "-q" "--cleanup=strip" "-F" git--commit-file)))
+                  (begin
+                    (if (git--ok? result)
+                        (begin
+                          (set! git--commit-file "")
+                          (editor-kill-buffer (current-buffer-id))
+                          (if (>= git-buffer-id 0) (editor-switch-to-buffer git-buffer-id) '())
+                          (git-refresh)
+                          (editor-message
+                           (string-append "Committed: "
+                                          (git--first-message-line
+                                           (git--lines (cdr (git--run "log" "-1" "--format=%B")))))))
+                        (git--report result ""))))
+                '())))
 
 (define (git-amend)
   (if (git--confirm? "Amend the last commit with the staged changes (its message is kept)?")
@@ -398,12 +455,37 @@
 
 ;; ─── viewer: diffs, the log, a commit ───────────────────────────────────────
 
+;; Diffs are colored by whole lines: syntax-add-line-prefix rules on a
+;; "diff" language, which the viewer buffer is set to (buffer-set-syntax).
+;; Longer prefixes first: "+++" must win over "+".
+(syntax-define-language "diff" "" "" "" "")
+(syntax-add-line-prefix "diff" "diff --git" "type")
+(syntax-add-line-prefix "diff" "+++ " "type")
+(syntax-add-line-prefix "diff" "--- " "type")
+(syntax-add-line-prefix "diff" "index " "comment")
+(syntax-add-line-prefix "diff" "commit " "keyword")
+(syntax-add-line-prefix "diff" "@@" "number")
+(syntax-add-line-prefix "diff" "+" "added")
+(syntax-add-line-prefix "diff" "-" "removed")
+
+;; What the viewer shows, so hunks can be staged from it: "unstaged" or
+;; "staged" for a diff of the work tree or the index, "" otherwise; the
+;; git arguments that produced it (to redraw after staging a hunk); and
+;; its lines.
+(define git--view-kind "")
+(define git--view-args '())
+(define git--view-title "")
+(define git--view-lines (list->vector '()))
+
 (define (git--show-lines title lines mode hashes)
   (begin
     (set! git-view-buffer-id (editor-scratch-open "*git-view*"))
     (editor-scratch-set-prefix git-view-buffer-id "git-view")
+    (buffer-set-syntax git-view-buffer-id (if (string=? mode "log") "" "diff"))
     (editor-switch-to-buffer git-view-buffer-id)
     (set! git--view-mode mode)
+    (set! git--view-kind "")
+    (set! git--view-lines (list->vector lines))
     (set! git--view-hashes (list->vector (cons "" (cons "" hashes))))
     (editor-scratch-set-lines git-view-buffer-id
                               (cons (string-append " " title) (cons "" lines)))
@@ -418,19 +500,32 @@
 (define (git-diff)
   (let ((item (git--item)))
     (cond ((string=? (car item) "unstaged")
-           (git--show-output (string-append "Unstaged: " (cdr item)) (git--run "diff" "--" (cdr item))))
+           (git--show-diff (string-append "Unstaged: " (cdr item) "   (s stage hunk, k discard hunk)")
+                           "unstaged" (list "diff" "--" (cdr item))))
           ((string=? (car item) "staged")
-           (git--show-output (string-append "Staged: " (cdr item)) (git--run "diff" "--cached" "--" (cdr item))))
+           (git--show-diff (string-append "Staged: " (cdr item) "   (u unstage hunk)")
+                           "staged" (list "diff" "--cached" "--" (cdr item))))
           ((string=? (car item) "untracked")
            ;; exits 1 when there's a difference, which here is always
            (let ((r (git--run "diff" "--no-index" "--" "/dev/null" (cdr item))))
              (git--show-lines (string-append "Untracked: " (cdr item)) (git--lines (cdr r)) "text" '())))
           ((and (string=? (car item) "section") (string=? (cdr item) "unstaged"))
-           (git--show-output "Unstaged changes" (git--run "diff")))
+           (git--show-diff "Unstaged changes   (s stage hunk, k discard hunk)" "unstaged" (list "diff")))
           ((and (string=? (car item) "section") (string=? (cdr item) "staged"))
-           (git--show-output "Staged changes" (git--run "diff" "--cached")))
+           (git--show-diff "Staged changes   (u unstage hunk)" "staged" (list "diff" "--cached")))
           ((string=? (car item) "commit") (git--show-commit (cdr item)))
           (else (editor-message "Nothing to diff here")))))
+
+(define (git--show-diff title kind args)
+  (let ((result (apply git--run args)))
+    (begin
+      (git--show-output title result)
+      (if (git--ok? result)
+          (begin
+            (set! git--view-kind kind)
+            (set! git--view-args args)
+            (set! git--view-title title))
+          '()))))
 
 (define (git--show-commit hash)
   (git--show-output (string-append "Commit " hash) (git--run "show" "--stat" "--patch" hash)))
@@ -474,6 +569,191 @@
         (begin (editor-switch-to-buffer git-buffer-id) (git-refresh))
         '())))
 
+;; ─── hunks ──────────────────────────────────────────────────────────────────
+;; A hunk is applied on its own by giving `git apply` a patch made of its
+;; file's header (from "diff --git" to the first "@@") and the hunk itself.
+
+(define (git--line i) (vector-ref git--view-lines i))
+
+;; Index of the closest line at or above i that starts with prefix, stopping
+;; (with -1) at a line starting with stop.
+(define (git--find-up i prefix stop)
+  (cond ((< i 0) -1)
+        ((git--starts-with? (git--line i) prefix) i)
+        ((and stop (git--starts-with? (git--line i) stop)) -1)
+        (else (git--find-up (- i 1) prefix stop))))
+
+;; First line after i starting a new hunk or file (or the end).
+(define (git--hunk-end i)
+  (cond ((>= i (vector-length git--view-lines)) i)
+        ((or (git--starts-with? (git--line i) "@@")
+             (git--starts-with? (git--line i) "diff --git"))
+         i)
+        (else (git--hunk-end (+ i 1)))))
+
+(define (git--first-hunk i)
+  (if (or (>= i (vector-length git--view-lines)) (git--starts-with? (git--line i) "@@"))
+      i
+      (git--first-hunk (+ i 1))))
+
+(define (git--join-lines from to acc)
+  (if (>= from to)
+      acc
+      (git--join-lines (+ from 1) to (string-append acc (git--line from) "\n"))))
+
+;; The patch for the hunk under the cursor, or #f.
+(define (git--hunk-patch)
+  (let ((i (- (cursor-row) 2)))            ; the viewer has a title and a blank line
+    (if (or (< i 0) (>= i (vector-length git--view-lines)))
+        #f
+        (let ((start (git--find-up i "@@" "diff --git")))
+          (if (< start 0)
+              #f
+              (let ((file (git--find-up start "diff --git" #f)))
+                (if (< file 0)
+                    #f
+                    (string-append (git--join-lines file (git--first-hunk file) "")
+                                   (git--join-lines start (git--hunk-end (+ start 1)) "")))))))))
+
+(define (git--apply-hunk args done)
+  (let ((patch (git--hunk-patch))
+        (gitdir (git--run "rev-parse" "--absolute-git-dir")))
+    (if (not patch)
+        (editor-message "Not on a hunk: move the cursor into one (below its @@ line)")
+        (let ((file (string-append (car (git--lines (cdr gitdir))) "/beluga-hunk.patch")))
+          (if (write-file file patch)
+              (let ((result (apply git--run (append args (list file)))))
+                (begin
+                  (delete-path file)
+                  (if (git--ok? result)
+                      (let ((row (cursor-row)))
+                        (begin
+                          (git--show-diff git--view-title git--view-kind git--view-args)
+                          (editor-goto-line row 0)
+                          (editor-message done)))
+                      (git--report result ""))))
+              (editor-message (string-append "Couldn't write " file)))))))
+
+(define (git-view-stage-hunk)
+  (if (string=? git--view-kind "unstaged")
+      (git--apply-hunk (list "apply" "--cached") "Staged the hunk")
+      (editor-message "s stages a hunk from an unstaged diff (= on an unstaged file)")))
+
+(define (git-view-unstage-hunk)
+  (if (string=? git--view-kind "staged")
+      (git--apply-hunk (list "apply" "--cached" "-R") "Unstaged the hunk")
+      (editor-message "u unstages a hunk from a staged diff (= on a staged file)")))
+
+(define (git-view-discard-hunk)
+  (cond ((not (string=? git--view-kind "unstaged"))
+         (editor-message "k discards a hunk from an unstaged diff"))
+        ((git--confirm? "Discard this hunk from the work tree?")
+         (git--apply-hunk (list "apply" "-R") "Discarded the hunk"))
+        (else (editor-message "Discard cancelled"))))
+
+;; ─── the *packages* list ────────────────────────────────────────────────────
+;; Every package in ~/.beluga/packages: where it comes from, whether it's
+;; loaded, and for the ones under git their branch, local changes and
+;; commits ahead of / behind their upstream. ENTER opens *git* on the
+;; package's repository (for a --dev link, the beluga checkout itself).
+
+(define git-packages-buffer-id -1)
+(define git--package-dirs (list->vector '()))   ; one directory (or "") per row
+
+(define (git--col s width) (git--pad (string-append s " ") width))
+
+(define (git--in dir . args) (apply process-run (append (list "git" "-C" dir) args)))
+
+(define (git--package-kind name dir attrs)
+  (cond ((string=? name "personal-config") "personal")
+        ((car (cdr attrs)) "dev link")                    ; install.sh --dev
+        ((file-attributes (string-append dir "/.git")) "git")
+        ((file-attributes (string-append dir "/.bundled")) "bundled")
+        (else "local")))
+
+;; "ahead 2, behind 1" from `rev-list --left-right --count @{u}...HEAD`
+;; ("1\t2"), or "" when there's no upstream.
+(define (git--ahead-behind dir)
+  (let ((r (git--in dir "rev-list" "--left-right" "--count" "@{u}...HEAD")))
+    (if (git--ok? r)
+        (let ((counts (string-split (car (git--lines (cdr r))) "\t")))
+          (if (= (length counts) 2)
+              (let ((behind (car counts)) (ahead (car (cdr counts))))
+                (cond ((and (string=? ahead "0") (string=? behind "0")) "up to date")
+                      ((string=? behind "0") (string-append "ahead " ahead))
+                      ((string=? ahead "0") (string-append "behind " behind))
+                      (else (string-append "ahead " ahead ", behind " behind))))
+              ""))
+        "")))
+
+;; Branch, changes and sync for a directory inside a git work tree; #f
+;; when it isn't in one.
+(define (git--package-repo-state dir)
+  (let ((branch (git--in dir "rev-parse" "--abbrev-ref" "HEAD")))
+    (if (git--ok? branch)
+        (let ((changes (git--in dir "status" "--porcelain" "--" ".")))
+          (list (car (git--lines (cdr branch)))
+                (if (and (git--ok? changes) (not (string=? (cdr changes) ""))) "modified" "clean")
+                (git--ahead-behind dir)))
+        #f)))
+
+(define (git--package-row name)
+  (let* ((dir (expand-path (string-append "~/.beluga/packages/" name)))
+         (attrs (file-attributes dir))
+         (kind (git--package-kind name dir attrs))
+         (loaded (if (package-loaded? name) "yes" "no"))
+         (repo (if (member kind (list "git" "dev link")) (git--package-repo-state dir) #f)))
+    (cons (string-append " " (git--col name 20) (git--col kind 10) (git--col loaded 8)
+                         (if repo
+                             (string-append (git--col (car repo) 16) (git--col (car (cdr repo)) 10)
+                                            (car (cdr (cdr repo))))
+                             ""))
+          (if repo dir ""))))
+
+(define (git--package-names)
+  (sort (map1 car (filter (lambda (entry) (cdr entry))
+                          (list-directory (expand-path "~/.beluga/packages"))))
+        string<?))
+
+(define (git--packages-render)
+  (let ((rows (map1 git--package-row (git--package-names))))
+    (begin
+      (set! git--package-dirs (list->vector (append (list "" "") (map1 cdr rows))))
+      (editor-scratch-set-lines
+       git-packages-buffer-id
+       (append (list (string-append " " (git--col "Package" 20) (git--col "Kind" 10) (git--col "Loaded" 8)
+                                    (git--col "Branch" 16) (git--col "Changes" 10) "Upstream")
+                     "")
+               (map1 car rows)
+               (list "" " ENTER git status   g refresh   q quit"))))))
+
+(define (git-packages)
+  (begin
+    (if (< git-packages-buffer-id 0)
+        (begin
+          (set! git-packages-buffer-id (editor-scratch-open "*packages*"))
+          (editor-scratch-set-prefix git-packages-buffer-id "packages"))
+        '())
+    (editor-switch-to-buffer git-packages-buffer-id)
+    (editor-message "Reading packages…")
+    (git--packages-render)
+    (editor-goto-line 2 0)
+    (editor-message "")))
+
+(define (git-packages-refresh)
+  (let ((row (cursor-row)))
+    (begin (git--packages-render) (editor-goto-line row 0))))
+
+(define (git-packages-open)
+  (let ((row (cursor-row)))
+    (if (and (< row (vector-length git--package-dirs))
+             (not (string=? (vector-ref git--package-dirs row) "")))
+        (git-status-dir (vector-ref git--package-dirs row))
+        (editor-message "Not under git: nothing to show"))))
+
+(define (git-packages-quit)
+  (if (>= git-packages-buffer-id 0) (editor-kill-buffer git-packages-buffer-id) '()))
+
 ;; ─── misc ───────────────────────────────────────────────────────────────────
 
 (define (git-open-at-point)
@@ -488,12 +768,13 @@
   (if (>= git-buffer-id 0) (editor-kill-buffer git-buffer-id) '()))
 
 (define (git-help)
-  (editor-message "s/S stage  u/U unstage  k discard  = diff  c commit  a amend  P push  F pull  f fetch  l log  b/B branch  g refresh  q quit"))
+  (editor-message "s/S stage  u/U unstage  k discard  = diff (s/u/k there: hunks)  c commit  a amend  P push  F pull  f fetch  l log  b/B branch  g refresh  q quit"))
 
 (add-hook "buffer-killed"
           (lambda (name id)
             (cond ((= id git-buffer-id) (set! git-buffer-id -1))
                   ((= id git-view-buffer-id) (set! git-view-buffer-id -1))
+                  ((= id git-packages-buffer-id) (set! git-packages-buffer-id -1))
                   (else '()))))
 
 ;; ─── keys ───────────────────────────────────────────────────────────────────
@@ -536,6 +817,21 @@
 (map-key "PAGE-DOWN" move-cursor-page-down "git-view")
 (map-key "PAGE-UP" move-cursor-page-up "git-view")
 (map-key "ENTER" git-view-enter "git-view")
+(map-key "s" git-view-stage-hunk "git-view")
+(map-key "u" git-view-unstage-hunk "git-view")
+(map-key "k" git-view-discard-hunk "git-view")
 (map-key "q" git-view-quit "git-view")
 (map-key "CTRL-x" '(editor-set-prefix "user") "git-view")
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "git-view")
+
+(map-key "l" git-packages "config")   ; CTRL-x c l
+(add-prefix "packages" #t)
+(map-key "n" '(move-cursor "down") "packages")
+(map-key "p" '(move-cursor "up") "packages")
+(map-key "ARROW-DOWN" '(move-cursor "down") "packages")
+(map-key "ARROW-UP" '(move-cursor "up") "packages")
+(map-key "ENTER" git-packages-open "packages")
+(map-key "g" git-packages-refresh "packages")
+(map-key "q" git-packages-quit "packages")
+(map-key "CTRL-x" '(editor-set-prefix "user") "packages")
+(map-key "ESCAPE" '(editor-set-prefix "no-prefix") "packages")

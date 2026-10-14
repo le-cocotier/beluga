@@ -43,6 +43,31 @@ const Utf8Char *lastSlashUtf8(const Utf8Char * string);
 void utf8Cpy(Utf8Char * dest, const Utf8Char * src);
 void utf8NCpy(Utf8Char * dest, const Utf8Char * src, int n);
 
+// ── Display width ────────────────────────────────────────────────────────
+// Terminal columns are not characters: CJK and most emoji take 2 columns,
+// combining marks and zero-width format characters take 0.
+
+uint32_t utf8CharCodepoint(const Utf8Char *c);
+// Columns one character occupies on screen: 0, 1 or 2.
+int utf8CharWidth(const Utf8Char *c);
+// Screen column at which chars[index] starts (index may equal size).
+int utf8ColumnOf(const Utf8Char *chars, int size, int index);
+// Index of the character covering `column` (size if past the end).
+int utf8IndexAtColumn(const Utf8Char *chars, int size, int column);
+
+/**
+ * @brief The characters of a row that fit in `width` columns starting at
+ * column `x_offset`: chars[start, end). `lead_pad` blanks come first when a
+ * wide character is cut by the left edge; `columns` counts them too.
+ */
+typedef struct {
+    int start;
+    int end;
+    int lead_pad;
+    int columns;
+} Utf8Span;
+void utf8VisibleSpan(const Utf8Char *chars, int size, int x_offset, int width, Utf8Span *span);
+
 // Extracts the part of `filename` after its last '.' into `out` (plain C
 // string, NUL-terminated, truncated to fit out_size). Returns 1 on success,
 // 0 if filename is NULL (a scratch buffer's fullname legitimately is),

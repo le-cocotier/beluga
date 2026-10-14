@@ -24,11 +24,24 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode
 Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder, char bPathMode,
                          int allowEmpty);
 
-Utf8Char *fileCompletion(Utf8Char *path);
+/**
+ * @brief The matches for TAB completion of a path in a prompt
+ * (see fileCompletionMatches()).
+ */
+typedef struct {
+  char *dir;     /**< the path up to and including its last '/' */
+  char **names;  /**< sorted matching names, directories ending in '/' */
+  int count;
+  size_t common; /**< length of the prefix all names share */
+} FileCompletion;
+
+int fileCompletionMatches(const char *path, FileCompletion *fc);
+void fileCompletionFree(FileCompletion *fc);
 
 int editorMoveCursor(int key);
 
 int executeKeyBind(char *key_sequence);
+int keyBindScope(const struct keyBind_t *kb, const struct buffer_t *buf);
 
 /**
  * \fn void editorProcessKeypress()

@@ -211,7 +211,7 @@ function Test-Junction($path) {
 # Same files with the same contents? (lisp_log.err aside: the editor writes
 # it into whatever directory it runs from.)
 function Test-SameTree($a, $b) {
-    $ignore = @('lisp_log.err', 'desktop.ini')
+    $ignore = @('lisp_log.err', 'desktop.ini', '.bundled')
     $filesA = @(Get-ChildItem -LiteralPath $a -Recurse -File -Force | Where-Object { $ignore -notcontains $_.Name })
     $filesB = @(Get-ChildItem -LiteralPath $b -Recurse -File -Force | Where-Object { $ignore -notcontains $_.Name })
     if ($filesA.Count -ne $filesB.Count) { return $false }
@@ -243,7 +243,11 @@ function Install-Package($name) {
         Backup-Package $dest $name 'was a git clone (now bundled)'
     } elseif (Test-Path -LiteralPath $dest -PathType Container) {
         if (Test-SameTree $src $dest) {
-            if (-not $Dev) { return }
+            if (-not $Dev) {
+                # An install from before the .bundled marker
+                New-Item -ItemType File -Force -Path (Join-Path $dest '.bundled') | Out-Null
+                return
+            }
             Remove-Item -LiteralPath $dest -Recurse -Force
         } else {
             Backup-Package $dest $name 'had local changes'
@@ -259,6 +263,8 @@ function Install-Package($name) {
         Write-Host "  $name -> $src"
     } else {
         Copy-Item -LiteralPath $src -Destination $dest -Recurse
+        # Marks it as beluga's own: the *packages* list shows it as "bundled".
+        New-Item -ItemType File -Force -Path (Join-Path $dest '.bundled') | Out-Null
         Write-Host "  $name"
     }
 }

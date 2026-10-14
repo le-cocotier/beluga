@@ -12,8 +12,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "../include/buffer.h"
-#include "../include/split_screen.h"
 #include "../include/utf8.h"
 
 /***********************************************************************************************************************

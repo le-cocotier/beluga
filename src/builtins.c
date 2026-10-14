@@ -23,6 +23,7 @@
 #include "../include/replace.h"
 #include "../include/split_screen.h"
 #include "../include/subprocess.h"
+#include "../include/syntax_highlighter.h"
 #include "../include/terminal.h"
 #include "../include/utils.h"
 
@@ -72,28 +73,73 @@ struct prefix_t find_prefix(const char *prefix_name) {
 }
 
 /**
+ * @brief The 4th argument of map-key, as " ext1 ext2 " (NULL for none)
+ * @details Accepts one extension string ("py") or a list of them
+ * ('("c" "h")); a leading '.' is dropped.
+ */
+static char *keyBindExtensions(Lisp arg) {
+  size_t cap = 2;
+  size_t len;
+  char *out;
+  const char *ext;
+  Lisp it;
+
+  if (lisp_is_null(arg))
+    return NULL;
+  for (it = arg; lisp_is_pair(it); it = lisp_cdr(it))
+    cap += strlen(lisp_string(lisp_car(it))) + 1;
+  if (!lisp_is_pair(arg))
+    cap += strlen(lisp_string(arg)) + 1;
+  out = galloc(cap);
+  if (!out)
+    return NULL;
+  strcpy(out, " ");
+  for (it = arg; !lisp_is_null(it);) {
+    ext = lisp_is_pair(it) ? lisp_string(lisp_car(it)) : lisp_string(it);
+    if (*ext == '.')
+      ext++;
+    len = strlen(out);
+    snprintf(out + len, cap - len, "%s ", ext);
+    if (!lisp_is_pair(it))
+      break;
+    it = lisp_cdr(it);
+  }
+  return out;
+}
+
+static int sameExtensions(const char *a, const char *b) {
+  if (!a || !b)
+    return a == b;
+  return strcmp(a, b) == 0;
+}
+
+/**
  * @brief Lisp function to bind a command to a key sequence
  * @details Registers a keybinding with an associated Lisp command and optional
  * prefix modifier. Dynamically extends the keybind array.
- * @param args Lisp list of 3 arguments: (key-sequence command prefix-name)
+ * @param args Lisp list of 3 or 4 arguments:
+ *        (key-sequence command prefix-name [extensions])
  *        - key_sequence (string): The key or key combination to bind
  *        - command (Lisp): The Lisp command/function to execute
  *        - prefix_name (string): Prefix modifier name
+ *        - extensions (optional, string or list of strings): only bind the
+ *          key in buffers whose file has one of these extensions, e.g.
+ *          "py" or '("c" "h"). Such a binding wins over a global one there,
+ *          so every language package can bind the same key (CTRL-d).
  * @param e Error pointer for Lisp error handling
  * @param ctx Lisp context
  * @return lisp_null()
  * @note Updates global editor state E (key_binds array)
  */
 Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
-  /*
-   * 3 arguments keybind command prefix
-   */
   const char *key_sequence = lisp_string(lisp_car(args));
   int i;
   void *memory_temp;
   Lisp func;
   const char *prefix_name;
   struct prefix_t prefix;
+  char *extensions;
+  size_t key_len;
   args = lisp_cdr(args);
   // second argument
   func = lisp_car(args);
@@ -101,19 +147,23 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
   args = lisp_cdr(args);
   prefix_name = lisp_string(lisp_car(args));
   prefix = find_prefix(prefix_name);
+  // Optional fourth argument
+  args = lisp_cdr(args);
+  extensions = lisp_is_null(args) ? NULL : keyBindExtensions(lisp_car(args));
 
   // Check if key already bind
 
   for (i = 0; i < E.number_of_keybinds; ++i) {
-    if (strcmp(E.key_binds[i].key_sequence, key_sequence) == 0) {
-      if (E.key_binds[i].prefix_id == prefix.prefix_id) {
-        // Keybind found: the new binding replaces it. (This used to
-        // write the last binding in the table instead of this one, so
-        // re-binding a key silently re-bound some other key.)
-        E.key_binds[i].command = func;
-        whichKeyInvalidate();
-        return lisp_null();
-      }
+    if (strcmp(E.key_binds[i].key_sequence, key_sequence) == 0 &&
+        E.key_binds[i].prefix_id == prefix.prefix_id &&
+        sameExtensions(E.key_binds[i].extensions, extensions)) {
+      // Keybind found: the new binding replaces it. (This used to
+      // write the last binding in the table instead of this one, so
+      // re-binding a key silently re-bound some other key.)
+      E.key_binds[i].command = func;
+      gfree(extensions);
+      whichKeyInvalidate();
+      return lisp_null();
     }
   }
 
@@ -122,14 +172,13 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
   E.key_binds = (struct keyBind_t *)memory_temp;
   if (!E.key_binds)
     editorQuit(args, e, ctx);
-  E.key_binds[E.number_of_keybinds - 1].key_sequence =
-      (char *)galloc(256 * sizeof(char));
-
-  strncpy(E.key_binds[E.number_of_keybinds - 1].key_sequence, key_sequence, 255);
-  E.key_binds[E.number_of_keybinds - 1].key_sequence[255] = '\0';
+  key_len = strlen(key_sequence);
+  E.key_binds[E.number_of_keybinds - 1].key_sequence = (char *)galloc(key_len + 1);
+  memcpy(E.key_binds[E.number_of_keybinds - 1].key_sequence, key_sequence, key_len + 1);
 
   E.key_binds[E.number_of_keybinds - 1].command = func;
   E.key_binds[E.number_of_keybinds - 1].prefix_id = prefix.prefix_id;
+  E.key_binds[E.number_of_keybinds - 1].extensions = extensions;
 
   // The which-key panel caches a resolved command name per binding; adding
   // one invalidates that mapping.
@@ -185,6 +234,8 @@ void bFree_structs(void) {
   for (i = 0; i < E.number_of_keybinds; ++i) {
     gfree(E.key_binds[i].key_sequence);
     E.key_binds[i].key_sequence = NULL;
+    gfree(E.key_binds[i].extensions);
+    E.key_binds[i].extensions = NULL;
   }
   gfree(E.key_binds);
   E.key_binds = NULL;
@@ -582,7 +633,8 @@ Lisp editorOpenConfig(Lisp args, LispError *e, LispContext ctx) {
  * @brief Lisp function to set one theme color
  * @details (editor-set-theme-color role r g b) — role is one of
  * "background", "line-cursor-background", "keyword", "type", "string",
- * "comment", "number", "default"; r/g/b are 0-255. Writes straight into
+ * "comment", "number", "default", "added", "removed" (diff lines); r/g/b
+ * are 0-255. Writes straight into
  * E.theme, replacing whatever the fallback (or an earlier-loaded theme package)
  * set — lets a theme be an ordinary package (packages/theme-dark,
  * packages/theme-light, or your own) instead of a hardcoded C palette.
@@ -624,6 +676,10 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx) {
     slot = &E.theme.COLOR_NUMBER;
   else if (!strcmp(role, "default"))
     slot = &E.theme.COLOR_DEFAULT;
+  else if (!strcmp(role, "added"))
+    slot = &E.theme.COLOR_ADDED;
+  else if (!strcmp(role, "removed"))
+    slot = &E.theme.COLOR_REMOVED;
 
   if (slot) {
     // Every color is heap-allocated (initEditor() copies its fallbacks),
@@ -1087,6 +1143,16 @@ static int packageAlreadyLoaded(const char *name) {
 }
 
 /**
+ * @brief Lisp function: (package-loaded? "name") — #t once add-package has
+ * loaded that package in this session.
+ */
+Lisp packageLoaded(const Lisp args, LispError *e, LispContext ctx) {
+  (void)e;
+  (void)ctx;
+  return lisp_make_bool(packageAlreadyLoaded(lisp_string(lisp_car(args))));
+}
+
+/**
  * @brief Lisp function to load and execute a package
  * @details Loads a Lisp package from the user's packages directory
  * (~/.beluga/packages/<package_name>/init.lisp) and evaluates it — once:
@@ -1115,8 +1181,10 @@ Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
   }
 
   if (os_file_info(package_dir, &info) != 0) {
-    configReportError("package \"%s\" isn't installed (no %s)", package_name,
-                      package_dir);
+    // personal-config is optional: having none isn't worth a message.
+    if (strcmp(package_name, "personal-config") != 0)
+      configReportError("package \"%s\" isn't installed (no %s)", package_name,
+                        package_dir);
     gfree(package_dir);
     return lisp_null();
   }
@@ -1357,10 +1425,17 @@ Lisp editorPaste(Lisp args, LispError *e, LispContext ctx) {
   if (!text)
     return lisp_null();
 
-  // CRLF clipboards (Windows, some browsers): drop the '\r's.
-  for (src = dst = text; *src; src++)
-    if (*src != '\r')
+  // CRLF (Windows clipboards, copies from a browser) is one line break,
+  // and so is a lone CR (classic Mac text).
+  for (src = dst = text; *src; src++) {
+    if (*src == '\r') {
+      *dst++ = '\n';
+      if (src[1] == '\n')
+        src++;
+    } else {
       *dst++ = *src;
+    }
+  }
   *dst = '\0';
 
   // One bulk insert, undone in one step. Terminal buffers keep the
@@ -1375,7 +1450,14 @@ Lisp editorPaste(Lisp args, LispError *e, LispContext ctx) {
 
   p = (const unsigned char *)text;
   while (*p) {
-    if (*p == '\n') {
+    if (*p == '\r') {
+      // CRLF (Windows clipboards, copies from a browser) is one line break,
+      // and so is a lone CR (classic Mac text).
+      bufferInsertNewLine();
+      p++;
+      if (*p == '\n')
+        p++;
+    } else if (*p == '\n') {
       bufferInsertNewLine();
       p++;
     } else {
@@ -1851,12 +1933,32 @@ Lisp editorListPopup(Lisp args, LispError *e, LispContext ctx) {
 Lisp lspRegisterServer(Lisp args, LispError *e, LispContext ctx) {
   const char *ext = lisp_string(lisp_car(args));
   const char *lang_id;
+  const char *command;
   void *mem;
   struct lspServerConfig_t *cfg;
   int argc;
+  int i;
   args = lisp_cdr(args);
   lang_id = lisp_string(lisp_car(args));
   args = lisp_cdr(args);
+  command = lisp_is_null(args) ? "" : lisp_string(lisp_car(args));
+
+  // The first server registered for an extension is the one used. Two
+  // packages claiming the same extension (nodejs and angular both take
+  // "ts") used to fail silently: say which one won.
+  for (i = 0; i < E.number_of_lsp_servers; i++) {
+    cfg = &E.lsp_servers[i];
+    if (strcmp(cfg->extension, ext) != 0)
+      continue;
+    if (cfg->argv[0] && strcmp(cfg->argv[0], command) != 0) {
+      editorSetStatusMessage("lsp-server: .%s already uses %s, ignoring %s "
+                             "(two packages claim .%s)",
+                             ext, cfg->argv[0], command, ext);
+      appDebug("lsp-server: .%s already registered with %s; ignoring %s",
+               ext, cfg->argv[0], command);
+    }
+    return lisp_null();
+  }
 
   mem = grealloc(E.lsp_servers, (E.number_of_lsp_servers + 1) *
                                     sizeof(struct lspServerConfig_t));
@@ -3057,6 +3159,82 @@ Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx) {
   word = lisp_string(lisp_car(args));
   syntaxAddWord(ext, word, 1);
   return lisp_null();
+}
+
+/**
+ * @brief Lisp function: (write-file "path" "text") — writes text to path
+ * as is (binary: no newline translation on Windows), replacing it.
+ * @return #t, or #f if the file couldn't be written
+ */
+Lisp l_writeFile(Lisp args, LispError *e, LispContext ctx) {
+  const char *path = lisp_string(lisp_car(args));
+  const char *text = lisp_string(lisp_car(lisp_cdr(args)));
+  size_t len = strlen(text);
+  FILE *f;
+  int ok;
+  (void)e;
+  (void)ctx;
+  f = fopen(path, "wb");
+  if (!f)
+    return lisp_false();
+  ok = fwrite(text, 1, len, f) == len;
+  ok = (fclose(f) == 0) && ok;
+  return lisp_make_bool(ok);
+}
+
+/**
+ * @brief Lisp function: color whole lines by how they start
+ * @details (syntax-add-line-prefix "ext" "prefix" "role") — in that
+ * language, a row starting with "prefix" is drawn entirely in the theme's
+ * "role" color: "keyword", "type", "string", "comment", "number",
+ * "default", or "added"/"removed" (meant for diffs). Rules are tried in
+ * the order they were added, so add longer prefixes ("+++") before shorter
+ * ones ("+"). The language must already exist (syntax-define-language).
+ * @return #t, or #f if the language is unknown, the role is unknown or the
+ * language already has 12 rules
+ */
+Lisp l_syntaxAddLinePrefix(Lisp args, LispError *e, LispContext ctx) {
+  const char *ext = lisp_string(lisp_car(args));
+  const char *prefix;
+  const char *role_name;
+  LanguageSyntax *lang;
+  int role;
+  (void)e;
+  (void)ctx;
+  args = lisp_cdr(args);
+  prefix = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  role_name = lisp_string(lisp_car(args));
+
+  lang = findLanguageByExtension(ext);
+  role = syntaxRoleFromName(role_name);
+  if (!lang || role < 0 ||
+      lang->num_line_prefixes >= (int)(sizeof(lang->line_prefixes) / sizeof(lang->line_prefixes[0])))
+    return lisp_false();
+  snprintf(lang->line_prefixes[lang->num_line_prefixes].prefix,
+           sizeof(lang->line_prefixes[0].prefix), "%s", prefix);
+  lang->line_prefixes[lang->num_line_prefixes].role = role;
+  lang->num_line_prefixes++;
+  return lisp_true();
+}
+
+/**
+ * @brief Lisp function: highlight a buffer as a given language
+ * @details (buffer-set-syntax buffer-id "ext") — the buffer is highlighted
+ * with the rules registered for "ext" whatever its name; "" goes back to
+ * choosing by file name. For generated buffers like a diff view.
+ * @return #t, or #f if there's no such buffer
+ */
+Lisp l_bufferSetSyntax(Lisp args, LispError *e, LispContext ctx) {
+  struct buffer_t *buf;
+  (void)e;
+  (void)ctx;
+  buf = bufferFindById((int)lisp_int(lisp_car(args)));
+  if (!buf)
+    return lisp_false();
+  snprintf(buf->syntax, sizeof(buf->syntax), "%s", lisp_string(lisp_car(lisp_cdr(args))));
+  syntaxHighlighterInvalidateAfter(buf, 0);
+  return lisp_true();
 }
 
 Lisp editorGetPaneWitdh(Lisp args, LispError *e, LispContext ctx) {

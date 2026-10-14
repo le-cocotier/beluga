@@ -51,6 +51,7 @@ int main(const int argc, char *argv[]) {
   Utf8Char *splash_screen;
   EditorPane *active;
   Utf8Char *filename;
+  Utf8Char *config_msg;
   if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
     printf("Beluga %s\n", BELUGA_VERSION);
     return 0;
@@ -67,6 +68,13 @@ int main(const int argc, char *argv[]) {
 
   enableRawMode();
   initEditor();
+  // A message init.lisp left (a package that couldn't load, a failed
+  // use-package, ...) is worth more than the help line below: keep it.
+  config_msg = NULL;
+  if (*E.status_msg[0].character) {
+    config_msg = gcalloc(PATH_MAX, sizeof(Utf8Char));
+    utf8Cpy(config_msg, E.status_msg);
+  }
 
   active = splitScreenGetActivePane();
   active->buffer_id = bufferCreate(splash_screen, READ_ONLY, FILE_BUFF);
@@ -78,7 +86,12 @@ int main(const int argc, char *argv[]) {
   }
 
   gfree(splash_screen); // Now guaranteed safe
-  editorSetStatusMessage("HELP: Ctrl-x Ctrl-s = save | Ctrl-x Ctrl-c = quit");
+  if (config_msg) {
+    editorSetStatusMessage("%u", config_msg);
+    gfree(config_msg);
+  } else {
+    editorSetStatusMessage("HELP: Ctrl-x Ctrl-s = save | Ctrl-x Ctrl-c = quit");
+  }
   // Everything in init.lisp (and every package) has loaded and the
   // startup buffers are open: a hook can bind keys to functions defined
   // anywhere in the config, and act on the current buffer.

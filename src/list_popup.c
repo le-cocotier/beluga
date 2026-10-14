@@ -15,7 +15,6 @@
 #include "../include/list_popup.h"
 #include "../include/define.h"
 #include "../include/popup_ui.h"
-#include "../include/terminal.h"
 
 #include <ctype.h>
 #include <stdio.h>

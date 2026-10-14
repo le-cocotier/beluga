@@ -12,14 +12,12 @@
 #include "../include/split_screen.h"
 #include "../include/utils.h"
 
-#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#include "../include/append_buffer.h"
 #include "../include/builtins.h"
 #include "../include/completion.h"
 #include "../include/input.h"
@@ -2037,7 +2035,8 @@ void bufferDelChar(void) {
     rowJoinNext(buf, target_row);
     undoRecord(buf, UNDO_JOIN_LINE, target_row, prev_char_count, (Utf8Char){0});
 
-    active->cursor_x = prev_char_count;
+    active->cursor_x = utf8ColumnOf(buf->row[target_row].characters,
+                                    buf->row[target_row].size, prev_char_count);
     buf->x = prev_char_count;
     active->cursor_y--;
     buf->y--;

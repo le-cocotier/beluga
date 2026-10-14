@@ -14,7 +14,9 @@ typedef enum {
   TOKEN_COMMENT,
   TOKEN_NUMBER,
   TOKEN_OPERATOR,
-  TOKEN_DEFAULT
+  TOKEN_DEFAULT,
+  TOKEN_ADDED,
+  TOKEN_REMOVED
 } TokenType;
 
 // Finds the LanguageSyntax registered for `filename`'s extension (see the
@@ -24,6 +26,13 @@ typedef enum {
 // comes entirely from what the "c" package registers, the same as every
 // other language.
 const LanguageSyntax *syntaxLanguageFor(const Utf8Char *filename);
+const LanguageSyntax *syntaxLanguageForExtension(const char *ext);
+// The buffer's language: its buffer-set-syntax override if any, else by
+// filename.
+const LanguageSyntax *syntaxLanguageForBuffer(const Buffer *buf);
+// "keyword", "type", "string", "comment", "number", "added", "removed"
+// -> TokenType, or -1.
+int syntaxRoleFromName(const char *name);
 
 // Highlights one row according to `lang`'s rules, clipped to the pane's
 // visible window like the plain-text row path. `lang` must be non-NULL —

@@ -9,7 +9,6 @@
 #include "../include/galloc.h"
 #include "../include/output.h"
 #include "../include/split_screen.h"
-#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +21,6 @@
 #include "../include/syntax_highlighter.h"
 #include "../include/terminal.h"
 #include "../include/utf8.h"
-#include "include/cJSON.h"
 
 /**
  * @brief The id of the "*" (global) prefix, looked up by name and cached.
@@ -70,68 +68,112 @@ extern EditorConfig E;
  *
  **********************************************************************************************************************/
 
+static int compareNames(const void *a, const void *b) {
+  return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+void fileCompletionFree(FileCompletion *fc) {
+  int i;
+  for (i = 0; i < fc->count; i++)
+    gfree(fc->names[i]);
+  gfree(fc->names);
+  gfree(fc->dir);
+  memset(fc, 0, sizeof(*fc));
+}
+
 /**
- * @brief Returns the first file completion match for the given path
- * @details Searches the directory containing the given path prefix and returns
- * the first file or directory entry that matches the filename prefix.
- * Appends a trailing slash for directory entries.
- * @param path The file path to complete (can be relative or absolute)
- * @return Pointer to the completed file path (dynamically allocated), or NULL
- * if:
- *         - path ends with '/' (already a directory)
- *         - no matching entries found
- *         - directory cannot be opened
- * @note Caller is responsible for bFreeing the returned string
- * @note Uses static buffer internally; may return stale pointers across calls
+ * @brief Collects the entries of `path`'s directory that start with its
+ * last component
+ * @details `path` is split at its last '/': "/a/b/fo" lists "/a/b/" for
+ * names starting with "fo"; "/a/b/" lists everything in "/a/b/". Names are
+ * sorted, and directories get a trailing '/'. `common` is the length of
+ * the prefix all matches share, cut back to a whole UTF-8 character.
+ * @param path UTF-8 path to complete (absolute, or relative to the cwd)
+ * @param fc filled in; release with fileCompletionFree()
+ * @return number of matches (0 if the directory can't be read)
  */
-Utf8Char *fileCompletion(Utf8Char *path) {
+int fileCompletionMatches(const char *path, FileCompletion *fc) {
   OsDirEntry *entries;
+  const char *slash = strrchr(path, '/');
+  const char *prefix = slash ? slash + 1 : path;
+  size_t dir_len = slash ? (size_t)(slash - path) + 1 : 0;
+  size_t prefix_len = strlen(prefix);
+  size_t name_len;
+  size_t n;
   int count = 0;
   int i;
-  Utf8Char directory[PATH_MAX] = {0};
-  Utf8Char predict[PATH_MAX] = {0};
-  const Utf8Char *last_slash = lastSlashUtf8(path);
-  Utf8Char *full_path = gcalloc(PATH_MAX, sizeof(Utf8Char));
-  Utf8Char *entry_name_utf8 = NULL;
-  int predict_len = 0;
-  char *dir_path = NULL;
+  char *list_dir;
 
-  if (*(last_slash + 1)->character == '\0') {
-    // path is a directory
-    utf8Printf(directory, PATH_MAX, "%u", path);
-    END_OF_STRING(directory[utf8StringLen(directory) - 2]);
-  } else {
-    utf8NCpy(directory, path, (int)(last_slash - path));
-    predict_len = utf8Printf(predict, PATH_MAX, "%u", last_slash + 1);
+  memset(fc, 0, sizeof(*fc));
+  fc->dir = galloc(dir_len + 1);
+  if (!fc->dir)
+    return 0;
+  memcpy(fc->dir, path, dir_len);
+  fc->dir[dir_len] = '\0';
+
+  list_dir = dir_len ? fc->dir : ".";
+  entries = os_list_dir(list_dir, &count);
+  if (!entries)
+    return 0;
+  fc->names = galloc((size_t)(count ? count : 1) * sizeof(char *));
+  if (!fc->names) {
+    os_free_dir(entries, count);
+    return 0;
   }
-
-  dir_path = (char *)utf8ToString(directory);
-  entries = os_list_dir(dir_path, &count);
-  gfree(dir_path);
-  if (!entries) {
-    return full_path;
-  }
-
   for (i = 0; i < count; i++) {
-    entry_name_utf8 = stringToUtf8((unsigned char *)entries[i].name);
-    if ((predict_len == 0) ||
-        (utf8StringNCmp(entry_name_utf8, predict, predict_len) == 0)) {
-      utf8Printf(full_path, PATH_MAX, "%u/%u", directory, entry_name_utf8);
-      gfree(entry_name_utf8);
-      if (entries[i].is_dir) {
-        full_path[utf8StringLen(full_path) - 1].character[0] = '/';
-        full_path[utf8StringLen(full_path) - 1].length = 1;
-      }
-      os_free_dir(entries, count);
-      return full_path;
-    }
-    gfree(entry_name_utf8);
+    if (strncmp(entries[i].name, prefix, prefix_len) != 0)
+      continue;
+    // Hidden entries only when asked for with a leading '.'
+    if (entries[i].name[0] == '.' && prefix[0] != '.')
+      continue;
+    name_len = strlen(entries[i].name);
+    fc->names[fc->count] = galloc(name_len + 2);
+    if (!fc->names[fc->count])
+      continue;
+    memcpy(fc->names[fc->count], entries[i].name, name_len);
+    if (entries[i].is_dir)
+      fc->names[fc->count][name_len++] = '/';
+    fc->names[fc->count][name_len] = '\0';
+    fc->count++;
   }
-
   os_free_dir(entries, count);
-  appDebug("[FILE COMP] no entries\n");
-  utf8Cpy(full_path, path);
-  return full_path;
+
+  if (fc->count == 0)
+    return 0;
+  qsort(fc->names, (size_t)fc->count, sizeof(char *), compareNames);
+
+  fc->common = strlen(fc->names[0]);
+  for (i = 1; i < fc->count; i++) {
+    for (n = 0; n < fc->common && fc->names[i][n] == fc->names[0][n]; n++)
+      ;
+    fc->common = n;
+  }
+  // Never stop in the middle of a multi-byte character.
+  while (fc->common > 0 &&
+         ((unsigned char)fc->names[0][fc->common] & 0xC0) == 0x80)
+    fc->common--;
+  return fc->count;
+}
+
+/**
+ * @brief Writes dir + the first `len` bytes of `name` into the prompt
+ * buffer
+ * @return the new length of the buffer, in characters
+ */
+static int setPromptPath(Utf8Char *buf, const char *dir, const char *name,
+                         size_t len) {
+  char *joined = galloc(strlen(dir) + len + 1);
+  Utf8Char *as_utf8;
+  int buf_len;
+  if (!joined)
+    return utf8StringLen(buf) - 1;
+  strcpy(joined, dir);
+  strncat(joined, name, len);
+  as_utf8 = stringToUtf8((unsigned char *)joined);
+  gfree(joined);
+  buf_len = utf8Printf(buf, PATH_MAX, "%u", as_utf8);
+  gfree(as_utf8);
+  return buf_len;
 }
 
 /**
@@ -164,11 +206,16 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
   Utf8Char *buf = gcalloc(PATH_MAX, sizeof(Utf8Char));
   int buf_len = 0;
   Utf8Char *c = NULL;
-  Utf8Char *full_path = NULL;
   Utf8Char path[PATH_MAX];
   char *pwd;
   char *buf_str;
+  char *path_str;
   int absolute;
+  // TAB completion: the matches of the last TAB, and which one a repeated
+  // TAB is showing (-1: none yet, the buffer holds their common prefix).
+  FileCompletion fc = {0};
+  int cycle = -1;
+  int last_was_tab = 0;
   if (placeHolder != NULL) {
     buf_len = utf8Printf(buf, PATH_MAX, "%u",
                          placeHolder); // zero not counted by snprintf
@@ -189,15 +236,23 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
     } else if (*c->character == ESCAPE) {
       editorSetStatusMessage("Aborted");
       gfree(c);
+      fileCompletionFree(&fc);
       E.prompt_input = NULL;
       return NULL;
     } else if (*c->character == '\r') {
       if (buf_len != 0 || allowEmpty) {
         editorSetStatusMessage("");
         gfree(c);
+        fileCompletionFree(&fc);
         E.prompt_input = NULL;
         return buf;
       }
+    } else if (bPathMode && *c->character == '\t' && last_was_tab &&
+               fc.count > 1) {
+      // Repeated TAB on an ambiguous prefix: step through the matches.
+      cycle = (cycle + 1) % fc.count;
+      buf_len = setPromptPath(buf, fc.dir, fc.names[cycle],
+                              strlen(fc.names[cycle]));
     } else if (bPathMode && *c->character == '\t') {
       // Completion of first path
       // getenv is allocating memory
@@ -214,25 +269,48 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
         // already absolute path
         utf8Printf(path, PATH_MAX, "%u", buf);
       }
-      // TODO(TODO.md): path completion — readdir order, leaks, single match
-      full_path = fileCompletion(path);
-      if (full_path) {
-        buf_len = utf8Printf(buf, PATH_MAX, "%u", full_path);
-        gfree(full_path);
-      }
+      // Complete as far as all matches agree; a single match is completed
+      // whole. Another TAB then cycles through the matches.
+      fileCompletionFree(&fc);
+      cycle = -1;
+      path_str = (char *)utf8ToString(path);
+      if (fileCompletionMatches(path_str, &fc) > 0)
+        buf_len = setPromptPath(buf, fc.dir, fc.names[0], fc.common);
+      else
+        buf_len = utf8Printf(buf, PATH_MAX, "%u", path);
+      gfree(path_str);
     } else if (*c->character) {
       (buf + buf_len)->length = c->length;
       memcpy((buf + buf_len)->character, c->character, c->length);
       buf_len++;
     }
+    last_was_tab = bPathMode && *c->character == '\t';
     gfree(c);
   }
 }
 
 /**
+ * @brief Does this binding apply in `buf`?
+ * @return 0 if it doesn't, 1 for a global binding, 2 for one scoped to the
+ * buffer's file extension (which takes precedence over a global one)
+ */
+int keyBindScope(const struct keyBind_t *kb, const struct buffer_t *buf) {
+  char ext[32];
+  char needle[34];
+  if (!kb->extensions)
+    return 1;
+  if (!buf || !utf8FilenameExtension(buf->filename, ext, sizeof(ext)))
+    return 0;
+  snprintf(needle, sizeof(needle), " %s ", ext);
+  return strstr(kb->extensions, needle) ? 2 : 0;
+}
+
+/**
  * @brief Executes the command bound to a key sequence
  * @details Searches the keybinding table for a matching key sequence and
- * prefix state, then evaluates the associated Lisp command.
+ * prefix state, then evaluates the associated Lisp command. A binding
+ * scoped to the active buffer's extension (map-key's 4th argument) wins
+ * over a global one.
  * @param key_sequence The string representation of the key sequence
  * @return 1 if a matching keybinding was found and executed, 0 otherwise
  * @note Updates global editor state E (prefix_state)
@@ -241,27 +319,37 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
 int executeKeyBind(char *key_sequence) {
   int i;
   int previous_state = 0;
+  int found = -1;
+  int found_scope = 0;
+  int scope;
+  const struct buffer_t *buf = bufferFindById(splitScreenGetActivePane()->buffer_id);
   for (i = 0; i < E.number_of_keybinds; ++i) {
-    if (!strcmp(key_sequence, E.key_binds[i].key_sequence)) {
-      if ((E.key_binds[i].prefix_id != starPrefixId()) &&
-          (E.prefix_state != E.key_binds[i].prefix_id)) {
-        continue;
-      }
-      previous_state = E.prefix_state;
-      // It's a symbol, create a function call
-      lisp_eval(lisp_cons(E.key_binds[i].command, lisp_null(), E.ctx),
-                &E.ctx_error, E.ctx);
-      // Sticky prefixes (see add-prefix) skip the auto-reset — they're
-      // meant to stay active across keystrokes that don't themselves
-      // change the prefix (e.g. arrow-key navigation in a sidebar),
-      // unlike a one-shot "user"-style CTRL-x <key> prefix.
-      if (E.prefix_state == previous_state &&
-          !E.prefix[E.key_binds[i].prefix_id].sticky)
-        E.prefix_state = 0;
-      return 1;
+    if (strcmp(key_sequence, E.key_binds[i].key_sequence) != 0)
+      continue;
+    if ((E.key_binds[i].prefix_id != starPrefixId()) &&
+        (E.prefix_state != E.key_binds[i].prefix_id))
+      continue;
+    scope = keyBindScope(&E.key_binds[i], buf);
+    if (scope > found_scope) {
+      found = i;
+      found_scope = scope;
     }
   }
-  return 0;
+  if (found < 0)
+    return 0;
+
+  previous_state = E.prefix_state;
+  // It's a symbol, create a function call
+  lisp_eval(lisp_cons(E.key_binds[found].command, lisp_null(), E.ctx),
+            &E.ctx_error, E.ctx);
+  // Sticky prefixes (see add-prefix) skip the auto-reset — they're
+  // meant to stay active across keystrokes that don't themselves
+  // change the prefix (e.g. arrow-key navigation in a sidebar),
+  // unlike a one-shot "user"-style CTRL-x <key> prefix.
+  if (E.prefix_state == previous_state &&
+      !E.prefix[E.key_binds[found].prefix_id].sticky)
+    E.prefix_state = 0;
+  return 1;
 }
 
 static void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {

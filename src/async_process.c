@@ -14,7 +14,6 @@
 #include "../include/terminal.h"
 #include "../include/data.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 extern EditorConfig E;

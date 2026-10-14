@@ -50,6 +50,37 @@
 ;; error in this file or a package: the status bar names the file and line,
 ;; the *config-errors* buffer (CTRL-x b) lists them all, and the rest of the
 ;; file still loads.
+;;
+;; (use-package "name" ["git-url"]) is add-package for packages that don't
+;; ship with beluga: a missing package is cloned from git-url into
+;; ~/.beluga/packages/name in the background and loaded once the clone
+;; finishes. Without a URL, or if the clone fails, the status bar says so.
+;; Update a cloned package from the *packages* list (CTRL-x c l) or with
+;; git pull in its directory.
+(define (use-package--first-line lines)
+  (cond ((null? lines) "")
+        ((string=? (car lines) "") (use-package--first-line (cdr lines)))
+        (else (car lines))))
+
+(define (use-package name . url)
+  (let ((dir (expand-path (string-append "~/.beluga/packages/" name))))
+    (cond ((file-attributes (string-append dir "/init.lisp"))
+           (add-package name))
+          ((null? url)
+           (editor-message (string-append "use-package: \"" name "\" isn't installed and has no URL to clone it from")))
+          ((file-attributes dir)
+           (editor-message (string-append "use-package: " dir " exists but has no init.lisp")))
+          ((process-start
+            (lambda (result)
+              (if (= (car result) 0)
+                  (begin (add-package name)
+                         (editor-message (string-append "use-package: installed " name)))
+                  (editor-message (string-append "use-package: couldn't clone " name ": "
+                                                 (use-package--first-line (string-split (cdr result) "\n" 50))))))
+            "git" "clone" "--depth" "1" (car url) dir)
+           (editor-message (string-append "use-package: cloning " name "…")))
+          (else (editor-message "use-package: couldn't start git")))))
+
 (add-package "smart_delimiters")
 (add-package "outline")
 (add-package "explorer")
@@ -82,13 +113,12 @@
 ;;                          ; register "ts" and only the first one wins it.
 ;; (add-package "lisp")     ; no server needed — highlighting + comment toggle only
 ;;
-;; Note on CTRL-d: every language package binds it under "no-prefix", and
-;; the FIRST binding registered wins, so only one comment toggle is ever
-;; reachable. c/python/rust each hardcode one comment prefix; latex/yaml/
-;; nodejs/angular instead dispatch on the file's extension and handle all
-;; of these languages. Move whichever of those you enable up above the
-;; c/python/rust add-package lines if you want CTRL-d to do the right
-;; thing in every file type.
+;; Note on CTRL-d: c/python/rust/php/lisp bind it only for their own file
+;; types (map-key's optional last argument, e.g. "py" or (list "c" "h")),
+;; so they all work side by side. latex/yaml/nodejs/angular bind it for
+;; every file and pick the comment marker from the extension themselves;
+;; the last of those loaded is the fallback for files no language package
+;; claims.
 
 ;; HOOKS
 ;;

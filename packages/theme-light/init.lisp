@@ -17,3 +17,5 @@
 (editor-set-theme-color "comment" 152 152 152)
 (editor-set-theme-color "number" 206 102 54)
 (editor-set-theme-color "default" 86 89 90)
+(editor-set-theme-color "added" 80 161 79)
+(editor-set-theme-color "removed" 228 86 73)

@@ -1,6 +1,7 @@
 // src/term_render.c
 #include "../include/term_render.h"
 #include "../include/galloc.h"
+#include "../include/utf8.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,22 +35,25 @@ char* termRenderRow(const Row* row, int* length, int x_offset, int width)
     TermCellAttr last_attr;
     int i;
     TermCellAttr attr;
+    Utf8Span span;
     if (x_offset < 0) x_offset = 0;
     if (width < 0) width = 0;
 
-    start = x_offset;
-    end = x_offset + width;
-    if (start > row->size) start = row->size;
-    if (end > row->size) end = row->size;
+    // Screen columns to characters (wide characters take two columns).
+    utf8VisibleSpan(row->characters, row->size, x_offset, width, &span);
+    start = span.start;
+    end = span.end;
 
     visible = end - start;
     if (visible < 0) visible = 0;
 
-    buf_size = (visible + 1) * 32 + 64;
+    buf_size = (visible + 1) * 32 + 64 + span.lead_pad;
     result = galloc(buf_size);
     if (!result) { *length = 0; return NULL; }
 
     pos = 0;
+    for (i = 0; i < span.lead_pad; i++)
+        result[pos++] = ' ';
     memset(&last_attr, 0xFF, sizeof(last_attr)); // force a mismatch on first cell
 
     for (i = start; i < end; i++)

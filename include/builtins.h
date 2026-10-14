@@ -16,6 +16,9 @@ Lisp editorPromptLisp(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxDefineLanguage(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddKeyword(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx);
+Lisp l_syntaxAddLinePrefix(Lisp args, LispError *e, LispContext ctx);
+Lisp l_bufferSetSyntax(Lisp args, LispError *e, LispContext ctx);
+Lisp l_writeFile(Lisp args, LispError *e, LispContext ctx);
 
 // Mouvement
 
@@ -71,6 +74,7 @@ Lisp editorScratchSetLines(Lisp args, LispError *e, LispContext ctx);
 Lisp editorExplorerSidebarOpen(Lisp args, LispError *e, LispContext ctx);
 Lisp editorExplorerClose(Lisp args, LispError *e, LispContext ctx);
 Lisp addPackage(Lisp args, LispError *e, LispContext ctx);
+Lisp packageLoaded(Lisp args, LispError *e, LispContext ctx);
 Lisp editorOpenTerminal(Lisp args, LispError *e, LispContext ctx);
 Lisp editorExecuteCommand(Lisp args, LispError *e, LispContext ctx);
 

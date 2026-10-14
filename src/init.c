@@ -64,6 +64,7 @@ void initBuiltins(void) {
   registerBuiltin("editor-set-theme-color", editorSetThemeColor);
   registerBuiltin("editor-insert-char", editorPrintC);
   registerBuiltin("add-package", addPackage);
+  registerBuiltin("package-loaded?", packageLoaded);
   registerBuiltin("buffer-find", bufferFind_L);
   registerBuiltin("buffer-find-reverse", bufferFindReverse_L);
   registerBuiltin("editor-read-char", editorReadChar_L);
@@ -151,6 +152,9 @@ void initBuiltins(void) {
   registerBuiltin("syntax-define-language", l_syntaxDefineLanguage);
   registerBuiltin("syntax-add-keyword", l_syntaxAddKeyword);
   registerBuiltin("syntax-add-type", l_syntaxAddType);
+  registerBuiltin("syntax-add-line-prefix", l_syntaxAddLinePrefix);
+  registerBuiltin("buffer-set-syntax", l_bufferSetSyntax);
+  registerBuiltin("write-file", l_writeFile);
   registerBuiltin("app-debug?", l_appDebugP);
   registerBuiltin("editor-recenter", l_editorRecenter);
   registerBuiltin("pane-height", l_paneHeight);
@@ -444,6 +448,8 @@ void initEditor() {
   E.theme.COLOR_COMMENT = utilStrdup(ANSI_FG_RGB(92, 99, 112));
   E.theme.COLOR_NUMBER = utilStrdup(ANSI_FG_RGB(209, 154, 102));
   E.theme.COLOR_DEFAULT = utilStrdup(ANSI_FG_RGB(171, 178, 191));
+  E.theme.COLOR_ADDED = utilStrdup(ANSI_FG_RGB(152, 195, 121));
+  E.theme.COLOR_REMOVED = utilStrdup(ANSI_FG_RGB(224, 108, 117));
 
   initConfig();
   initStartupConstants();
@@ -494,7 +500,7 @@ void deInitEditor() {
   E.number_of_lsp_clients = 0;
 
   temp = &E.theme.BACKGROUND_COLOR;
-  for (i = 0; i < 8; ++i) {
+  for (i = 0; i < 10; ++i) {
     gfree(*(temp + i));
   }
 

@@ -87,7 +87,6 @@ src_files = files(
   'src/config_load.c',
   'src/input.c',
   'src/output.c',
-  'src/row_op.c',
   'src/terminal.c',
   'src/builtins.c',
   'src/builtins_edit.c',
@@ -140,10 +139,11 @@ test('os-boundary', find_program('tools/check_os_boundary.sh'),
   args : [meson.current_source_dir()])
 
 # Unit tests (test/): each is a small program linked against the editor's
-# code; test/test.c stands in for main.c's globals.
-foreach t : ['utf8', 'buffer', 'ansi_parser', 'os']
+# code; test/test.c stands in for main.c's globals. On Windows they get
+# beluga.exe's manifest too, so file names are UTF-8 for them as well.
+foreach t : ['utf8', 'buffer', 'ansi_parser', 'os', 'completion']
   test(t, executable('test_' + t,
-    files('test/test_' + t + '.c', 'test/test.c'),
+    files('test/test_' + t + '.c', 'test/test.c') + extra_sources,
     c_args : core_args,
     link_with : [core_lib, os_lib],
     dependencies : [m],

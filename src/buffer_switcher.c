@@ -11,7 +11,6 @@
 #include "../include/galloc.h"
 #include "../include/buffer.h"
 #include "../include/split_screen.h"
-#include "../include/terminal.h"
 #include "../include/utf8.h"
 #include "../include/define.h"
 #include "../include/popup_ui.h"

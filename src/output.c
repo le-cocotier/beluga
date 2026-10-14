@@ -17,12 +17,10 @@
 #include "../include/file_finder.h"
 #include "../include/list_popup.h"
 #include "../include/which_key.h"
-#include "../include/row_op.h"
 #include "../include/screen_diff.h"
 #include "../include/split_screen.h"
 #include "../include/syntax_highlighter.h"
 #include "../include/term_render.h"
-#include "../include/terminal.h"
 #include "../include/utf8.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -252,10 +250,11 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   const LanguageSyntax *lang;
   int wrapped_len;
   char *wrapped;
-  int row_off;
   char *line;
   int line_len;
   int filled;
+  Utf8Span span;
+  const Row *row;
 
   if (pane == NULL || pane->buffer_id < 0)
     return;
@@ -359,15 +358,22 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
       // Selection highlight — not applied to TERMINAL_BUFF (a live shell's
       // own escape sequences make wrapping unreliable, and "mark a region
       // in a PTY view" isn't a meaningful operation anyway).
+      // x_offset and content_width are screen columns; span is the
+      // characters that fit in them (wide characters take two columns).
+      row = &buf->row[file_row];
+      utf8VisibleSpan(row->characters, row->size, pane->x_offset, content_width, &span);
+
       sel_from = 0; sel_to = 0; sel_extends = 0;
       has_selection = buf->type != TERMINAL_BUFF &&
                           rowSelectionRange(buf, file_row, &sel_from, &sel_to, &sel_extends);
+      // applySelectionHighlight() counts rendered characters, so these are
+      // relative to the first character drawn (after any lead padding).
       vis_from = 0; vis_to = -1;
       if (has_selection) {
-        vis_from = sel_from - pane->x_offset;
+        vis_from = sel_from - span.start + span.lead_pad;
         if (vis_from < 0) vis_from = 0;
         if (!sel_extends) {
-          vis_to = sel_to - pane->x_offset;
+          vis_to = sel_to - span.start + span.lead_pad;
           if (vis_to < 0) vis_to = 0;
         }
       }
@@ -393,7 +399,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         // tokenizer), and gave C highlighting no matter what packages
         // were loaded. Now a buffer with no registered language for its
         // extension always falls through to plain text, C included.
-        lang = syntaxLanguageFor(buf->filename);
+        lang = syntaxLanguageForBuffer(buf);
         if (lang) {
           byte_len_to_print = 0;
           // Render line with syntax highlighting, constrain to pane width
@@ -414,18 +420,16 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
           gfree(highlighted);
         } else {
 
-          // Render basic line, starting at the horizontal scroll offset.
-          // Clamp the offset to this row's length first: x_offset tracks
-          // the (possibly much longer) line the cursor sits on, so a
-          // shorter row drawn in the same pane can have size < x_offset,
-          // and &characters[x_offset] would then read past the row. size
-          // itself is the terminator cell, which renders as empty.
-          row_off = pane->x_offset < buf->row[file_row].size
-                            ? pane->x_offset
-                            : buf->row[file_row].size;
-          line = (char *)utf8ToNString(
-              &buf->row[file_row].characters[row_off], content_width);
-          line_len = (int) strlen(line);
+          // Render basic line: the characters that fit between x_offset
+          // and the pane's width, in columns. A row shorter than x_offset
+          // gives an empty span.
+          wrapped = (char *)utf8ToNString(&row->characters[span.start],
+                                          span.end - span.start);
+          line_len = (int) strlen(wrapped) + span.lead_pad;
+          line = galloc((size_t) line_len + 1);
+          memset(line, ' ', (size_t) span.lead_pad);
+          memcpy(line + span.lead_pad, wrapped, strlen(wrapped) + 1);
+          gfree(wrapped);
 
           if (has_selection) {
             wrapped_len = 0;
@@ -445,11 +449,8 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
       // (a whole line selected, including its line break).
       if (has_selection && sel_extends)
         abAppend(ab, "\x1b[7m", 4);
-      // Start from how many columns the content actually filled — clamped
-      // at 0, since a row shorter than x_offset contributed nothing and
-      // (size - x_offset) would otherwise go negative and over-pad.
-      filled = buf->row[file_row].size - pane->x_offset;
-      if (filled < 0) filled = 0;
+      // Start from how many columns the content actually filled.
+      filled = span.columns;
       for (i = filled; i < content_width; i++) {
         abAppend(ab, " ", 1);
       }
@@ -539,6 +540,7 @@ void editorScroll() {
   EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buf = bufferFindById(active->buffer_id);
   int usable_width;
+  int column;
 
   // bufferFindById() returns NULL for an id that isn't in the list — a
   // pane still pointing at a closed buffer, or at -1 after a failed
@@ -555,11 +557,13 @@ void editorScroll() {
   if (usable_width < 1)
     usable_width = 1;
 
-  // compute relative coordinates
-
-  while (buf->x != active->cursor_x + active->x_offset ||
+  // The pane scrolls in screen columns, not characters.
+  column = buf->y < buf->numrows
+               ? utf8ColumnOf(buf->row[buf->y].characters, buf->row[buf->y].size, buf->x)
+               : buf->x;
+  while (column != active->cursor_x + active->x_offset ||
          buf->y != active->cursor_y + active->y_offset) {
-    if (buf->x < active->cursor_x + active->x_offset) {
+    if (column < active->cursor_x + active->x_offset) {
       // LEFT
       if (active->cursor_x == 0 && active->x_offset) {
         active->x_offset--;
@@ -568,7 +572,7 @@ void editorScroll() {
       }
     } else {
       // RIGHT
-      if (buf->x > active->cursor_x + active->x_offset) {
+      if (column > active->cursor_x + active->x_offset) {
         if (active->cursor_x == usable_width - 1) {
           active->x_offset++;
         } else {
@@ -592,6 +596,15 @@ void editorScroll() {
         active->cursor_y++;
       }
     }
+  }
+
+  // A wide character on the last column would have its right half cut
+  // off: scroll one more column so it's drawn whole.
+  if (active->cursor_x == usable_width - 1 && usable_width > 1 &&
+      buf->y < buf->numrows && buf->x < buf->row[buf->y].size &&
+      utf8CharWidth(&buf->row[buf->y].characters[buf->x]) == 2) {
+    active->x_offset++;
+    active->cursor_x--;
   }
 }
 

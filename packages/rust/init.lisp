@@ -37,10 +37,9 @@
 
 ;; CTRL-d under "no-prefix" — bound here (not "user") so this package
 ;; doesn't depend on load order relative to (add-prefix "user") in the
-;; master config. If you also load another language package that binds
-;; CTRL-d (c, python, ...), whichever loads first wins; the other's
-;; binding is silently unreachable — rebind one if you use both together.
-(map-key "CTRL-d" rust-toggle-comment "no-prefix")
+;; master config. The last argument scopes it to this language's files, so
+;; every language package can bind its own CTRL-d side by side.
+(map-key "CTRL-d" rust-toggle-comment "no-prefix" "rs")
 
 ;; ─── Syntax highlighting ────────────────────────────────────────────────────
 

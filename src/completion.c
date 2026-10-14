@@ -12,7 +12,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "../include/append_buffer.h"
 #include "../include/cJSON.h"
 #include "../include/data.h"
 #include "../include/output.h"
