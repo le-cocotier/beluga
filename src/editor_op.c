@@ -88,7 +88,7 @@ int editorMoveCursor(const int key) {
   return 1;
 }
 
-// TODO(TODO.md): paste — CRLF, bulk insert (see editorPaste in builtins.c)
+// TODO(TODO.md): paste — bulk insert (see editorPaste in builtins.c)
 
 // The system clipboard (os_clipboard_*), as galloc'd text the callers
 // gfree(). Line endings are LF on our side whatever the platform uses.

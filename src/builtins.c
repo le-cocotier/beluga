@@ -1330,7 +1330,14 @@ Lisp editorPaste(Lisp args, LispError *e, LispContext ctx) {
 
   p = (const unsigned char *)text;
   while (*p) {
-    if (*p == '\n') {
+    if (*p == '\r') {
+      // CRLF (Windows clipboards, copies from a browser) is one line break,
+      // and so is a lone CR (classic Mac text).
+      bufferInsertNewLine();
+      p++;
+      if (*p == '\n')
+        p++;
+    } else if (*p == '\n') {
       bufferInsertNewLine();
       p++;
     } else {

@@ -42,8 +42,7 @@ is actually left to do.
 
 - [ ] **[debt]** Paste — `src/builtins.c`, `editorPaste()` *(was "TODO: Rebuild pasting functionality", above `editorGetClipboard()`)*
   - Paste works. It inserts the clipboard one character at a time through
-    `bufferInsertChar()`. What's left:
-  - `\r` from CRLF clipboards is inserted as a literal character.
+    `bufferInsertChar()`. What's left (both done on `feature/range-undo`):
   - Every character goes through the full insert path (dirty flag, highlight
     invalidation, auto-behaviours). Measure a large paste, and add a bulk
     insert if it's slow.
