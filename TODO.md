@@ -41,14 +41,11 @@ is actually left to do.
     drift on those lines. This needs a column-width helper, used by the
     cursor, the renderer and the selection highlight.
 
-- [ ] **[debt]** Paste — `src/builtins.c`, `editorPaste()` *(was "TODO: Rebuild pasting functionality", above `editorGetClipboard()`)*
-  - Paste works. It inserts the clipboard one character at a time through
-    `bufferInsertChar()`. What's left:
-  - `\r` from CRLF clipboards is inserted as a literal character.
-  - Every character goes through the full insert path (dirty flag, highlight
-    invalidation, auto-behaviours). Measure a large paste, and add a bulk
-    insert if it's slow.
-  - Check that the whole paste undoes as one step.
+- [x] **[debt]** Paste — `src/builtins.c`, `editorPaste()`
+  - Paste is now one bulk insert (`bufferInsertText()`) recorded as a
+    single UNDO_INSERT_TEXT entry, so it undoes in one step. `\r` from
+    CRLF clipboards is dropped. A 20,000-line paste went from about 18 s
+    to well under a second.
 
 ---
 

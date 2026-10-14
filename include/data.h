@@ -484,6 +484,13 @@ enum buffer_type { FILE_BUFF, TERMINAL_BUFF, EXPLORER_BUFF };
 //                             redo joins row+1 back into row.
 //   INSERT_ROW  (row):        undo removes the (blank) row at `row`;
 //                             redo re-inserts a blank row there.
+//   INSERT_TEXT (row,col,text): undo deletes `text` starting at (row,col);
+//                             redo inserts it again.
+//   DELETE_TEXT (row,col,text): undo inserts `text` at (row,col); redo
+//                             deletes it again.
+// The two TEXT kinds cover bulk edits (paste, region delete, LSP edits) in
+// one entry each, however long the text; it is a gmalloc'd UTF-8 string
+// ('\n' between lines) owned by the entry.
 // Consecutive entries sharing a group_id are undone/redone together in one
 // user-facing call — see undoRecord()'s contiguity check for how a group
 // is extended vs. broken.
@@ -494,6 +501,8 @@ typedef enum
     UNDO_SPLIT_LINE,
     UNDO_JOIN_LINE,
     UNDO_INSERT_ROW,
+    UNDO_INSERT_TEXT,
+    UNDO_DELETE_TEXT,
 } UndoKind;
 
 typedef struct
@@ -501,6 +510,7 @@ typedef struct
     UndoKind kind;
     int row, col;
     Utf8Char ch; // meaningful for INSERT_CHAR / DELETE_CHAR only
+    char* text;  // meaningful for INSERT_TEXT / DELETE_TEXT only
     int group_id;
 } UndoEntry;
 

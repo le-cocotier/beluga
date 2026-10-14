@@ -108,6 +108,11 @@ char* bufferGetRegionText(struct buffer_t* buf, int start_row, int start_col,
                           int end_row, int end_col);
 void bufferDeleteRegion(struct buffer_t* buf, int start_row, int start_col,
                         int end_row, int end_col);
+// Inserts `text` (may contain '\n') at the cursor of `buf` as one undo
+// step, leaving the cursor after it. Used by paste.
+void bufferInsertText(struct buffer_t* buf, const char* text);
+// Drops the undo and redo history, e.g. when the content is replaced.
+void bufferClearUndo(struct buffer_t* buf);
 
 // ── Generic text-edit application (LSP formatting/rename use this) ──────
 // Replaces the text in [start_row:start_col, end_row:end_col) with

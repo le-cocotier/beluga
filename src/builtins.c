@@ -1350,8 +1350,28 @@ Lisp editorPaste(Lisp args, LispError *e, LispContext ctx) {
   char *text = editorGetClipboard();
   const unsigned char *p;
   Utf8Char ch;
+  char *src;
+  char *dst;
+  const EditorPane *active;
+  struct buffer_t *buf;
   if (!text)
     return lisp_null();
+
+  // CRLF clipboards (Windows, some browsers): drop the '\r's.
+  for (src = dst = text; *src; src++)
+    if (*src != '\r')
+      *dst++ = *src;
+  *dst = '\0';
+
+  // One bulk insert, undone in one step. Terminal buffers keep the
+  // per-key path (bufferInsertChar() decides what they accept).
+  active = splitScreenGetActivePane();
+  buf = active ? bufferFindById(active->buffer_id) : NULL;
+  if (buf && buf->type != TERMINAL_BUFF) {
+    bufferInsertText(buf, text);
+    gfree(text);
+    return lisp_null();
+  }
 
   p = (const unsigned char *)text;
   while (*p) {

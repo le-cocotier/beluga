@@ -203,8 +203,7 @@ void editorReloadFrom(struct buffer_t* buffer, const Utf8Char* path) {
   buffer->x = 0;
   buffer->y = 0;
   // The entries point at rows and columns of the old content.
-  buffer->undo_stack.count = 0;
-  buffer->redo_stack.count = 0;
+  bufferClearUndo(buffer);
   editorLoadRows(buffer, path);
   syntaxHighlighterInvalidateAfter(buffer, -1);
 }
@@ -493,8 +492,7 @@ void editorReload(struct buffer_t* buffer) {
   buffer->row = NULL;
   buffer->numrows = 0;
   // The entries point at rows and columns of the old content.
-  buffer->undo_stack.count = 0;
-  buffer->redo_stack.count = 0;
+  bufferClearUndo(buffer);
   editorLoadRows(buffer, buffer->fullname);
   fileRememberDiskState(buffer);
   syntaxHighlighterInvalidateAfter(buffer, -1);
