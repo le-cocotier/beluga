@@ -266,10 +266,26 @@ static int cursorPosition(int *rows, int *cols) {
 
 int os_term_size(int *rows, int *cols) {
   struct winsize ws;
+  static int asked = 0; // the cursor-position fallback, done once
+  static int asked_result = -1;
+  static int asked_rows = 0;
+  static int asked_cols = 0;
   if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
-    // Push the cursor to the bottom-right corner and ask where it is.
-    os_term_write("\x1b[999C\x1b[999B", 12);
-    return cursorPosition(rows, cols);
+    // No size from the terminal driver (some serial consoles, a pty whose
+    // size was never set). Push the cursor to the bottom-right corner and
+    // ask where it is — once: the run loop polls the size every tick, and
+    // asking each time read the keyboard for up to a second per tick,
+    // eating keystrokes as if they were the terminal's reply.
+    if (!asked) {
+      asked = 1;
+      os_term_write("\x1b[999C\x1b[999B", 12);
+      asked_result = cursorPosition(&asked_rows, &asked_cols);
+    }
+    if (asked_result == 0) {
+      *rows = asked_rows;
+      *cols = asked_cols;
+    }
+    return asked_result;
   }
   *cols = ws.ws_col;
   *rows = ws.ws_row;

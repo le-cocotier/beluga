@@ -531,6 +531,7 @@ Lisp editorPromptLisp(Lisp args, LispError *e, LispContext ctx) {
  */
 Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
   Utf8Char *pwd;
+  char *slashed;
   Utf8Char *filename;
   EditorPane *active;
   char *cwd;
@@ -538,8 +539,14 @@ Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
   // The working directory as the starting point (getcwd, not $PWD, which
   // Windows shells don't set).
   cwd = os_getcwd();
-  pwd = stringToUtf8((unsigned char *)(cwd ? cwd : ""));
+  // With a trailing slash, so typing a name right away completes inside
+  // the directory instead of appending to its name.
+  slashed = utilFormat("%s%s", cwd ? cwd : "",
+                       (cwd && cwd[0] && cwd[strlen(cwd) - 1] != '/' &&
+                        cwd[strlen(cwd) - 1] != '\\') ? "/" : "");
   free(cwd);
+  pwd = stringToUtf8((unsigned char *)(slashed ? slashed : ""));
+  gfree(slashed);
   filename = editorPrompt("Open : %u", pwd, 1);
   if (filename) {
     active = splitScreenGetActivePane();

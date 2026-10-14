@@ -233,11 +233,16 @@ static void ensureEmergencyBindings(void) {
  * resulting environment.
  */
 static void initConfig(void) {
+  char *lisp_log_path;
 
   E.ctx = lisp_init();
-  // w+: config_load.c reads back what the interpreter wrote here to put
-  // the reason for a failing form in its error message.
-  E.ctx.p->err_port = fopen("lisp_log.err", "w+");
+  // In ~/.beluga, not the directory beluga was started from (where it
+  // used to leave a lisp_log.err behind in every project). w+:
+  // config_load.c reads back what the interpreter wrote here to put the
+  // reason for a failing form in its error message.
+  lisp_log_path = utilFormat("%s/.beluga/lisp_log.err", os_home_dir());
+  E.ctx.p->err_port = lisp_log_path ? fopen(lisp_log_path, "w+") : NULL;
+  gfree(lisp_log_path);
   if (!E.ctx.p->err_port)
     E.ctx.p->err_port = tmpfile();
   lisp_lib_load(E.ctx);
