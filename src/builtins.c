@@ -1118,6 +1118,16 @@ static int packageAlreadyLoaded(const char *name) {
 }
 
 /**
+ * @brief Lisp function: (package-loaded? "name") — #t once add-package has
+ * loaded that package in this session.
+ */
+Lisp packageLoaded(const Lisp args, LispError *e, LispContext ctx) {
+  (void)e;
+  (void)ctx;
+  return lisp_make_bool(packageAlreadyLoaded(lisp_string(lisp_car(args))));
+}
+
+/**
  * @brief Lisp function to load and execute a package
  * @details Loads a Lisp package from the user's packages directory
  * (~/.beluga/packages/<package_name>/init.lisp) and evaluates it — once:

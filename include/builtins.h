@@ -69,6 +69,7 @@ Lisp editorScratchSetLines(Lisp args, LispError *e, LispContext ctx);
 Lisp editorExplorerSidebarOpen(Lisp args, LispError *e, LispContext ctx);
 Lisp editorExplorerClose(Lisp args, LispError *e, LispContext ctx);
 Lisp addPackage(Lisp args, LispError *e, LispContext ctx);
+Lisp packageLoaded(Lisp args, LispError *e, LispContext ctx);
 Lisp editorOpenTerminal(Lisp args, LispError *e, LispContext ctx);
 Lisp editorExecuteCommand(Lisp args, LispError *e, LispContext ctx);
 

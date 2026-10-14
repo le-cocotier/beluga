@@ -60,6 +60,7 @@ void initBuiltins(void) {
   registerBuiltin("editor-set-theme-color", editorSetThemeColor);
   registerBuiltin("editor-insert-char", editorPrintC);
   registerBuiltin("add-package", addPackage);
+  registerBuiltin("package-loaded?", packageLoaded);
   registerBuiltin("buffer-find", bufferFind_L);
   registerBuiltin("buffer-find-reverse", bufferFindReverse_L);
   registerBuiltin("editor-read-char", editorReadChar_L);

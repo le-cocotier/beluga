@@ -75,9 +75,6 @@ is actually left to do.
   loaded. `personal-config` loads before the helper functions defined further
   down the default config (`enter-and-tab`, `editor-buffer-picker`, …), so it
   can't bind them today.
-- [ ] **[feature]** `use-package`: `(use-package "name" ["git-url"])`, which
-  clones a missing non-bundled package on first use and reports a missing
-  or failing one in the status bar (see the `add-package` item above).
 - [ ] **[feature]** A `*packages*` buffer listing every package (bundled /
   git / local, loaded?, branch, dirty, ahead/behind), opening the `*git*`
   view (`git-status-dir`) on a package's repository.
