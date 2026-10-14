@@ -16,8 +16,8 @@ These are the `TODO:` comments that were in the sources, restated with what
 is actually left to do.
 
 - [ ] **[feature]** Tab path completion in prompts — `src/input.c`, `fileCompletion()` / `editorPrompt()` *(was "TODO: upgrade this")*
-  - Only the first match is used: no common-prefix completion, no cycling
-    through candidates on repeated TAB, no listing of the matches.
+  - TAB completes the common prefix and a repeated TAB cycles through the
+    matches. What's left: showing the list of matches while cycling.
 
 - [ ] **[bug]** Saving — `src/file_io.c`, `editorSave()` *(was "TODO: utf8")*
   - The UTF-8 part is done: rows go through `utf8ToString()`. What's left:
