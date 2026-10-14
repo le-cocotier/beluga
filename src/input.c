@@ -202,7 +202,7 @@ Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder,
         // already absolute path
         utf8Printf(path, PATH_MAX, "%u", buf);
       }
-      // TODO(TODO.md): path completion — readdir order, leaks, single match
+      // TODO(TODO.md): path completion — single match only
       full_path = fileCompletion(path);
       if (full_path) {
         buf_len = utf8Printf(buf, PATH_MAX, "%u", full_path);

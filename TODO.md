@@ -15,14 +15,7 @@ incomplete · **[feature]** new capability.
 These are the `TODO:` comments that were in the sources, restated with what
 is actually left to do.
 
-- [ ] **[bug]** Tab path completion in prompts — `src/input.c`, `fileCompletion()` / `editorPrompt()` *(was "TODO: upgrade this")*
-  - The loop skips the first two `readdir()` entries on the assumption that
-    they're `.` and `..`. POSIX doesn't guarantee that order (ext4 with
-    hashed directories, network filesystems), so a real entry can vanish
-    from completion. Skip by name instead.
-  - The returned `full_path` is never freed by `editorPrompt()`: one leak per
-    TAB. The `opendir()`-failed path also leaks it (it returns the caller's
-    `path` instead).
+- [ ] **[feature]** Tab path completion in prompts — `src/input.c`, `fileCompletion()` / `editorPrompt()` *(was "TODO: upgrade this")*
   - Only the first match is used: no common-prefix completion, no cycling
     through candidates on repeated TAB, no listing of the matches.
 
@@ -79,6 +72,13 @@ is actually left to do.
 
 ## Configuration and packages
 
+- [ ] **[feature]** Let a later `map-key` replace an existing binding.
+  Bindings are appended and the **first** registered one wins, so:
+  - a key taken by a package can't be rebound from `personal-config` or at
+    runtime;
+  - every language package fights over `CTRL-d` (see the note in
+    `config/init.lisp`).
+
   Replacing the existing key+prefix entry fixes both. It flips the load
   order rule, though: `(add-package "personal-config")` would then have to
   move to the end of `config/init.lisp`.
@@ -95,14 +95,9 @@ is actually left to do.
   loaded. `personal-config` loads before the helper functions defined further
   down the default config (`enter-and-tab`, `editor-buffer-picker`, …), so it
   can't bind them today.
-- [x] ~~`install.sh --update`~~: bundled packages now live in `packages/` and
-  every install brings them up to date (`--dev` symlinks them instead).
 - [ ] **[feature]** `use-package`: `(use-package "name" ["git-url"])`, which
   clones a missing non-bundled package on first use and reports a missing
   or failing one in the status bar (see the `add-package` item above).
-- [x] ~~Git manager~~: the `git` package (`CTRL-x g`) — status, stage,
-  discard, diff, commit/amend, log, branches, and push/pull/fetch in the
-  background through the new `process-start`.
 - [ ] **[feature]** A `*packages*` buffer listing every package (bundled /
   git / local, loaded?, branch, dirty, ahead/behind), opening the `*git*`
   view (`git-status-dir`) on a package's repository.
