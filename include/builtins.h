@@ -214,4 +214,14 @@ Lisp l_memoryInspectorCycleSort(Lisp args, LispError *e, LispContext ctx);
 Lisp l_memoryInspectorExport(Lisp args, LispError *e, LispContext ctx);
 #endif
 
+// Buffer text from Lisp (builtins_edit.c)
+Lisp l_bufferInsertString(Lisp args, LispError *e, LispContext ctx);
+Lisp l_bufferDeleteRange(Lisp args, LispError *e, LispContext ctx);
+Lisp l_bufferReplaceRange(Lisp args, LispError *e, LispContext ctx);
+Lisp l_bufferText(Lisp args, LispError *e, LispContext ctx);
+Lisp l_setCursor(Lisp args, LispError *e, LispContext ctx);
+Lisp l_regionBounds(Lisp args, LispError *e, LispContext ctx);
+Lisp l_bufferLocalSet(Lisp args, LispError *e, LispContext ctx);
+Lisp l_bufferLocal(Lisp args, LispError *e, LispContext ctx);
+
 #endif

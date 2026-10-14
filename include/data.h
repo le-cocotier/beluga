@@ -618,6 +618,10 @@ typedef struct buffer_t
     long long disk_size;
     int disk_conflict;
 
+    // buffer-local-set / buffer-local (builtins_edit.c): an alist of
+    // (symbol . value). lisp_null() — all zero — when empty.
+    Lisp locals;
+
     struct buffer_t* next;
     struct buffer_t* prev;
 
