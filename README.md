@@ -59,6 +59,8 @@ to a release for that tag (`.gitea/workflows/release-windows.yml`).
 
 To cross-compile `beluga.exe` from Linux: `meson setup --cross-file cross/mingw-w64.ini build-windows && meson compile -C build-windows`
 (needs the `mingw-w64` package).
+Adding `--cross-file cross/wine.ini` to that setup lets `meson test -C build-windows` run the
+Windows test programs under Wine.
 
 **Checking memory** (developers): build with AddressSanitizer and UndefinedBehaviorSanitizer:
 `meson setup -Db_sanitize=address,undefined -Dbuildtype=debug build-asan && meson compile -C build-asan`.

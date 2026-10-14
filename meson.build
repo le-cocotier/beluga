@@ -129,7 +129,7 @@ test('os-boundary', find_program('tools/check_os_boundary.sh'),
 
 # Unit tests (test/): each is a small program linked against the editor's
 # code; test/test.c stands in for main.c's globals.
-foreach t : ['utf8', 'buffer', 'ansi_parser']
+foreach t : ['utf8', 'buffer', 'ansi_parser', 'os']
   test(t, executable('test_' + t,
     files('test/test_' + t + '.c', 'test/test.c'),
     c_args : core_args,
