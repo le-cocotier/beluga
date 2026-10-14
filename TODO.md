@@ -48,6 +48,12 @@ is actually left to do.
   reproduces on older binaries too, so it's not a regression. Start from
   `ptyForwardKey()` (`src/input.c`) and the input read in
   `editorRunLoop()` (`src/editor_op.c`).
+  - Doesn't reproduce on Linux (bash and dash, a 100-character line sent in
+    one write, keys 2 ms apart, typing during `seq 1 200000`): every key
+    arrived. Input isn't buffered in user space (`readKeyBytes()` reads
+    straight from the fd), so a key can't be lost between ticks. Likely
+    macOS-specific; next step is a repro there (which shell, which
+    terminal app, what was typed).
 - [ ] **[bug]** `map-key` (`src/builtins.c`, `mapKey()`) copies the key
   with `strncpy(dst, src, 50)` into a `galloc(256)` buffer that isn't
   zeroed. A key sequence of 50+ characters has no terminator. Copy with a
