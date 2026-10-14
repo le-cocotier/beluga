@@ -1,4 +1,5 @@
-;; MACROS
+;; SETTINGS (CTRL-x c s lists them all, with their defaults). One missing
+;; here takes its default.
 
 (define TAB-LENGTH 2)
 (define QUIT-TIMES 1)
@@ -38,6 +39,7 @@
 (add-prefix "config")
 (add-prefix "help")
 (add-prefix "help-view" #t) ; keys inside *help* and *bindings*
+(add-prefix "settings-view" #t) ; keys inside *settings*
 
 ;; PACKAGES
 ;;
@@ -277,6 +279,22 @@
     (if (and name (> (string-length name) 0))
         (help--show "*help*" (describe-function name)))))
 
+;; SETTINGS — CTRL-x c s lists every setting with its value, default and
+;; what it does; M-x describe-variable-prompt describes one.
+(define (settings--show title lines)
+  (let ((id (editor-scratch-open title)))
+    (editor-scratch-set-lines id lines)
+    (editor-scratch-set-prefix id "settings-view")
+    (editor-switch-to-buffer id)))
+
+(define (list-settings)
+  (settings--show "*settings*" (settings)))
+
+(define (describe-variable-prompt)
+  (let ((name (editor-prompt "Describe variable: %u" "" #f)))
+    (if (and name (> (string-length name) 0))
+        (settings--show "*help*" (describe-variable name)))))
+
 ;; Global
 (map-key "CTRL-g" '(editor-set-prefix "no-prefix") "*")
 
@@ -357,8 +375,16 @@
 (map-key "q" editor-kill-buffer "help-view")
 (map-key "CTRL-x" '(editor-set-prefix "user") "help-view")
 
+;; settings-view (inside *settings*; q closes)
+(map-key "ARROW-UP" '(move-cursor "up") "settings-view")
+(map-key "ARROW-DOWN" '(move-cursor "down") "settings-view")
+(map-key "q" editor-kill-buffer "settings-view")
+(map-key "CTRL-x" '(editor-set-prefix "user") "settings-view")
+(map-key "ALT-x" execute-command "settings-view")
+
 ;; config
 (map-key "c" editor-open-config "config")
+(map-key "s" list-settings "config")
 (map-key "p" '(dired-open "~/.beluga/packages") "config")
 (map-key "m" '(editor-open-file-path "~/.beluga/packages/personal-config/init.lisp") "config")
 ;; project

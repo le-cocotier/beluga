@@ -115,7 +115,8 @@ src_files = files(
   'src/file_finder.c',
   'src/macro.c',
   'src/screen_diff.c',
-  'src/describe.c'
+  'src/describe.c',
+  'src/settings.c'
 )
 
 # Everything but main(), so the unit tests link the same code.

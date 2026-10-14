@@ -6,6 +6,7 @@
 #include "../include/config_load.h"
 #include "../include/data.h"
 #include "../include/describe.h"
+#include "../include/settings.h"
 #include "../include/define.h"
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
@@ -102,6 +103,8 @@ void initBuiltins(void) {
   registerBuiltin("describe-key", describeKey);
   registerBuiltin("key-bindings", keyBindings);
   registerBuiltin("describe-function", describeFunction);
+  registerBuiltin("describe-variable", describeVariable);
+  registerBuiltin("settings", settingsList);
   registerBuiltin("editor-redo", editorRedo);
   registerBuiltin("editor-set-mark", editorSetMark);
   registerBuiltin("editor-kill-region", editorKillRegion);
@@ -279,40 +282,9 @@ static void initConfig(void) {
 }
 
 /**
- * @brief Read a boolean setting from init.lisp, falling back to `fallback`
- * when the symbol isn't defined at all.
- * @details Uses an env lookup rather than lisp_read+lisp_eval (as the
- * older constants do) precisely so a config predating the setting still
- * loads: evaluating an unbound symbol raises a Lisp error and yields a
- * junk value, which would silently turn the feature on or off at random
- * for every existing ~/.beluga/config/init.lisp out there.
- */
-static int readBoolConst(const char *name, int fallback) {
-  int present = 0;
-  const Lisp val =
-      lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(name, E.ctx), &present);
-  if (!present)
-    return fallback;
-  return lisp_is_true(val);
-}
-
-/**
- * @brief Read an integer setting from init.lisp, falling back to
- * `fallback` when the symbol isn't defined or isn't an integer.
- */
-static int readIntConst(const char *name, int fallback) {
-  int present = 0;
-  const Lisp val =
-      lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(name, E.ctx), &present);
-  if (!present || lisp_type(val) != LISP_INT)
-    return fallback;
-  return (int)lisp_int(val);
-}
-
-/**
- * @brief Reads non-color startup constants (LSP, LINE-NUMBERS, WHICH-KEY,
- * TAB-LENGTH, QUIT-TIMES) out of the Lisp environment initConfig() just
- * finished loading, into E.constantes.
+ * @brief Reads the settings (LSP, LINE-NUMBERS, WHICH-KEY, TAB-LENGTH, ...)
+ * out of the Lisp environment initConfig() just finished loading, into
+ * E.constantes — see the table in settings.c.
  * @details Despite the historical name this doesn't touch theme *colors*
  * at all — those are set directly onto E.theme by the editor-set-theme-color
  * builtin, called as a side effect of evaluating config/init.lisp inside
@@ -324,16 +296,8 @@ static int readIntConst(const char *name, int fallback) {
  * (LSP, TAB-LENGTH, ...) that only exist once init.lisp has been evaluated.
  */
 static void initStartupConstants(void) {
-  // Fallbacks are the bundled config's values, so a config that failed to
-  // load (or predates a setting) behaves like the default one.
-  E.constantes.LSP = readBoolConst("LSP", 1);
-  E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
-  E.constantes.WHICH_KEY = readBoolConst("WHICH-KEY", 1);
-  E.constantes.LSP_SIGNATURE_HELP = readBoolConst("LSP-SIGNATURE-HELP", 1);
-  E.constantes.AUTOSAVE_INTERVAL = readIntConst("AUTOSAVE-INTERVAL", 15);
+  settingsLoad();
   appDebug("LSP ON : %d", E.constantes.LSP);
-  E.constantes.TAB_LENGTH = readIntConst("TAB-LENGTH", 2);
-  E.constantes.QUIT_TIMES = readIntConst("QUIT-TIMES", 1);
 }
 
 /**

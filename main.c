@@ -18,6 +18,7 @@
 #include "include/galloc.h"
 #include "include/init.h"
 #include "include/os.h"
+#include "include/settings.h"
 #include "include/split_screen.h"
 #include "include/terminal.h"
 #include "include/utf8.h"
@@ -82,7 +83,9 @@ int main(const int argc, char *argv[]) {
   // startup buffers are open: a hook can bind keys to functions defined
   // anywhere in the config, and act on the current buffer.
   runHooks("after-init", lisp_null());
-  // After the HELP line, so a config mistake is what the status bar shows.
+  // After the HELP line, so a config mistake is what the status bar shows
+  // (a load error over an invalid setting).
+  settingsReportProblems();
   configShowErrors();
 
   while (!E.exit_requested) {
