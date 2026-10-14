@@ -83,10 +83,10 @@ static void lsp_send_response(const LspClient *lsp, const cJSON *id, cJSON *resu
  */
 static void lsp_sync_if_dirty(LspClient *lsp, struct buffer_t *buf)
 {
-    if (!buf->b_lsp_open || buf->dirty == buf->lsp_synced_dirty)
+    if (!buf->b_lsp_open || buf->edit_seq == buf->lsp_synced_seq)
         return;
     lspDidChange(lsp, buf);
-    buf->lsp_synced_dirty = buf->dirty;
+    buf->lsp_synced_seq = buf->edit_seq;
 }
 
 /**
@@ -259,7 +259,7 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
                     lspDidOpen(lsp, b);
                     b->b_lsp_open = 1;
                 }
-                b->lsp_synced_dirty = b->dirty;
+                b->lsp_synced_seq = b->edit_seq;
             }
             b = b->next;
         } while (b->buffer_id != first_buffer_id);
@@ -1363,6 +1363,17 @@ static int lspBufferUri(const struct buffer_t *buf, char *uri, size_t uri_size)
     return 1;
 }
 
+/**
+ * @brief The version number sent with a buffer's didOpen/didChange.
+ * @details The spec requires it to increase with every change. edit_seq
+ * never goes down (unlike `dirty`, which saving resets), and every
+ * didChange follows at least one edit, so each one is above the last.
+ */
+static int lspDocumentVersion(const struct buffer_t* buf)
+{
+    return buf->edit_seq + 1;
+}
+
 void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
 {
     char uri[PATH_MAX + 8];
@@ -1407,7 +1418,7 @@ void lspDidOpen(LspClient* lsp, struct buffer_t* buf)
     textDoc = cJSON_CreateObject();
     cJSON_AddStringToObject(textDoc, "uri", uri);
     cJSON_AddStringToObject(textDoc, "languageId", language_id);
-    cJSON_AddNumberToObject(textDoc, "version", 1);
+    cJSON_AddNumberToObject(textDoc, "version", lspDocumentVersion(buf));
     cJSON_AddStringToObject(textDoc, "text", text);
     cJSON_AddItemToObject(params, "textDocument", textDoc);
     cJSON_AddItemToObject(root, "params", params);
@@ -1446,7 +1457,7 @@ void lspDidChange(LspClient* lsp, struct buffer_t* buf)
     params = cJSON_CreateObject();
     textDoc = cJSON_CreateObject();
     cJSON_AddStringToObject(textDoc, "uri", uri);
-    cJSON_AddNumberToObject(textDoc, "version", buf->dirty);
+    cJSON_AddNumberToObject(textDoc, "version", lspDocumentVersion(buf));
     cJSON_AddItemToObject(params, "textDocument", textDoc);
 
     changes = cJSON_CreateArray();
@@ -1981,7 +1992,7 @@ static void lsp_fire_completion_now(void)
         return;
 
     lspDidChange(E.lsp_client, buf);
-    buf->lsp_synced_dirty = buf->dirty;
+    buf->lsp_synced_seq = buf->edit_seq;
     lspRequestCompletion(E.lsp_client, buf, buf->y, buf->x,
                           active->cursor_x + active->origin_x + editorGutterWidth(buf),
                           active->cursor_y + active->origin_y);
@@ -2043,7 +2054,7 @@ void lspSyncDebounceTick(void)
     if (!buf || buf->type != FILE_BUFF || !buf->b_lsp_open)
         return;
 
-    if (buf->dirty == buf->lsp_synced_dirty) {
+    if (buf->edit_seq == buf->lsp_synced_seq) {
         E.lsp_client->sync_debounce_pending = 0;
         return;
     }
@@ -2061,7 +2072,7 @@ void lspSyncDebounceTick(void)
         return;
 
     lspDidChange(E.lsp_client, buf);
-    buf->lsp_synced_dirty = buf->dirty;
+    buf->lsp_synced_seq = buf->edit_seq;
     E.lsp_client->sync_debounce_pending = 0;
 }
 
