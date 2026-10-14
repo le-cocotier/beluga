@@ -4,6 +4,7 @@
 #include "../include/color.h"
 #include "../include/completion.h"
 #include "../include/data.h"
+#include "../include/describe.h"
 #include "../include/define.h"
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
@@ -90,6 +91,9 @@ void initBuiltins(void) {
   registerBuiltin("lsp-format-buffer", lspFormatBuffer);
   registerBuiltin("editor-open-terminal", editorOpenTerminal);
   registerBuiltin("editor-undo", editorUndo);
+  registerBuiltin("describe-key", describeKey);
+  registerBuiltin("key-bindings", keyBindings);
+  registerBuiltin("describe-function", describeFunction);
   registerBuiltin("editor-redo", editorRedo);
   registerBuiltin("editor-set-mark", editorSetMark);
   registerBuiltin("editor-kill-region", editorKillRegion);

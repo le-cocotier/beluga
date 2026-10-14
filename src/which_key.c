@@ -191,6 +191,23 @@ static void buildBindNames(void) {
     }
 }
 
+const char *whichKeyBindingName(const int index) {
+    buildBindNames();
+    if (!g_bind_names || index < 0 || index >= g_bind_names_count)
+        return NULL;
+    return g_bind_names[index];
+}
+
+const char *whichKeyCommandName(const Lisp value) {
+    static char name[WK_ENTRY_MAX];
+    const char *resolved;
+    resolved = symbolNameForValue(value, lisp_table_to_alist(lisp_car(lisp_env(E.ctx)), E.ctx));
+    if (!resolved)
+        return NULL;
+    snprintf(name, sizeof(name), "%s", resolved);
+    return name;
+}
+
 void whichKeyBuildCommandList(void) {
     Lisp alist;
     int cap;

@@ -104,7 +104,8 @@ src_files = files(
   'src/async_process.c',
   'src/project_files.c',
   'src/project_search.c',
-  'src/file_finder.c'
+  'src/file_finder.c',
+  'src/describe.c'
 )
 
 executable('beluga',
