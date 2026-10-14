@@ -6,20 +6,32 @@
 #include <stdlib.h>
 #include <string.h>
 
+// One colour's SGR parameters: `base` is 30 for the foreground, 40 for the
+// background (see TermCellAttr for the encoding).
+static int appendColor(char* codes, const int size, const int base, const unsigned int color)
+{
+    if (color == 0)
+        return 0;
+    if (color & TERM_COLOR_RGB)
+        return snprintf(codes, size, ";%d;2;%u;%u;%u", base + 8, (color >> 16) & 0xFF,
+                        (color >> 8) & 0xFF, color & 0xFF);
+    if (color <= 8)
+        return snprintf(codes, size, ";%u", base + color - 1);
+    if (color <= 16)
+        return snprintf(codes, size, ";%u", base + 60 + color - 9);
+    return snprintf(codes, size, ";%d;5;%u", base + 8, color - 1);
+}
+
 static void appendSgrFor(char* out, int* pos, const int buf_size, const TermCellAttr a)
 {
-    // Only emit a code if this cell has any non-default attribute;
-    // ground-state rendering can just skip the color set/reset pair.
-    char codes[64] = "\x1b[0"; // always start from reset to avoid state leaking between cells
+    char codes[96] = "\x1b[0"; // always start from reset to avoid state leaking between cells
     int n = 3;
     if (a.bold)      n += snprintf(codes + n, sizeof(codes) - n, ";1");
     if (a.underline) n += snprintf(codes + n, sizeof(codes) - n, ";4");
     if (a.reverse)   n += snprintf(codes + n, sizeof(codes) - n, ";7");
-    if (a.fg >= 1 && a.fg <= 8)  n += snprintf(codes + n, sizeof(codes) - n, ";%d", 30 + (a.fg - 1));
-    if (a.fg >= 9 && a.fg <= 16) n += snprintf(codes + n, sizeof(codes) - n, ";%d", 90 + (a.fg - 9));
-    if (a.bg >= 1 && a.bg <= 8)  n += snprintf(codes + n, sizeof(codes) - n, ";%d", 40 + (a.bg - 1));
-    if (a.bg >= 9 && a.bg <= 16) n += snprintf(codes + n, sizeof(codes) - n, ";%d", 100 + (a.bg - 9));
-    n += snprintf(codes + n, sizeof(codes) - n, "m");
+    n += appendColor(codes + n, (int) sizeof(codes) - n, 30, a.fg);
+    n += appendColor(codes + n, (int) sizeof(codes) - n, 40, a.bg);
+    snprintf(codes + n, sizeof(codes) - n, "m");
 
     *pos += snprintf(out + *pos, buf_size - *pos, "%s", codes);
 }
@@ -47,7 +59,8 @@ char* termRenderRow(const Row* row, int* length, int x_offset, int width)
     visible = end - start;
     if (visible < 0) visible = 0;
 
-    buf_size = (visible + 1) * 32 + 64 + span.lead_pad;
+    // Per cell: its bytes and, at worst, a full SGR (two truecolours).
+    buf_size = (visible + 1) * 64 + 64 + span.lead_pad;
     result = galloc(buf_size);
     if (!result) { *length = 0; return NULL; }
 

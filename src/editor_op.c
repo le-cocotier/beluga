@@ -187,7 +187,7 @@ void editorRunLoop(void) {
         b = terminals[i];
         while ((n = os_stream_read(ptySessionOutput(b), chunk, sizeof(chunk), 0)) > 0) {
           ansiParserFeed(b, chunk, (size_t)n);
-          b->x = b->term_state.cursor_x;
+          b->x = ansiParserCursorIndex(b);
           b->y = b->term_state.cursor_y;
         }
         // The shell has exited: release it. The buffer keeps showing what

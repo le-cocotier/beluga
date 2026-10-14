@@ -121,13 +121,14 @@ static void testEraseDeleteInsertChars(void) {
 
 static void testControlsAndPrivateModes(void) {
   // BEL and other C0 controls never reach the text, and DEC private
-  // sequences aren't mistaken for erase/cursor commands.
+  // sequences aren't mistaken for erase/cursor commands. VT moves down
+  // like LF, which (unlike CR LF) keeps the column.
   Buffer *buf = terminalBuffer();
-  feed(buf, "a\x07" "b\x0e\x0f" "c\x1b[?25l\x1b[?1049h\x1b[?2Jd");
+  feed(buf, "a\x07" "b\x0e\x0f" "c\x1b[?25l\x1b[?2004h\x1b[?2Jd");
   CHECK_ROW(buf, 0, "abcd");
   feed(buf, "\x0b" "e");
   CHECK_INT(buf->numrows, 2);
-  CHECK_ROW(buf, 1, "e");
+  CHECK_ROW(buf, 1, "    e");
   bufferFree(buf);
 }
 
@@ -137,6 +138,122 @@ static void testAbsolutePositions(void) {
   CHECK_ROW(buf, 0, "y");
   CHECK_ROW(buf, 1, "w");
   CHECK_ROW(buf, 2, "z");
+  bufferFree(buf);
+}
+
+static void testCharsetDesignation(void) {
+  // ESC ( B (ncurses' sgr0 starts with it) is swallowed whole.
+  Buffer *buf = terminalBuffer();
+  feed(buf, "a\x1b(Bb\x1b)0c\x1b#8d");
+  CHECK_ROW(buf, 0, "abcd");
+  bufferFree(buf);
+}
+
+static void testWideCharacterColumns(void) {
+  // The cursor counts columns: after two wide characters it is at column
+  // 4, and a position on the line lands where the terminal shows it.
+  Buffer *buf = terminalBuffer();
+  feed(buf, "\xe4\xb8\xad\xe6\x96\x87x");
+  CHECK_INT(buf->term_state.cursor_x, 5);
+  CHECK_INT(ansiParserCursorIndex(buf), 3);
+  feed(buf, "\x1b[1;5Hy");
+  CHECK_ROW(buf, 0, "\xe4\xb8\xad\xe6\x96\x87y");
+  // Overwriting half of a wide character leaves a blank in the other half.
+  feed(buf, "\x1b[1;2Hz");
+  CHECK_ROW(buf, 0, " z\xe6\x96\x87y");
+  // A combining mark joins the character before it.
+  feed(buf, "\x1b[1;6He\xcc\x81!");
+  CHECK_ROW(buf, 0, " z\xe6\x96\x87ye\xcc\x81!");
+  CHECK_INT(buf->term_state.cursor_x, 7);
+  bufferFree(buf);
+}
+
+static void testColors(void) {
+  Buffer *buf = terminalBuffer();
+  feed(buf, "\x1b[31ma\x1b[38;5;208mb\x1b[38;2;1;2;3;48;5;4mc\x1b[94;101md\x1b[0me");
+  CHECK_INT(buf->row[0].attrs[0].fg, 2);
+  CHECK_INT(buf->row[0].attrs[1].fg, 209);
+  CHECK_INT(buf->row[0].attrs[2].fg, TERM_COLOR_RGB | 0x010203);
+  CHECK_INT(buf->row[0].attrs[2].bg, 5);
+  CHECK_INT(buf->row[0].attrs[3].fg, 13);
+  CHECK_INT(buf->row[0].attrs[3].bg, 10);
+  CHECK_INT(buf->row[0].attrs[4].fg, 0);
+  CHECK_INT(buf->row[0].attrs[4].bg, 0);
+  // The colon form, and an underline colour that's skipped.
+  feed(buf, "\x1b[38:5:21;58;5;3mf");
+  CHECK_INT(buf->row[0].attrs[5].fg, 22);
+  bufferFree(buf);
+}
+
+static void testAlternateScreen(void) {
+  // vim, less, htop: the alternate screen starts blank, and leaving it
+  // brings back the shell's screen and cursor as they were.
+  Buffer *buf = terminalBuffer();
+  feed(buf, "$ vim\r\n");
+  feed(buf, "\x1b[?1049h\x1b[Hfull\x1b[5;1Hscreen");
+  CHECK_INT(buf->numrows, 10);
+  CHECK_ROW(buf, 0, "full");
+  CHECK_ROW(buf, 4, "screen");
+  feed(buf, "\x1b[?1049l");
+  CHECK_INT(buf->numrows, 1);
+  CHECK_ROW(buf, 0, "$ vim");
+  CHECK_INT(buf->term_state.cursor_y, 1);
+  CHECK_INT(buf->term_state.cursor_x, 0);
+  // Freed while still on the alternate screen: nothing leaks (ASan).
+  feed(buf, "\x1b[?1049h");
+  bufferFree(buf);
+}
+
+static void testScrollRegion(void) {
+  // A status line under a scrolling region (less, vim): LF at the region's
+  // bottom scrolls only the region.
+  Buffer *buf = terminalBuffer();
+  feed(buf, "\x1b[?1049h\x1b[10;1Hstatus\x1b[1;9r");
+  CHECK_INT(buf->term_state.cursor_y, 0);
+  feed(buf, "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10");
+  CHECK_ROW(buf, 0, "2");
+  CHECK_ROW(buf, 8, "10");
+  CHECK_ROW(buf, 9, "status");
+  CHECK_INT(buf->numrows, 10);
+  // Reverse index at the top scrolls the region down.
+  feed(buf, "\x1b[1;1H\x1bMtop");
+  CHECK_ROW(buf, 0, "top");
+  CHECK_ROW(buf, 1, "2");
+  CHECK_ROW(buf, 8, "9");
+  CHECK_ROW(buf, 9, "status");
+  bufferFree(buf);
+}
+
+static void testInsertDeleteLines(void) {
+  Buffer *buf = terminalBuffer();
+  feed(buf, "\x1b[?1049ha\r\nb\r\nc\r\nd\x1b[2;1H\x1b[L");
+  CHECK_ROW(buf, 0, "a");
+  CHECK_ROW(buf, 1, "");
+  CHECK_ROW(buf, 2, "b");
+  CHECK_ROW(buf, 4, "d");
+  feed(buf, "\x1b[2M");
+  CHECK_ROW(buf, 1, "c");
+  CHECK_ROW(buf, 2, "d");
+  CHECK_ROW(buf, 3, "");
+  CHECK_INT(buf->numrows, 10);
+  // Scroll Up / Down move the whole region.
+  feed(buf, "\x1b[S");
+  CHECK_ROW(buf, 0, "c");
+  feed(buf, "\x1b[2T");
+  CHECK_ROW(buf, 2, "c");
+  bufferFree(buf);
+}
+
+static void testScrollbackOnNormalScreen(void) {
+  // Without a region, the normal screen keeps what scrolls off as
+  // scrollback, as before.
+  Buffer *buf = terminalBuffer();
+  int i;
+  for (i = 0; i < 15; i++)
+    feed(buf, "line\r\n");
+  CHECK_INT(buf->term_state.screen_top_row, 6);
+  CHECK_INT(buf->term_state.cursor_y, 15);
+  CHECK_INT(buf->numrows, 15);
   bufferFree(buf);
 }
 
@@ -153,5 +270,12 @@ int main(void) {
   testEraseDeleteInsertChars();
   testControlsAndPrivateModes();
   testAbsolutePositions();
+  testCharsetDesignation();
+  testWideCharacterColumns();
+  testColors();
+  testAlternateScreen();
+  testScrollRegion();
+  testInsertDeleteLines();
+  testScrollbackOnNormalScreen();
   return testDone();
 }

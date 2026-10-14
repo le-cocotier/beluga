@@ -5,6 +5,7 @@
 
 #include "../include/buffer.h"
 #include "../include/autosave.h"
+#include "../include/ansi_parser.h"
 #include "../include/galloc.h"
 #include "../include/data.h"
 #include "../include/editor_op.h"
@@ -1917,6 +1918,8 @@ void bufferFree(struct buffer_t *buf) {
   int i;
   if (!buf)
     return;
+  if (buf->type == TERMINAL_BUFF)
+    ansiParserRelease(buf);
   for (i = 0; i < buf->numrows; i++)
     bufferFreeRow(&buf->row[i]);
   gfree(buf->row);

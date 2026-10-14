@@ -35,12 +35,17 @@ typedef struct utf8_char_t
  */
 typedef struct term_cell_attr_t
 {
-    unsigned char fg;        // 0 = default, 1-8 = ANSI 30-37, 9-16 = bright 90-97
-    unsigned char bg;        // same encoding as fg, for 40-47 / 100-107
+    // 0 = default; 1-256 = palette entry n-1 (so 1-8 are ANSI 30-37, 9-16
+    // bright 90-97, 17-256 the rest of the 256 colours, 38;5;n);
+    // TERM_COLOR_RGB | 0xRRGGBB = truecolour (38;2;r;g;b).
+    unsigned int fg;
+    unsigned int bg;         // same encoding as fg, for 40-47 / 100-107 / 48;...
     unsigned char bold : 1;
     unsigned char underline : 1;
     unsigned char reverse : 1;
 } TermCellAttr;
+
+#define TERM_COLOR_RGB 0x1000000u
 
 /**
  * \struct Row
@@ -456,6 +461,7 @@ typedef enum
     TPARSE_CSI,
     TPARSE_OSC,       // consuming/discarding an OSC string
     TPARSE_OSC_ESC,   // saw ESC while inside OSC — might be the ST terminator (ESC \)
+    TPARSE_ESC_INTER, // ESC + intermediate byte (ESC ( B, ESC # 8, ...): one more byte ends it
 } TermParseState;
 
 /**
@@ -467,11 +473,28 @@ typedef struct term_parser_state_t
     TermParseState state;
     int params[CSI_MAX_PARAMS];
     int nparams;
-    int csi_private;                  // CSI had a '?', '>', '<' or '=' prefix (DEC private mode)
-    int cursor_x, cursor_y;           // relative to buf->numrows origin
+    int csi_private;                  // CSI's '?', '>', '<' or '=' prefix byte, or 0
+    int csi_intermediate;             // CSI had an intermediate byte (CSI ! p, CSI SP q, ...)
+    int cursor_x;                     // screen column (wide characters take two)
+    int cursor_y;                     // row index in the buffer
     int saved_cursor_x, saved_cursor_y;
+    TermCellAttr saved_attr;
     int screen_top_row;
     int pane_height;
+    // Scroll region (DECSTBM): its first screen row counted from 0, its
+    // last counted from 1, 0 meaning the screen's last row whatever the
+    // pane's height (so a zeroed state has no region).
+    int scroll_top, scroll_bottom;
+    // Alternate screen (CSI ? 1049 h, used by vim, less, htop): the normal
+    // screen's rows wait here, and buf->row holds the alternate screen.
+    int alt_screen;
+    Row* main_rows;
+    int main_numrows;
+    int main_top_row;
+    // Where the last character went: the cursor's column, on row
+    // col_cache_y, starts at character col_cache_idx (see putChar()).
+    int col_cache_valid;
+    int col_cache_y, col_cache_x, col_cache_idx;
 
     TermCellAttr current_attr;
 
