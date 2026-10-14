@@ -1,0 +1,5 @@
+zContent-Length: 89
+
+{"jsonrpc": "2.0", "method": "window/logMessage", "params": {"type": 3, "message": "hi"}}Content-Length: 56
+
+{"jsonrpc": "2.0", "method": "$/progress", "params": {}}

@@ -438,6 +438,14 @@ void bufferApplyTextEdit(struct buffer_t *buf, int start_row, int start_col,
   // Defensive clamp: a server's reported range should always be in
   // bounds, but a stale/misaligned response should never be allowed to
   // read past the row array.
+  if (start_row < 0)
+    start_row = 0;
+  if (start_col < 0)
+    start_col = 0;
+  if (end_row < 0)
+    end_row = 0;
+  if (end_col < 0)
+    end_col = 0;
   if (start_row >= buf->numrows)
     start_row = buf->numrows > 0 ? buf->numrows - 1 : 0;
   if (end_row >= buf->numrows)

@@ -1,0 +1,5 @@
+ŸContent-Length: 0
+
+Content-Length: 119
+
+{"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": "file:///fuzz.c", "diagnostics": []}}

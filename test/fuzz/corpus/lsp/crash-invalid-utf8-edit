@@ -1,0 +1,80 @@
+ŸCoengtp 0	
+
+Content-Length: 105
+
+000000000007254900000000010000000˜000000///fuzz.c0000001000lllic00˜ : [{"edit": {"changes": {ŸCoengtp: 0	
+
+Content-Length: 105
+
+0000000000072549000ÐÏÏÏÏÏÎÊ000000˜000000///fuzz.c0000001000lllic00˜ : []}ŸC	
+
+ContentmLength: 105
+
+00000Content-Length: 218
+
+{"jsonrpc": "2.0", "id": 7, "method": "workspace/applyEdit", "params": {"edit": {"changes": {"file:///fuzz.c": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}, "newText":" ˆ"}]}}}}-Lengtx: 0
+
+Con
+Content-Length: 111
+0.
+
+00000ength: 105
+
+000000000007254900000000010000000˜000000///fuzz.c0000001000lllic00˜ : []}ŸC	
+
+Content-Length: 105
+
+00000Content-Length: 218
+
+{"jsonrpc": "2.0", "id": 7, "method": "workspace/applyEdit", "params": {"edit": {"changes": {"file:///fuzz.c": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "newText":" x"}]}}}}-Lengtx: 0
+
+Con
+Content-Length:": {"edit": {"changes": {"file:///fuzz.c": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}, "newText":" x"}]}}}}-Lengtx: 0
+
+Con
+Content-Length: 111
+
+00000ength: 105
+
+000000000007254900000000010000000˜000000///fuzz.c0000001000lllic00˜ : []}ŸC	
+
+Content-Length: 105
+
+00000Content-Length: 218
+
+{"jsonrpc": "2.0", "id": 7, "method": "workspace/applyEdit", "params": {"edit": {"changes": {"file:///fuzz.c": [{"range": {"start "character": 0}, "end": {"line": 0, "character": 1}}, "newText":" x"}]}}}}-Lengtx: 0
+
+Con
+Content-Length: 111
+0.
+
+00000ength: 105
+
+000000000007254900000000010000": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "newText":" x"}]}}}}-Lengtx: 0
+
+Con
+Content-Length: 111
+
+00000000742845301193263559tx:2222@00000000100000///fuzz.c0000001000lllic00˜ : []}ŸC	
+
+Content-Length: 105
+
+00000Content-Length: 218
+
+{"jsonrpc": "2.0", "id": 7, "method": "workspace/applyEdit", "params": {"edit": {"changes": {"file:///fuzz.c": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}, "newText":" x"}]}}}}-Lengtx: 0
+
+Con
+Content-Length: 111
+0.
+
+00000ength: 105
+
+000000000007254900000000010000000˜000000///fuzz.c0000001000lllic00˜ : []}ŸC	
+
+Content-Length: 105
+
+00000Content-Length: 218
+
+{"jsonrpc": "2.0", "id": 7, "method": "workspace/applyEdit", "params": {"edit": {"changes": {"file:///fuzz.c": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "newText":" x"}]}}}}-Lengt0000˜000000///fuzz.c00ÿÿÿÿÿÿÿJ000 111
+
+00000000742845301193263559tx:2222@0000000010000000˜000000///fuzz.c00ÿÿÿÿÿÿÿJ00001000lllic00˜  "x"}]}}}}
