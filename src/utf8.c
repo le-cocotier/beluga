@@ -405,7 +405,7 @@ Utf8Char* stringToUtf8(unsigned char* string)
         string += utf8CreateChar(string, new_string + i);
         ++i;
     }
-    END_OF_STRING(new_string[i])
+    END_OF_STRING(new_string[i]);
     return new_string;
 }
 

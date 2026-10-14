@@ -61,7 +61,7 @@ extern EditorConfig E;
  * @return Matching prefix_t structure, or E.prefix[0] if not found
  * @note Updates global editor state E
  */
-struct prefix_t find_prefix(const char prefix_name[64]) {
+struct prefix_t find_prefix(const char *prefix_name) {
   int i = E.number_of_prefix + 1;
   while (i--) {
     if (!strcmp(prefix_name, E.prefix[i].prefix_name)) {

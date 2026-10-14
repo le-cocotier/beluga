@@ -10,10 +10,24 @@
 
 #include "data.h"
 
-#define END_OF_STRING(c) (c).character[0] = 0; \
-(c).length = 1;
-#define END_OF_FILE(c) (c).character[0] = 255; \
-(c).length = 1;
+// Turn a Utf8Char slot into the string terminator / end-of-file marker.
+// These are functions (not multi-statement macros) so that they act as a
+// single statement under an unbraced if/else/loop and evaluate their
+// argument exactly once.
+static inline void utf8SetEndOfString(Utf8Char *c)
+{
+    c->character[0] = 0;
+    c->length = 1;
+}
+
+static inline void utf8SetEndOfFile(Utf8Char *c)
+{
+    c->character[0] = 255;
+    c->length = 1;
+}
+
+#define END_OF_STRING(c) utf8SetEndOfString(&(c))
+#define END_OF_FILE(c) utf8SetEndOfFile(&(c))
 
 Utf8Char* readUtf8Char(void);
 int32_t utf8StringCmp(Utf8Char* first_string, Utf8Char* second_string);

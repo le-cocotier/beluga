@@ -1769,10 +1769,10 @@ static Lisp parse_list_r(Lexer *lex, jmp_buf error_jmp, LispContext ctx) {
   int quote_type = SYM_QUOTE;
   switch (lex->token) {
   case TOKEN_NONE:
-    fprintf(ctx.p->err_port, "%lu. expected closing )\n", lexer_position_(lex));
+    fprintf(ctx.p->err_port, "%llu. expected closing )\n", lexer_position_(lex));
     longjmp(error_jmp, LISP_ERROR_READ_SYNTAX);
   case TOKEN_DOT:
-    fprintf(ctx.p->err_port, "%lu. unexpected .\n", lexer_position_(lex));
+    fprintf(ctx.p->err_port, "%llu. unexpected .\n", lexer_position_(lex));
     longjmp(error_jmp, LISP_ERROR_READ_SYNTAX);
   case TOKEN_L_PAREN: {
     Lisp tail = lisp_null();
@@ -1787,7 +1787,7 @@ static Lisp parse_list_r(Lexer *lex, jmp_buf error_jmp, LispContext ctx) {
     // A dot at the end of a list assigns the cdr
     if (lex->token == TOKEN_DOT) {
       if (lisp_is_null(tail)) {
-        fprintf(ctx.p->err_port, "%lu. unexpected .\n", lexer_position_(lex));
+        fprintf(ctx.p->err_port, "%llu. unexpected .\n", lexer_position_(lex));
         longjmp(error_jmp, LISP_ERROR_READ_SYNTAX);
       }
 
@@ -1802,7 +1802,7 @@ static Lisp parse_list_r(Lexer *lex, jmp_buf error_jmp, LispContext ctx) {
     }
 
     if (lex->token != TOKEN_R_PAREN) {
-      fprintf(ctx.p->err_port, "%lu. expected closing )\n",
+      fprintf(ctx.p->err_port, "%llu. expected closing )\n",
               lexer_position_(lex));
       longjmp(error_jmp, LISP_ERROR_READ_SYNTAX);
     }
@@ -1855,7 +1855,7 @@ static Lisp parse_list_r(Lexer *lex, jmp_buf error_jmp, LispContext ctx) {
   case TOKEN_CHAR: {
     int c = parse_char_(lex);
     if (c <= 0) {
-      fprintf(ctx.p->err_port, "%lu. unknown character\n",
+      fprintf(ctx.p->err_port, "%llu. unknown character\n",
               lexer_position_(lex));
       longjmp(error_jmp, LISP_ERROR_READ_SYNTAX);
     }
@@ -2862,14 +2862,14 @@ Lisp lisp_collect(Lisp root_to_save, LispContext ctx) {
 void lisp_print_collect_stats(LispContext ctx) {
   Page *page = ctx.p->heap.bottom;
   while (page) {
-    printf("%lu/%lu ", page->size, page->capacity);
+    printf("%llu/%llu ", page->size, page->capacity);
     page = page->next;
   }
-  fprintf(ctx.p->err_port, "\ngc collected: %lu\t time: %lu us\n",
+  fprintf(ctx.p->err_port, "\ngc collected: %llu\t time: %llu us\n",
           ctx.p->gc_stat_freed, ctx.p->gc_stat_time);
-  fprintf(ctx.p->err_port, "heap size: %lu\t pages: %lu\n", ctx.p->heap.size,
+  fprintf(ctx.p->err_port, "heap size: %llu\t pages: %llu\n", ctx.p->heap.size,
           ctx.p->heap.page_count);
-  fprintf(ctx.p->err_port, "symbols: %lu \n",
+  fprintf(ctx.p->err_port, "symbols: %llu \n",
           (size_t)lisp_table_size(ctx.p->symbols));
 }
 
