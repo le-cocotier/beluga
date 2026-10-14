@@ -1812,12 +1812,32 @@ Lisp editorListPopup(Lisp args, LispError *e, LispContext ctx) {
 Lisp lspRegisterServer(Lisp args, LispError *e, LispContext ctx) {
   const char *ext = lisp_string(lisp_car(args));
   const char *lang_id;
+  const char *command;
   void *mem;
   struct lspServerConfig_t *cfg;
   int argc;
+  int i;
   args = lisp_cdr(args);
   lang_id = lisp_string(lisp_car(args));
   args = lisp_cdr(args);
+  command = lisp_is_null(args) ? "" : lisp_string(lisp_car(args));
+
+  // The first server registered for an extension is the one used. Two
+  // packages claiming the same extension (nodejs and angular both take
+  // "ts") used to fail silently: say which one won.
+  for (i = 0; i < E.number_of_lsp_servers; i++) {
+    cfg = &E.lsp_servers[i];
+    if (strcmp(cfg->extension, ext) != 0)
+      continue;
+    if (cfg->argv[0] && strcmp(cfg->argv[0], command) != 0) {
+      editorSetStatusMessage("lsp-server: .%s already uses %s, ignoring %s "
+                             "(two packages claim .%s)",
+                             ext, cfg->argv[0], command, ext);
+      appDebug("lsp-server: .%s already registered with %s; ignoring %s",
+               ext, cfg->argv[0], command);
+    }
+    return lisp_null();
+  }
 
   mem = grealloc(E.lsp_servers, (E.number_of_lsp_servers + 1) *
                                     sizeof(struct lspServerConfig_t));
