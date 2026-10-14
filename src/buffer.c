@@ -4,6 +4,7 @@
  */
 
 #include "../include/buffer.h"
+#include "../include/autosave.h"
 #include "../include/galloc.h"
 #include "../include/data.h"
 #include "../include/editor_op.h"
@@ -843,6 +844,8 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
     appDebug("opening file");
     editorOpen(new_buf);
     appDebug("buffer opened");
+    // Before LSP sync, so the server gets the recovered text.
+    autosaveOfferRecovery(new_buf);
 
     // Only meaningful once the server's already running for an earlier
     // file — needs the text just loaded above, so it can't run any
@@ -1047,6 +1050,8 @@ int bufferClose(int buff_id) {
   }
   if (!bufferConfirmKill(buf))
     return -1;
+  // Confirmed: the unsaved changes are meant to go, copy included.
+  autosaveDiscard(buf);
 
   // Sidebar case: collapse to the other pane instead of refilling this one.
   if (buf->type == EXPLORER_BUFF && E.layout.num_panes == 2) {

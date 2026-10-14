@@ -82,6 +82,7 @@ src_files = files(
   'src/editor_op.c',
   'src/syntax_highlighter.c',
   'src/file_io.c',
+  'src/autosave.c',
   'src/init.c',
   'src/config_load.c',
   'src/input.c',

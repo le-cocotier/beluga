@@ -130,6 +130,7 @@ struct const_t
     int LINE_NUMBERS;  // (define LINE-NUMBERS #t) — draw the line-number gutter
     int WHICH_KEY;     // (define WHICH-KEY #t)    — pending-prefix / M-x help panel
     int LSP_SIGNATURE_HELP; // (define LSP-SIGNATURE-HELP #t) — signature popup on "(" and ","
+    int AUTOSAVE_INTERVAL; // (define AUTOSAVE-INTERVAL 15) — seconds; 0 = off (autosave.c)
 };
 
 struct prefix_t
@@ -600,6 +601,11 @@ typedef struct buffer_t
     // hardcoded by type. Empty means "explorer", which is what every
     // scratch buffer got before this existed.
     char focus_prefix[64];
+
+    // Autosave (autosave.c): `dirty` as of the last copy written, and when
+    // it was written.
+    int autosaved_dirty;
+    time_t autosave_time;
 
     struct buffer_t* next;
     struct buffer_t* prev;

@@ -9,6 +9,10 @@ void editorCloseFile(void);
 
 void editorOpen(struct buffer_t *buffer);
 
+// Replaces the buffer's content with the file at `path` (not its own file:
+// an autosave copy). Clears undo/redo; dirty ends up 0.
+void editorReloadFrom(struct buffer_t *buffer, const Utf8Char *path);
+
 void editorSave();
 // Copy of `line` with each tab expanded to spaces up to the next TAB-LENGTH
 // stop, or NULL if it has no tabs (use `line` as is). Rows never hold a raw

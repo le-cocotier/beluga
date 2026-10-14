@@ -311,6 +311,7 @@ static void initStartupConstants(void) {
   E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
   E.constantes.WHICH_KEY = readBoolConst("WHICH-KEY", 1);
   E.constantes.LSP_SIGNATURE_HELP = readBoolConst("LSP-SIGNATURE-HELP", 1);
+  E.constantes.AUTOSAVE_INTERVAL = readIntConst("AUTOSAVE-INTERVAL", 15);
   appDebug("LSP ON : %d", E.constantes.LSP);
   E.constantes.TAB_LENGTH = readIntConst("TAB-LENGTH", 2);
   E.constantes.QUIT_TIMES = readIntConst("QUIT-TIMES", 1);
