@@ -244,15 +244,10 @@ struct lsp_client_t
     int completion_just_arrived;
     int completion_requested;
     char language_id[32]; // set from the matching lspServerConfig_t at start
-    // The running server's argv[0] (e.g. "clangd", "digestif"), set
-    // alongside language_id at start — see lspServerConfigMatchesRunning()
-    // in buffer.c for why this exists: "only one language server runs at
-    // a time" means a second file whose *own* registered server isn't
-    // this one must not be forwarded to it anyway. Path-sized: a server
-    // configured by absolute path (~/.local/share/.../bin/clangd) used to
-    // be cut at 63 characters, never matched its own config again, and so
-    // no file was ever opened on it.
-    char command[OS_PATH_MAX];
+    // The server's argv[0] (e.g. "clangd", "digestif"): what identifies
+    // this client — a file belongs to the client whose command its own
+    // lsp-server entry names (lspClientForBuffer() in buffer.c).
+    char command[OS_PATH_MAX]; // path-sized: servers set by absolute path
 
     // ── State ─────────────────────────────────────────────────────────────────
     LspState state;
@@ -610,7 +605,11 @@ typedef struct editor_config_t
 
     ScreenLayout layout;
 
-    LspClient* lsp_client;
+    // One client per language server (keyed by its command), created the
+    // first time a file for it is opened — see bufferMaybeStartLsp() and
+    // lspClientForBuffer() in buffer.c. Several run side by side.
+    LspClient* lsp_clients[LSP_MAX_CLIENTS];
+    int number_of_lsp_clients;
     CompletionPopup lsp_completion;
     DiagnosticList lsp_diagnostics;
     LspInfoPopup lsp_info;

@@ -83,18 +83,13 @@ void bufferMaybeStartLsp(struct buffer_t* buf);
 void bufferMaybeSyncLsp(struct buffer_t* buf);
 struct lspServerConfig_t* lspServerConfigFor(Utf8Char* filename);
 
-// Is `cfg` the server that's actually running right now? "Only one
-// language server runs at a time" (see bufferMaybeStartLsp()) means a
-// buffer whose *own* registered extension maps to a different command
-// than whatever's running must never be forwarded to it — sending, say,
-// a .c file's content to a running digestif (a LaTeX assistant) tags it
-// with digestif's languageId and gets nothing useful back at best, and at
-// worst confuses the server's own state for the files it does understand.
-// Compares by argv[0] rather than language_id, so several extensions that
-// share one real server (typescript-language-server registered under
-// "javascript"/"typescript"/... with a different language_id each) still
-// correctly sync to it.
-int lspServerConfigMatchesRunning(const struct lspServerConfig_t *cfg);
+// The LSP client for a server config / a buffer's file / the active pane's
+// buffer: one per server command, created the first time a matching file
+// is opened. NULL when there is none (no server registered for it, or it
+// was never asked about). Check ->state before sending anything.
+LspClient *lspClientForConfig(const struct lspServerConfig_t *cfg);
+LspClient *lspClientForBuffer(struct buffer_t *buf);
+LspClient *lspActiveClient(void);
 
 // ── Undo/redo ────────────────────────────────────────────────────────────
 void bufferUndo(struct buffer_t* buf);

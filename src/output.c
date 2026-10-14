@@ -792,8 +792,10 @@ void editorRefreshScreen() {
     // ──────────────────
 
     // reset flags
-    E.lsp_client->completion_just_arrived = 0;
-    E.lsp_client->completion_requested = 0;
+    if (lspActiveClient()) {
+      lspActiveClient()->completion_just_arrived = 0;
+      lspActiveClient()->completion_requested = 0;
+    }
 
     // ── LSP: diagnostic for current line in status bar
     // ────────────────────────
@@ -822,7 +824,8 @@ void editorRefreshScreen() {
   }
   editorDrawStatusBar(&ab);
   editorDrawMessageBar(&ab);
-  if (E.constantes.LSP && (E.lsp_client && E.lsp_client->state == LSP_READY)) {
+  if (E.constantes.LSP && lspActiveClient() &&
+      lspActiveClient()->state == LSP_READY) {
     lspUiDrawInfo(&ab, &E.lsp_info);
     lspUiDrawCompletion(&ab, &E.lsp_completion);
   }

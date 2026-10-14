@@ -1589,6 +1589,7 @@ Lisp editorMoveEndBuffer(Lisp args, LispError *e, LispContext ctx) {
 }
 
 Lisp editorAutoComplete(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buffer;
   if (!E.constantes.LSP) {
@@ -1597,7 +1598,7 @@ Lisp editorAutoComplete(Lisp args, LispError *e, LispContext ctx) {
   appDebug("editor-auto-complete\n");
   active = splitScreenGetActivePane();
   buffer = bufferFindById(active->buffer_id);
-  lspRequestCompletion(E.lsp_client, buffer, buffer->y, buffer->x,
+  lspRequestCompletion(lsp, buffer, buffer->y, buffer->x,
                        active->cursor_x + active->origin_x +
                            editorGutterWidth(buffer),
                        active->cursor_y + active->origin_y);
@@ -1865,12 +1866,13 @@ Lisp lspRegisterServer(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
     return lisp_null();
 
   active = splitScreenGetActivePane();
@@ -1878,7 +1880,7 @@ Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx) {
   if (!buf)
     return lisp_null();
 
-  lspRequestDefinition(E.lsp_client, buf, buf->y, buf->x);
+  lspRequestDefinition(lsp, buf, buf->y, buf->x);
   return lisp_null();
 }
 
@@ -1888,12 +1890,13 @@ Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspHover(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
     return lisp_null();
 
   active = splitScreenGetActivePane();
@@ -1901,7 +1904,7 @@ Lisp lspHover(Lisp args, LispError *e, LispContext ctx) {
   if (!buf)
     return lisp_null();
 
-  lspRequestHover(E.lsp_client, buf, buf->y, buf->x);
+  lspRequestHover(lsp, buf, buf->y, buf->x);
   return lisp_null();
 }
 
@@ -1913,12 +1916,13 @@ Lisp lspHover(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspSignatureHelp(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
     return lisp_null();
 
   active = splitScreenGetActivePane();
@@ -1926,7 +1930,7 @@ Lisp lspSignatureHelp(Lisp args, LispError *e, LispContext ctx) {
   if (!buf)
     return lisp_null();
 
-  lspRequestSignatureHelp(E.lsp_client, buf, buf->y, buf->x);
+  lspRequestSignatureHelp(lsp, buf, buf->y, buf->x);
   return lisp_null();
 }
 
@@ -1937,12 +1941,13 @@ Lisp lspSignatureHelp(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspCodeAction(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY) {
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY) {
     editorSetStatusMessage("LSP not ready");
     return lisp_null();
   }
@@ -1952,7 +1957,7 @@ Lisp lspCodeAction(Lisp args, LispError *e, LispContext ctx) {
   if (!buf || buf->type != FILE_BUFF)
     return lisp_null();
 
-  lspRequestCodeAction(E.lsp_client, buf, buf->y, buf->x);
+  lspRequestCodeAction(lsp, buf, buf->y, buf->x);
   return lisp_null();
 }
 
@@ -1965,9 +1970,10 @@ Lisp lspCodeAction(Lisp args, LispError *e, LispContext ctx) {
 Lisp lspApplyCodeAction_L(Lisp args, LispError *e, LispContext ctx) {
   (void)e;
   (void)ctx;
-  if (!E.lsp_client || !lisp_is_pair(args))
+  if (!lisp_is_pair(args))
     return lisp_null();
-  lspApplyCodeAction(E.lsp_client, (int)lisp_int(lisp_car(args)));
+  // NULL: the server that offered the actions (see lspApplyCodeAction()).
+  lspApplyCodeAction(NULL, (int)lisp_int(lisp_car(args)));
   return lisp_null();
 }
 
@@ -1981,6 +1987,7 @@ Lisp lspApplyCodeAction_L(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspRename(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   Utf8Char *name_input;
@@ -1988,7 +1995,7 @@ Lisp lspRename(Lisp args, LispError *e, LispContext ctx) {
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY) {
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY) {
     editorSetStatusMessage("LSP not ready");
     return lisp_null();
   }
@@ -2009,7 +2016,7 @@ Lisp lspRename(Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
   }
 
-  lspRequestRename(E.lsp_client, buf, buf->y, buf->x, new_name);
+  lspRequestRename(lsp, buf, buf->y, buf->x, new_name);
   gfree(new_name);
   return lisp_null();
 }
@@ -2023,12 +2030,13 @@ Lisp lspRename(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspFormatBuffer(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
     return lisp_null();
 
   active = splitScreenGetActivePane();
@@ -2036,7 +2044,7 @@ Lisp lspFormatBuffer(Lisp args, LispError *e, LispContext ctx) {
   if (!buf || buf->type != FILE_BUFF)
     return lisp_null();
 
-  lspRequestFormatting(E.lsp_client, buf);
+  lspRequestFormatting(lsp, buf);
   return lisp_null();
 }
 

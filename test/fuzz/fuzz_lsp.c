@@ -64,13 +64,15 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   E.buffers = buf;
   lsp = gcalloc(1, sizeof(LspClient));
   lsp->state = LSP_READY;
-  E.lsp_client = lsp;
+  E.lsp_clients[0] = lsp;
+  E.number_of_lsp_clients = 1;
   split = size > 1 ? (size_t)data[0] % size : 0;
   if (split == 0)
     split = 1;
   lspFeed(lsp, (const char *)data + 1, split - 1);
   lspFeed(lsp, (const char *)data + split, size - split);
-  E.lsp_client = NULL;
+  E.lsp_clients[0] = NULL;
+  E.number_of_lsp_clients = 0;
   E.buffers = NULL;
   bufferFree(buf);
   gfree(lsp->recv_buf);

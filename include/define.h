@@ -18,6 +18,8 @@
 #endif
 
 #define LSP_MAX_PENDING 64
+// Language servers running at once (one per server command).
+#define LSP_MAX_CLIENTS 8
 
 // Completion trigger strings advertised by the server itself (initialize
 // response's completionProvider.triggerCharacters — e.g. "." for Python,

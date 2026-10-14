@@ -135,7 +135,8 @@ void editorRunLoop(void) {
   struct buffer_t *terminals[RUN_LOOP_MAX_TERMINALS];
   int n_streams;
   int n_terminals;
-  int lsp_index;
+  // streams[] index of each LSP client's output, -1 when it has none.
+  int lsp_index[LSP_MAX_CLIENTS];
   int first_buffer_id;
   struct buffer_t *b;
   int i;
@@ -175,10 +176,12 @@ void editorRunLoop(void) {
       } while (b->buffer_id != first_buffer_id);
     }
 
-    lsp_index = -1;
-    if (E.constantes.LSP && E.lsp_client && E.lsp_client->proc) {
-      lsp_index = n_streams;
-      streams[n_streams++] = os_proc_output(E.lsp_client->proc);
+    for (i = 0; i < E.number_of_lsp_clients; i++) {
+      lsp_index[i] = -1;
+      if (E.constantes.LSP && E.lsp_clients[i]->proc) {
+        lsp_index[i] = n_streams;
+        streams[n_streams++] = os_proc_output(E.lsp_clients[i]->proc);
+      }
     }
 
     n_streams += asyncProcessStreams(streams + n_streams, RUN_LOOP_MAX_STREAMS - n_streams);
@@ -199,8 +202,11 @@ void editorRunLoop(void) {
           ptySessionClose(b);
       }
 
-      if (lsp_index >= 0 && ready[lsp_index])
-        lspPoll(E.lsp_client);
+      // number_of_lsp_clients can't have changed since the streams were
+      // collected: clients are only added from key handling, below.
+      for (i = 0; i < E.number_of_lsp_clients; i++)
+        if (lsp_index[i] >= 0 && ready[lsp_index[i]])
+          lspPoll(E.lsp_clients[i]);
 
       // Before keys: a finished process's callback (e.g. a refresh after
       // a push) should land before the next keystroke acts on its buffer.
