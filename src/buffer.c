@@ -1689,7 +1689,8 @@ void bufferDelChar(void) {
     rowJoinNext(buf, target_row);
     undoRecord(buf, UNDO_JOIN_LINE, target_row, prev_char_count, (Utf8Char){0});
 
-    active->cursor_x = prev_char_count;
+    active->cursor_x = utf8ColumnOf(buf->row[target_row].characters,
+                                    buf->row[target_row].size, prev_char_count);
     buf->x = prev_char_count;
     active->cursor_y--;
     buf->y--;

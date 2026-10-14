@@ -48,35 +48,40 @@ void editorSetStatusMessage(const char *fmt, ...) {
  * @note Updates global editor state E
  */
 int editorMoveCursor(const int key) {
-  // TODO(TODO.md): display width of wide / combining characters
   const EditorPane *active = splitScreenGetActivePane();
   struct buffer_t *buf = bufferFindById(active->buffer_id);
   const Row *row = &buf->row[buf->y];
+  int column;
   switch (key) {
   case ARROW_RIGHT:
     if (row && buf->x < row->size) {
       buf->x++;
+      // Combining marks belong to the character before them: step over
+      // them so the cursor never sits between a letter and its accent.
+      while (buf->x < row->size && utf8CharWidth(&row->characters[buf->x]) == 0)
+        buf->x++;
     } else if (row && buf->y < buf->numrows - 1) {
       buf->y++;
       buf->x = 0;
     }
     break;
   case ARROW_DOWN:
-    if (buf->y < buf->numrows - 1) {
-
-      buf->y++;
-      buf->x = buf->row[buf->y].size < buf->x ? buf->row[buf->y].size : buf->x;
-    }
-    break;
   case ARROW_UP:
-    if (buf->y != 0) {
-      --buf->y;
-      buf->x = buf->row[buf->y].size < buf->x ? buf->row[buf->y].size : buf->x;
+    if ((key == ARROW_DOWN && buf->y < buf->numrows - 1) ||
+        (key == ARROW_UP && buf->y != 0)) {
+      // Keep the screen column, not the character index: with wide
+      // characters on either line the two differ.
+      column = utf8ColumnOf(row->characters, row->size, buf->x);
+      buf->y += key == ARROW_DOWN ? 1 : -1;
+      row = &buf->row[buf->y];
+      buf->x = utf8IndexAtColumn(row->characters, row->size, column);
     }
     break;
   case ARROW_LEFT:
     if (buf->x != 0) {
       --buf->x;
+      while (buf->x > 0 && utf8CharWidth(&row->characters[buf->x]) == 0)
+        --buf->x;
     } else if (buf->y > 0) {
       --buf->y;
       buf->x = buf->row[buf->y].size;

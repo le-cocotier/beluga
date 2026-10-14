@@ -9,32 +9,6 @@
 extern EditorConfig E;
 
 /**
- * @brief Decode the Unicode codepoint stored in a Utf8Char.
- * @note Utf8Char already carries its own byte length, so this is a direct
- * decode of the 1-4 raw bytes — no lookahead into a byte stream needed.
- */
-static uint32_t utf8CharCodepoint(const Utf8Char *c)
-{
-    const unsigned char *b = c->character;
-    switch (c->length)
-    {
-        case 1:
-            return b[0];
-        case 2:
-            return ((uint32_t)(b[0] & 0x1F) << 6) | (b[1] & 0x3F);
-        case 3:
-            return ((uint32_t)(b[0] & 0x0F) << 12) |
-                   ((uint32_t)(b[1] & 0x3F) << 6) | (b[2] & 0x3F);
-        case 4:
-            return ((uint32_t)(b[0] & 0x07) << 18) |
-                   ((uint32_t)(b[1] & 0x3F) << 12) |
-                   ((uint32_t)(b[2] & 0x3F) << 6) | (b[3] & 0x3F);
-        default:
-            return 0xFFFD; // replacement character: malformed length
-    }
-}
-
-/**
  * @brief Is this character a "word" character for identifier/keyword purposes?
  * @details '#' is included for every language, not just C — it costs
  * nothing for a language that never emits a bare '#' outside of a comment
@@ -344,8 +318,8 @@ void syntaxHighlighterSeed(const int in_comment)
  * path (the "c" package registers its own keyword/type list the same way).
  * @param row The row to highlight (row->characters / row->size)
  * @param length Out-param: length in bytes of the returned string (including terminator)
- * @param x_offset First visible column (horizontal scroll offset)
- * @param width Number of visible columns to render
+ * @param x_offset First visible screen column (horizontal scroll offset)
+ * @param width Number of visible screen columns to render
  * @param lang The calling buffer's registered language (must be non-NULL —
  * callers only get here once syntaxLanguageFor() has already found one)
  * @return Newly allocated string, caller must gfree(); NULL on allocation failure
@@ -377,6 +351,7 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
     const Utf8Char *wc;
     TokenType type;
     int wi;
+    Utf8Span span;
     if (!result)
     {
         *length = 0;
@@ -390,10 +365,15 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
     // whose column falls in [x_start, x_end), so the *output* is clipped to
     // exactly what the pane can show, matching how the plain-text row path
     // already respects x_offset/width.
-    x_start = x_offset;
-    x_end = x_offset + width;
+    // x_offset and width are screen columns: turn them into the range of
+    // characters that fits (wide characters take two columns).
+    utf8VisibleSpan(row->characters, row->size, x_offset, width, &span);
+    x_start = span.start;
+    x_end = span.end;
 
     result_pos = 0;
+    for (k = 0; k < span.lead_pad; k++)
+        result[result_pos++] = ' ';
     i = 0;
     chars = row->characters;
 

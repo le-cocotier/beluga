@@ -78,6 +78,42 @@ static void testPrintf(void) {
   gfree(s);
 }
 
+static void testWidth(void) {
+  // "a", "e" + combining acute, CJK "中", emoji "😀", "z"
+  Utf8Char *u = stringToUtf8((unsigned char *)"ae\xcc\x81\xe4\xb8\xad\xf0\x9f\x98\x80z");
+  int n = utf8StringLen(u) - 1;
+  Utf8Span span;
+  CHECK_INT(n, 6);
+  CHECK_INT(utf8CharWidth(&u[0]), 1);
+  CHECK_INT(utf8CharWidth(&u[2]), 0);
+  CHECK_INT(utf8CharWidth(&u[3]), 2);
+  CHECK_INT(utf8CharWidth(&u[4]), 2);
+  CHECK_INT(utf8ColumnOf(u, n, 3), 2);
+  CHECK_INT(utf8ColumnOf(u, n, 5), 6);
+  CHECK_INT(utf8ColumnOf(u, n, 6), 7);
+  CHECK_INT(utf8IndexAtColumn(u, n, 1), 1);
+  CHECK_INT(utf8IndexAtColumn(u, n, 3), 3); // right half of the CJK char
+  CHECK_INT(utf8IndexAtColumn(u, n, 6), 5);
+  CHECK_INT(utf8IndexAtColumn(u, n, 9), 6);
+
+  // Scrolled to column 3: the CJK char is cut, a blank stands in for it.
+  utf8VisibleSpan(u, n, 3, 10, &span);
+  CHECK_INT(span.lead_pad, 1);
+  CHECK_INT(span.start, 4);
+  CHECK_INT(span.end, 6);
+  CHECK_INT(span.columns, 4);
+
+  // 4 columns from 0: "a", "e\u0301", "中"; the emoji doesn't fit.
+  utf8VisibleSpan(u, n, 0, 4, &span);
+  CHECK_INT(span.start, 0);
+  CHECK_INT(span.end, 4);
+  CHECK_INT(span.columns, 4);
+  utf8VisibleSpan(u, n, 0, 5, &span);
+  CHECK_INT(span.end, 4);
+  CHECK_INT(span.columns, 4);
+  gfree(u);
+}
+
 int main(void) {
   testInit();
   testCreateChar();
@@ -85,5 +121,6 @@ int main(void) {
   testCompare();
   testExtension();
   testPrintf();
+  testWidth();
   return testDone();
 }

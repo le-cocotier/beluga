@@ -32,14 +32,6 @@ is actually left to do.
   - The file's original permissions aren't kept (`fopen` recreates it
     as 0644 minus the umask).
 
-- [ ] **[debt]** Cursor movement and wide characters — `src/editor_op.c`, `editorMoveCursor()` *(was "TODO: Rebuild for utf8")*
-  - Movement already steps one `Utf8Char` at a time, so the rebuild itself
-    is done. What's missing is **display width**. CJK characters and most
-    emoji take 2 terminal columns, and combining marks take 0. Nothing in
-    the renderer uses `wcwidth()`, so the cursor and everything to its right
-    drift on those lines. This needs a column-width helper, used by the
-    cursor, the renderer and the selection highlight.
-
 - [ ] **[debt]** Paste — `src/builtins.c`, `editorPaste()` *(was "TODO: Rebuild pasting functionality", above `editorGetClipboard()`)*
   - Paste works. It inserts the clipboard one character at a time through
     `bufferInsertChar()`. What's left (both done on `feature/range-undo`):
@@ -64,6 +56,9 @@ is actually left to do.
   (`src/ansi_parser.c`): `htop`, `vim` and `less` need scroll regions
   (`ESC[r`), the alternate screen (`ESC[?1049h`), insert/delete line
   (`ESC[L` / `ESC[M`) and 256-color/truecolor SGR (`38;5;n`, `38;2;r;g;b`).
+  The parser's cursor also counts characters, not columns, so a shell
+  positioning the cursor on a line with wide characters lands off by one
+  per wide character (file buffers are column-aware).
   Today DEC private sequences are recognised and skipped, and other unknown
   final bytes are ignored.
 
