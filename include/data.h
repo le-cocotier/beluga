@@ -445,6 +445,7 @@ typedef struct term_parser_state_t
     TermParseState state;
     int params[CSI_MAX_PARAMS];
     int nparams;
+    int csi_private;                  // CSI had a '?', '>', '<' or '=' prefix (DEC private mode)
     int cursor_x, cursor_y;           // relative to buf->numrows origin
     int saved_cursor_x, saved_cursor_y;
     int screen_top_row;

@@ -104,6 +104,30 @@ static void backspace(struct buffer_t* buf)
 }
 
 /**
+ * @brief Overwrite the cell at column x of the current row with a blank
+ * carrying the current attribute. Cells past the row's end are already
+ * blank on screen, so they are left alone.
+ */
+static void blankCell(struct buffer_t* buf, Row* row, int x)
+{
+    if (x < 0 || x >= row->size) return;
+    row->characters[x].character[0] = ' ';
+    row->characters[x].length = 1;
+    ensureAttrs(row);
+    row->attrs[x] = buf->term_state.current_attr;
+}
+
+/**
+ * @brief HT: move to the next 8-column tab stop. Like a real terminal it
+ * only moves the cursor: text it passes over stays, and a stop past the
+ * row's end is padded with blanks by the next putChar().
+ */
+static void horizontalTab(struct buffer_t* buf)
+{
+    buf->term_state.cursor_x = (buf->term_state.cursor_x / 8 + 1) * 8;
+}
+
+/**
  * @brief Apply an SGR (Select Graphic Rendition) parameter to the parser's
  * current attribute state.
  */
@@ -143,6 +167,7 @@ static void dispatchCsi(struct buffer_t* buf, char final)
     int y;
     int line_mode;
     int i;
+    Utf8Char space = {.character = {' ', 0, 0, 0}, .length = 1};
 
     switch (final)
     {
@@ -216,15 +241,69 @@ static void dispatchCsi(struct buffer_t* buf, char final)
                     END_OF_STRING(erase_row->characters[erase_row->size]);
                 }
             }
+            else if (line_mode == 1)
+            {
+                // Start of line through the cursor, inclusive: blank those
+                // cells, keep what's right of the cursor.
+                for (i = 0; i <= ts->cursor_x; i++)
+                    blankCell(buf, erase_row, i);
+            }
             else if (line_mode == 2)
             {
                 erase_row->size = 0;
                 END_OF_STRING(erase_row->characters[0]);
             }
-            // mode == 1 (start-to-cursor) omitted for now — rare in
-            // practice, needs a left-side blank-fill rather than truncation
             break;
         }
+
+    case 'X': // Erase Character — blank n cells from the cursor, cursor stays
+        erase_row = currentRow(buf);
+        for (i = 0; i < (p0 ? p0 : 1); i++)
+            blankCell(buf, erase_row, ts->cursor_x + i);
+        break;
+
+    case 'P': // Delete Character — shift the rest of the line left by n
+        erase_row = currentRow(buf);
+        for (i = 0; i < (p0 ? p0 : 1) && ts->cursor_x < erase_row->size; i++)
+            bufferRowDelChar(buf, erase_row, ts->cursor_x);
+        if (erase_row->attrs && ts->cursor_x < erase_row->size)
+            memmove(&erase_row->attrs[ts->cursor_x], &erase_row->attrs[ts->cursor_x + i],
+                    (erase_row->size - ts->cursor_x) * sizeof(TermCellAttr));
+        break;
+
+    case '@': // Insert Character — open n blanks at the cursor
+        {
+            erase_row = currentRow(buf);
+            if (ts->cursor_x >= erase_row->size) break; // nothing to push right
+            for (i = 0; i < (p0 ? p0 : 1); i++)
+                bufferRowInsertChar(buf, erase_row, ts->cursor_x, &space);
+            ensureAttrs(erase_row);
+            memmove(&erase_row->attrs[ts->cursor_x + i], &erase_row->attrs[ts->cursor_x],
+                    (erase_row->size - ts->cursor_x - i) * sizeof(TermCellAttr));
+            for (i = 0; i < (p0 ? p0 : 1); i++)
+                erase_row->attrs[ts->cursor_x + i] = ts->current_attr;
+            break;
+        }
+
+    case 'G': // Cursor Horizontal Absolute — 1-indexed column
+    case '`':
+        ts->cursor_x = (p0 > 0 ? p0 - 1 : 0);
+        break;
+
+    case 'd': // Line Position Absolute — 1-indexed, screen-relative
+        ts->cursor_y = ts->screen_top_row + (p0 > 0 ? p0 - 1 : 0);
+        break;
+
+    case 'E': // Cursor Next Line
+        ts->cursor_y += (p0 ? p0 : 1);
+        ts->cursor_x = 0;
+        break;
+
+    case 'F': // Cursor Previous Line
+        ts->cursor_y -= (p0 ? p0 : 1);
+        if (ts->cursor_y < ts->screen_top_row) ts->cursor_y = ts->screen_top_row;
+        ts->cursor_x = 0;
+        break;
 
     case 'm': // SGR
         if (ts->nparams == 0)
@@ -242,7 +321,7 @@ static void dispatchCsi(struct buffer_t* buf, char final)
         break;
 
     default:
-        break; // unhandled CSI final byte — silently ignored for now
+        break; // other final bytes (scroll regions, modes, ...) don't change the text
     }
 }
 
@@ -251,8 +330,6 @@ void ansiParserFeed(struct buffer_t* buf, const unsigned char* data, size_t len)
     TermParserState* ts = &buf->term_state;
     size_t i;
     unsigned char byte;
-    Utf8Char space;
-    int t;
     Utf8Char c;
 
     for (i = 0; i < len; i++)
@@ -284,12 +361,18 @@ void ansiParserFeed(struct buffer_t* buf, const unsigned char* data, size_t len)
             }
             if (byte == '\t')
             {
-                space = (Utf8Char){.character = {' ', 0, 0, 0}, .length = 1};
-                for (t = 0; t < 4; t++) putChar(buf, &space); // simple fixed tab-stop
+                horizontalTab(buf);
+                break;
+            }
+            if (byte == 0x0b || byte == 0x0c) // VT and FF move down like LF
+            {
+                newLine(buf);
                 break;
             }
 
-            if (byte < 0x20) break; // other control chars: ignore for now
+            // BEL, SO/SI and the remaining C0 controls have no visible
+            // effect in a buffer: consume them so they never reach the text.
+            if (byte < 0x20) break;
 
             // UTF-8 reassembly: figure out expected length from lead byte
             if (ts->utf8_pending_len == 0)
@@ -315,6 +398,7 @@ void ansiParserFeed(struct buffer_t* buf, const unsigned char* data, size_t len)
             {
                 ts->state = TPARSE_CSI;
                 ts->nparams = 0;
+                ts->csi_private = 0;
                 memset(ts->params, 0, sizeof(ts->params));
             }
             else if (byte == ']') { ts->state = TPARSE_OSC; } // <-- new
@@ -343,12 +427,32 @@ void ansiParserFeed(struct buffer_t* buf, const unsigned char* data, size_t len)
             {
                 if (ts->nparams < CSI_MAX_PARAMS) ts->nparams++;
             }
+            else if (byte >= 0x3C && byte <= 0x3F) // '<' '=' '>' '?' prefix
+            {
+                ts->csi_private = 1;
+            }
             else if (byte >= 0x40 && byte <= 0x7E) // final byte
             {
-                dispatchCsi(buf, (char)byte);
+                // DEC private sequences (?25l cursor visibility, ?1049h
+                // alternate screen, ...) share final bytes with the standard
+                // ones; none of them changes the text, so don't misread them
+                // as erase or cursor moves.
+                if (!ts->csi_private)
+                    dispatchCsi(buf, (char)byte);
                 ts->state = TPARSE_GROUND;
             }
-            // else: ignore intermediate bytes (rare, e.g. '?' for private modes)
+            else if (byte < 0x20 && byte != 0x1b)
+            {
+                // C0 control inside a CSI: executed, sequence continues
+                if (byte == '\r') carriageReturn(buf);
+                else if (byte == '\n') newLine(buf);
+                else if (byte == '\b') backspace(buf);
+            }
+            else if (byte == 0x1b)
+            {
+                ts->state = TPARSE_ESC; // aborted sequence, a new one starts
+            }
+            // else: other intermediate bytes (0x20-0x2F) are ignored
             break;
         case TPARSE_OSC:
             if (byte == 0x07) { ts->state = TPARSE_GROUND; } // BEL terminator — done

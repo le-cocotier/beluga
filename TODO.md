@@ -61,12 +61,12 @@ is actually left to do.
   with `strncpy(dst, src, 50)` into a `galloc(256)` buffer that isn't
   zeroed. A key sequence of 50+ characters has no terminator. Copy with a
   bound of `255` and terminate it explicitly, or `strdup` it.
-- [ ] **[bug]** ANSI parser gaps in the terminal buffer (`src/ansi_parser.c`):
-  - `ESC[1K` (erase from start of line to cursor) is ignored.
-  - Unknown CSI sequences and C0 control characters are silently dropped.
-  - TAB inserts 4 spaces instead of moving to the next 8-column tab stop,
-    which misaligns `ls` columns and similar output.
-  - Full-screen programs (`htop`, `vim`, `less`) will show more of these.
+- [ ] **[feature]** Full-screen programs in the terminal buffer
+  (`src/ansi_parser.c`): `htop`, `vim` and `less` need scroll regions
+  (`ESC[r`), the alternate screen (`ESC[?1049h`), insert/delete line
+  (`ESC[L` / `ESC[M`) and 256-color/truecolor SGR (`38;5;n`, `38;2;r;g;b`).
+  Today DEC private sequences are recognised and skipped, and other unknown
+  final bytes are ignored.
 
 ---
 
