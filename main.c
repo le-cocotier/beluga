@@ -17,6 +17,7 @@
 #include "include/galloc.h"
 #include "include/init.h"
 #include "include/os.h"
+#include "include/settings.h"
 #include "include/split_screen.h"
 #include "include/terminal.h"
 #include "include/utf8.h"
@@ -77,6 +78,7 @@ int main(const int argc, char *argv[]) {
 
   gfree(splash_screen); // Now guaranteed safe
   editorSetStatusMessage("HELP: Ctrl-x Ctrl-s = save | Ctrl-x Ctrl-c = quit");
+  settingsReportProblems();
 
   while (!E.exit_requested) {
     editorRunLoop();
