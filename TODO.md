@@ -91,8 +91,8 @@ is actually left to do.
 - [ ] **[feature]** `add-package` of a package that isn't installed is a
   silent no-op, and so is a Lisp error inside a package. Show a status-bar
   message (and write to the debug log) naming the package and the error.
-- [ ] **[feature]** An `after-init` hook, fired once all of `init.lisp` has
-  loaded. `personal-config` loads before the helper functions defined further
+- [x] **[feature]** An `after-init` hook, fired once all of `init.lisp` has
+  loaded (and the files named on the command line are open). `personal-config` loads before the helper functions defined further
   down the default config (`enter-and-tab`, `editor-buffer-picker`, …), so it
   can't bind them today.
 - [x] ~~`install.sh --update`~~: bundled packages now live in `packages/` and

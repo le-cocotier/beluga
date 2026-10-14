@@ -77,6 +77,10 @@ int main(const int argc, char *argv[]) {
 
   gfree(splash_screen); // Now guaranteed safe
   editorSetStatusMessage("HELP: Ctrl-x Ctrl-s = save | Ctrl-x Ctrl-c = quit");
+  // Everything in init.lisp (and every package) has loaded and the
+  // startup buffers are open: a hook can bind keys to functions defined
+  // anywhere in the config, and act on the current buffer.
+  runHooks("after-init", lisp_null());
 
   while (!E.exit_requested) {
     editorRunLoop();
