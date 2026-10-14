@@ -248,8 +248,11 @@ struct lsp_client_t
     // alongside language_id at start — see lspServerConfigMatchesRunning()
     // in buffer.c for why this exists: "only one language server runs at
     // a time" means a second file whose *own* registered server isn't
-    // this one must not be forwarded to it anyway.
-    char command[64];
+    // this one must not be forwarded to it anyway. Path-sized: a server
+    // configured by absolute path (~/.local/share/.../bin/clangd) used to
+    // be cut at 63 characters, never matched its own config again, and so
+    // no file was ever opened on it.
+    char command[OS_PATH_MAX];
 
     // ── State ─────────────────────────────────────────────────────────────────
     LspState state;
