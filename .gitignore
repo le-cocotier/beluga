@@ -8,6 +8,5 @@ beluga.wiki
 .idea/
 .cache/
 .DS_Store
-test/*
 *.log
 *.err

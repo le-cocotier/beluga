@@ -47,10 +47,23 @@ static void putChar(struct buffer_t* buf, Utf8Char* c)
 {
     TermParserState* ts = &buf->term_state;
     Row* row = currentRow(buf);
+    Utf8Char space;
+    TermCellAttr blank_attr;
 
-    // Extend the row if the cursor is past its current end
-    while (ts->cursor_x >= row->size)
+    // Extend the row if the cursor is past its current end. A cursor moved
+    // beyond the end (CUP or CUF onto a short or blank line, as full-screen
+    // programs do) leaves blanks in between, as on a real terminal.
+    if (ts->cursor_x >= row->size)
     {
+        space.character[0] = ' ';
+        space.length = 1;
+        memset(&blank_attr, 0, sizeof(blank_attr));
+        while (row->size < ts->cursor_x)
+        {
+            bufferRowInsertChar(buf, row, row->size, &space);
+            ensureAttrs(row);
+            row->attrs[row->size - 1] = blank_attr;
+        }
         bufferRowInsertChar(buf, row, row->size, c); // append at the row's current end
         ensureAttrs(row);
         row->attrs[row->size - 1] = ts->current_attr;
