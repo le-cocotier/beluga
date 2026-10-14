@@ -94,6 +94,10 @@ LspClient *lspActiveClient(void);
 // ── Undo/redo ────────────────────────────────────────────────────────────
 void bufferUndo(struct buffer_t* buf);
 void bufferRedo(struct buffer_t* buf);
+// Brackets a command made of many edits (a query-replace, say) so that one
+// undo reverts all of it. Not nested.
+void bufferUndoGroupBegin(struct buffer_t* buf);
+void bufferUndoGroupEnd(struct buffer_t* buf);
 
 // ── Selection (mark & region) ───────────────────────────────────────────
 // (start_row,start_col)/(end_row,end_col) must already be in document

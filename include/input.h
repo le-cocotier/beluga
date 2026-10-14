@@ -20,6 +20,9 @@
 // DELETE \x1b[3~
 
 Utf8Char *editorPrompt(const char *prompt, Utf8Char *placeHolder, char bPathMode);
+// Same, but ENTER on an empty input returns "" instead of being ignored.
+Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder, char bPathMode,
+                         int allowEmpty);
 
 Utf8Char *fileCompletion(Utf8Char *path);
 

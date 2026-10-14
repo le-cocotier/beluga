@@ -740,3 +740,90 @@ void projectSearchShowLocations(const char *title, const SearchLocation *locs,
   prefix = find_prefix(SEARCH_PREFIX_NAME);
   E.prefix_state = prefix.prefix_id;
 }
+
+// ─── For project-wide replace ───────────────────────────────────────────────
+
+int projectSearchFiles(const char *pattern, const char *root,
+                       char ***out_files) {
+  char resolved[PATH_MAX];
+  char abs[PATH_MAX];
+  char *cwd;
+  char *output;
+  char *saveptr = NULL;
+  char *line;
+  char *path;
+  char *text;
+  int line_no;
+  char **files = NULL;
+  char **grown;
+  int n = 0;
+  int i;
+  int dup;
+  size_t rlen;
+
+  *out_files = NULL;
+  if (!pattern || !*pattern)
+    return -1;
+  if (root && *root)
+    snprintf(resolved, sizeof(resolved), "%s", root);
+  else {
+    cwd = os_getcwd();
+    if (!cwd)
+      return -1;
+    snprintf(resolved, sizeof(resolved), "%s", cwd);
+    free(cwd);
+  }
+  rlen = strlen(resolved);
+  while (rlen > 1 && resolved[rlen - 1] == '/')
+    resolved[--rlen] = '\0';
+
+  // Same search as project-search (and the same caps), but the hits stay
+  // out of s_hits: the *search* buffer keeps pointing at its own results.
+  output = runSearch(pattern, resolved);
+  if (!output)
+    return 0;
+
+  for (line = utilStrtok(output, "\n", &saveptr); line;
+       line = utilStrtok(NULL, "\n", &saveptr)) {
+    if (!parseGrepLine(line, &path, &line_no, &text))
+      continue;
+    if (os_path_is_absolute(path))
+      snprintf(abs, sizeof(abs), "%s", path);
+    else
+      snprintf(abs, sizeof(abs), "%s/%s", resolved, path);
+
+    // grep lists a file's hits together, but check them all anyway.
+    dup = 0;
+    for (i = n - 1; i >= 0 && !dup; i--)
+      dup = strcmp(files[i], abs) == 0;
+    if (dup)
+      continue;
+
+    grown = grealloc(files, (size_t)(n + 1) * sizeof(char *));
+    if (!grown)
+      break;
+    files = grown;
+    files[n] = utilStrdup(abs);
+    if (!files[n])
+      break;
+    n++;
+  }
+  gfree(output);
+
+  *out_files = files;
+  return n;
+}
+
+int projectSearchOpenFile(const char *abs_path) {
+  int existing = findOpenBufferByPath(abs_path);
+  Utf8Char *upath;
+  int id;
+  if (existing != -1)
+    return existing;
+  upath = stringToUtf8((unsigned char *)abs_path);
+  if (!upath)
+    return -1;
+  id = bufferCreate(upath, READ_AND_WRITE, FILE_BUFF);
+  gfree(upath);
+  return id;
+}

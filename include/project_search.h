@@ -37,6 +37,15 @@ typedef struct {
 // "*search*" buffer, with the same ENTER-to-jump, under `title`.
 void projectSearchShowLocations(const char *title, const SearchLocation *locs, int n);
 
+// The files (absolute paths, galloc'd, in grep's order) containing
+// `pattern`, searched like projectSearchRun() but without touching the
+// "*search*" results. Returns how many, or -1. Free each path and the array.
+int projectSearchFiles(const char *pattern, const char *root, char ***out_files);
+
+// The id of a buffer showing `abs_path`, opening the file if no buffer has
+// it yet. -1 if it can't be opened.
+int projectSearchOpenFile(const char *abs_path);
+
 // Frees the stored results. Called on shutdown.
 void projectSearchFree(void);
 

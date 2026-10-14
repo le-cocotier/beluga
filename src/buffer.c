@@ -93,8 +93,8 @@ static void undoRecord(struct buffer_t *buf, const UndoKind kind, const int row,
   UndoEntry entry;
   buf->redo_stack.count = 0;
 
-  contiguous = 0;
-  if (buf->undo_group_open && buf->undo_last_kind == kind &&
+  contiguous = buf->undo_group_hold;
+  if (!contiguous && buf->undo_group_open && buf->undo_last_kind == kind &&
       buf->undo_last_row == row &&
       // typing forward, or backspacing (col-1)/forward-deleting (col) at a fixed column
       ((kind == UNDO_INSERT_CHAR && col == buf->undo_last_col + 1) ||
@@ -115,6 +115,17 @@ static void undoRecord(struct buffer_t *buf, const UndoKind kind, const int row,
   buf->undo_last_kind = kind;
   buf->undo_last_row = row;
   buf->undo_last_col = col;
+}
+
+void bufferUndoGroupBegin(struct buffer_t *buf) {
+  buf->undo_next_group_id++;
+  buf->undo_group_hold = 1;
+}
+
+void bufferUndoGroupEnd(struct buffer_t *buf) {
+  buf->undo_group_hold = 0;
+  // The next edit starts a group of its own.
+  buf->undo_group_open = 0;
 }
 
 /**

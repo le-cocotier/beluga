@@ -110,6 +110,7 @@ src_files = files(
   'src/async_process.c',
   'src/project_files.c',
   'src/project_search.c',
+  'src/replace.c',
   'src/file_finder.c'
 )
 
