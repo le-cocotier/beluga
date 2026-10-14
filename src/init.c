@@ -127,6 +127,9 @@ void initBuiltins(void) {
   registerBuiltin("syntax-define-language", l_syntaxDefineLanguage);
   registerBuiltin("syntax-add-keyword", l_syntaxAddKeyword);
   registerBuiltin("syntax-add-type", l_syntaxAddType);
+  registerBuiltin("syntax-add-line-prefix", l_syntaxAddLinePrefix);
+  registerBuiltin("buffer-set-syntax", l_bufferSetSyntax);
+  registerBuiltin("write-file", l_writeFile);
   registerBuiltin("app-debug?", l_appDebugP);
   registerBuiltin("editor-recenter", l_editorRecenter);
   registerBuiltin("pane-height", l_paneHeight);
@@ -380,6 +383,8 @@ void initEditor() {
   E.theme.COLOR_COMMENT = ANSI_FG_RGB(92, 99, 112);
   E.theme.COLOR_NUMBER = ANSI_FG_RGB(209, 154, 102);
   E.theme.COLOR_DEFAULT = ANSI_FG_RGB(171, 178, 191);
+  E.theme.COLOR_ADDED = ANSI_FG_RGB(152, 195, 121);
+  E.theme.COLOR_REMOVED = ANSI_FG_RGB(224, 108, 117);
 
   initConfig();
   initStartupConstants();

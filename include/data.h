@@ -113,6 +113,8 @@ typedef struct theme
     char* COLOR_COMMENT;
     char* COLOR_NUMBER;
     char* COLOR_DEFAULT;
+    char* COLOR_ADDED;   // diff "+" lines
+    char* COLOR_REMOVED; // diff "-" lines
 } Theme;
 
 enum bufferStatus_e
@@ -234,6 +236,15 @@ typedef struct
     // only double-quoted strings.
     char quote_chars[8];
     int num_quote_chars;
+
+    // Whole-line rules, checked in order before anything else on a row:
+    // a row starting with `prefix` is drawn entirely in `role`'s color.
+    // How a diff gets its +/- lines colored (syntax-add-line-prefix).
+    struct {
+        char prefix[16];
+        int role; // a TokenType (syntax_highlighter.h)
+    } line_prefixes[12];
+    int num_line_prefixes;
 } LanguageSyntax;
 
 struct lsp_client_t
@@ -523,6 +534,10 @@ typedef struct buffer_t
     int numrows;
     int b_has_changed;
     Utf8Char* filename;
+    // Highlight as this extension's language instead of the filename's
+    // ("" = by filename). Set with buffer-set-syntax, for generated buffers
+    // like a diff view.
+    char syntax[16];
     Utf8Char* path;
     Utf8Char* fullname;
 

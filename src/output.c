@@ -400,7 +400,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         // tokenizer), and gave C highlighting no matter what packages
         // were loaded. Now a buffer with no registered language for its
         // extension always falls through to plain text, C included.
-        lang = syntaxLanguageFor(buf->filename);
+        lang = syntaxLanguageForBuffer(buf);
         if (lang) {
           byte_len_to_print = 0;
           // Render line with syntax highlighting, constrain to pane width

@@ -108,21 +108,47 @@ static const char *get_color(const TokenType type)
         case TOKEN_STRING:   return E.theme.COLOR_STRING;
         case TOKEN_COMMENT:  return E.theme.COLOR_COMMENT;
         case TOKEN_NUMBER:   return E.theme.COLOR_NUMBER;
+        case TOKEN_ADDED:    return E.theme.COLOR_ADDED;
+        case TOKEN_REMOVED:  return E.theme.COLOR_REMOVED;
         default:             return E.theme.COLOR_DEFAULT;
     }
+}
+
+const LanguageSyntax *syntaxLanguageForExtension(const char *ext)
+{
+    int i;
+    for (i = 0; i < E.number_of_languages; i++)
+        if (strcmp(E.languages[i].extension, ext) == 0)
+            return &E.languages[i];
+    return NULL;
 }
 
 const LanguageSyntax *syntaxLanguageFor(const Utf8Char *filename)
 {
     char ext[16];
-    int i;
     if (!utf8FilenameExtension(filename, ext, sizeof(ext)))
         return NULL;
+    return syntaxLanguageForExtension(ext);
+}
 
-    for (i = 0; i < E.number_of_languages; i++)
-        if (strcmp(E.languages[i].extension, ext) == 0)
-            return &E.languages[i];
-    return NULL;
+const LanguageSyntax *syntaxLanguageForBuffer(const Buffer *buf)
+{
+    if (buf->syntax[0])
+        return syntaxLanguageForExtension(buf->syntax);
+    return syntaxLanguageFor(buf->filename);
+}
+
+int syntaxRoleFromName(const char *name)
+{
+    if (!strcmp(name, "keyword")) return TOKEN_KEYWORD;
+    if (!strcmp(name, "type")) return TOKEN_TYPE;
+    if (!strcmp(name, "string")) return TOKEN_STRING;
+    if (!strcmp(name, "comment")) return TOKEN_COMMENT;
+    if (!strcmp(name, "number")) return TOKEN_NUMBER;
+    if (!strcmp(name, "added")) return TOKEN_ADDED;
+    if (!strcmp(name, "removed")) return TOKEN_REMOVED;
+    if (!strcmp(name, "default")) return TOKEN_DEFAULT;
+    return -1;
 }
 
 static int comment_section = 0;
@@ -276,7 +302,7 @@ int commentStateAtRowStart(Buffer *buf, const int row)
     const LanguageSyntax *lang;
     if (!buf || row < 0 || row >= buf->numrows)
         return 0;
-    lang = syntaxLanguageFor(buf->filename);
+    lang = syntaxLanguageForBuffer(buf);
     // No registered language, or one with no block comment at all (e.g.
     // YAML): nothing can ever be "inside" one, so there's nothing to scan.
     if (!lang || !lang->block_comment_open[0])
@@ -374,8 +400,28 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
     result_pos = 0;
     for (k = 0; k < span.lead_pad; k++)
         result[result_pos++] = ' ';
+
     i = 0;
     chars = row->characters;
+
+    // Whole-line rules (a diff's "+"/"-" lines) win over everything else,
+    // unless the row continues a block comment.
+    if (!comment_section)
+    {
+        for (k = 0; k < lang->num_line_prefixes; k++)
+        {
+            if (!rowMatchesAt(row, 0, lang->line_prefixes[k].prefix))
+                continue;
+            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s",
+                                   get_color((TokenType)lang->line_prefixes[k].role));
+            while (i < row->size)
+                copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
+            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);
+            result[result_pos] = '\0';
+            *length = result_pos + 1; // same convention as the end of this function
+            return result;
+        }
+    }
 
     while (i < row->size)
     {

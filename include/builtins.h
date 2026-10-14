@@ -14,6 +14,9 @@ Lisp editorPromptLisp(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxDefineLanguage(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddKeyword(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx);
+Lisp l_syntaxAddLinePrefix(Lisp args, LispError *e, LispContext ctx);
+Lisp l_bufferSetSyntax(Lisp args, LispError *e, LispContext ctx);
+Lisp l_writeFile(Lisp args, LispError *e, LispContext ctx);
 
 // Mouvement
 

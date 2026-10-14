@@ -21,8 +21,6 @@ is actually left to do.
 
 - [ ] **[bug]** Saving — `src/file_io.c`, `editorSave()` *(was "TODO: utf8")*
   - The UTF-8 part is done: rows go through `utf8ToString()`. What's left:
-  - When `fopen()` fails, it still shows **"File saved"**. There's no error
-    message, `string_path` leaks, and the buffer stays dirty.
   - The write isn't atomic. A crash or full disk halfway through leaves a
     truncated file. Write to `<file>.tmp`, `fsync`, then `rename()`.
   - The `fwrite("\n")` result is unchecked.
@@ -75,9 +73,6 @@ is actually left to do.
   loaded. `personal-config` loads before the helper functions defined further
   down the default config (`enter-and-tab`, `editor-buffer-picker`, …), so it
   can't bind them today.
-- [ ] **[feature]** git package: multi-line commit messages (today's prompt
-  is one line), hunk-level staging, colored diffs (the highlighter is
-  keyword-based and can't color `+`/`-` lines yet).
 
 ---
 

@@ -21,6 +21,7 @@
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/subprocess.h"
+#include "../include/syntax_highlighter.h"
 #include "../include/terminal.h"
 #include "../include/utils.h"
 
@@ -620,7 +621,8 @@ Lisp editorOpenConfig(Lisp args, LispError *e, LispContext ctx) {
  * @brief Lisp function to set one theme color
  * @details (editor-set-theme-color role r g b) — role is one of
  * "background", "line-cursor-background", "keyword", "type", "string",
- * "comment", "number", "default"; r/g/b are 0-255. Writes straight into
+ * "comment", "number", "default", "added", "removed" (diff lines); r/g/b
+ * are 0-255. Writes straight into
  * E.theme, replacing whatever the fallback (or an earlier-loaded theme package)
  * set — lets a theme be an ordinary package (packages/theme-dark,
  * packages/theme-light, or your own) instead of a hardcoded C palette.
@@ -661,6 +663,10 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx) {
     E.theme.COLOR_NUMBER = ansi;
   else if (!strcmp(role, "default"))
     E.theme.COLOR_DEFAULT = ansi;
+  else if (!strcmp(role, "added"))
+    E.theme.COLOR_ADDED = ansi;
+  else if (!strcmp(role, "removed"))
+    E.theme.COLOR_REMOVED = ansi;
   else {
     gfree(ansi);
     editorSetStatusMessage("Unknown theme color role: %s", role);
@@ -3024,6 +3030,82 @@ Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx) {
   word = lisp_string(lisp_car(args));
   syntaxAddWord(ext, word, 1);
   return lisp_null();
+}
+
+/**
+ * @brief Lisp function: (write-file "path" "text") — writes text to path
+ * as is (binary: no newline translation on Windows), replacing it.
+ * @return #t, or #f if the file couldn't be written
+ */
+Lisp l_writeFile(Lisp args, LispError *e, LispContext ctx) {
+  const char *path = lisp_string(lisp_car(args));
+  const char *text = lisp_string(lisp_car(lisp_cdr(args)));
+  size_t len = strlen(text);
+  FILE *f;
+  int ok;
+  (void)e;
+  (void)ctx;
+  f = fopen(path, "wb");
+  if (!f)
+    return lisp_false();
+  ok = fwrite(text, 1, len, f) == len;
+  ok = (fclose(f) == 0) && ok;
+  return lisp_make_bool(ok);
+}
+
+/**
+ * @brief Lisp function: color whole lines by how they start
+ * @details (syntax-add-line-prefix "ext" "prefix" "role") — in that
+ * language, a row starting with "prefix" is drawn entirely in the theme's
+ * "role" color: "keyword", "type", "string", "comment", "number",
+ * "default", or "added"/"removed" (meant for diffs). Rules are tried in
+ * the order they were added, so add longer prefixes ("+++") before shorter
+ * ones ("+"). The language must already exist (syntax-define-language).
+ * @return #t, or #f if the language is unknown, the role is unknown or the
+ * language already has 12 rules
+ */
+Lisp l_syntaxAddLinePrefix(Lisp args, LispError *e, LispContext ctx) {
+  const char *ext = lisp_string(lisp_car(args));
+  const char *prefix;
+  const char *role_name;
+  LanguageSyntax *lang;
+  int role;
+  (void)e;
+  (void)ctx;
+  args = lisp_cdr(args);
+  prefix = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  role_name = lisp_string(lisp_car(args));
+
+  lang = findLanguageByExtension(ext);
+  role = syntaxRoleFromName(role_name);
+  if (!lang || role < 0 ||
+      lang->num_line_prefixes >= (int)(sizeof(lang->line_prefixes) / sizeof(lang->line_prefixes[0])))
+    return lisp_false();
+  snprintf(lang->line_prefixes[lang->num_line_prefixes].prefix,
+           sizeof(lang->line_prefixes[0].prefix), "%s", prefix);
+  lang->line_prefixes[lang->num_line_prefixes].role = role;
+  lang->num_line_prefixes++;
+  return lisp_true();
+}
+
+/**
+ * @brief Lisp function: highlight a buffer as a given language
+ * @details (buffer-set-syntax buffer-id "ext") — the buffer is highlighted
+ * with the rules registered for "ext" whatever its name; "" goes back to
+ * choosing by file name. For generated buffers like a diff view.
+ * @return #t, or #f if there's no such buffer
+ */
+Lisp l_bufferSetSyntax(Lisp args, LispError *e, LispContext ctx) {
+  struct buffer_t *buf;
+  (void)e;
+  (void)ctx;
+  buf = bufferFindById((int)lisp_int(lisp_car(args)));
+  if (!buf)
+    return lisp_false();
+  snprintf(buf->syntax, sizeof(buf->syntax), "%s", lisp_string(lisp_car(lisp_cdr(args))));
+  syntaxHighlighterInvalidateAfter(buf, 0);
+  return lisp_true();
 }
 
 Lisp editorGetPaneWitdh(Lisp args, LispError *e, LispContext ctx) {
