@@ -5,6 +5,7 @@
 #include "../include/completion.h"
 #include "../include/config_load.h"
 #include "../include/data.h"
+#include "../include/describe.h"
 #include "../include/define.h"
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
@@ -98,6 +99,9 @@ void initBuiltins(void) {
   registerBuiltin("macro-end", macroEnd);
   registerBuiltin("macro-run", macroRunBuiltin);
   registerBuiltin("editor-redraw", editorRedraw);
+  registerBuiltin("describe-key", describeKey);
+  registerBuiltin("key-bindings", keyBindings);
+  registerBuiltin("describe-function", describeFunction);
   registerBuiltin("editor-redo", editorRedo);
   registerBuiltin("editor-set-mark", editorSetMark);
   registerBuiltin("editor-kill-region", editorKillRegion);

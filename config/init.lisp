@@ -36,6 +36,8 @@
 (add-prefix "term")
 (add-prefix "project")
 (add-prefix "config")
+(add-prefix "help")
+(add-prefix "help-view" #t) ; keys inside *help* and *bindings*
 
 ;; PACKAGES
 ;;
@@ -248,6 +250,33 @@
                       '()
                       #t))
 
+;; HELP — CTRL-x h k: what a key runs. CTRL-x h b: every key binding.
+;; CTRL-x h f: a function's definition and the keys bound to it.
+(define (help--pad s width)
+  (if (< (string-length s) width)
+      (string-append s (make-string (- width (string-length s)) #\space))
+      (string-append s " ")))
+
+(define (help--show title lines)
+  (let ((id (editor-scratch-open title)))
+    (editor-scratch-set-lines id lines)
+    (editor-scratch-set-prefix id "help-view")
+    (editor-switch-to-buffer id)))
+
+(define (describe-bindings)
+  (help--show "*bindings*"
+              (cons (string-append (help--pad "PREFIX" 12) (help--pad "KEY" 16) "COMMAND")
+                    (map (lambda (b)
+                           (string-append (help--pad (car b) 12)
+                                          (help--pad (car (cdr b)) 16)
+                                          (car (cdr (cdr b)))))
+                         (key-bindings)))))
+
+(define (describe-function-prompt)
+  (let ((name (editor-prompt "Describe function: %u" "" #f)))
+    (if (and name (> (string-length name) 0))
+        (help--show "*help*" (describe-function name)))))
+
 ;; Global
 (map-key "CTRL-g" '(editor-set-prefix "no-prefix") "*")
 
@@ -312,7 +341,21 @@
 (map-key "(" macro-start "user")
 (map-key ")" macro-end "user")
 (map-key "x" macro-run "user")
+(map-key "h" '(editor-set-prefix "help") "user")
 (if (app-debug?) (map-key "m" memory-inspector "user"))
+
+;; help
+(map-key "k" describe-key "help")
+(map-key "b" describe-bindings "help")
+(map-key "f" describe-function-prompt "help")
+
+;; help-view (inside *help* and *bindings*; q closes)
+(map-key "ARROW-UP" '(move-cursor "up") "help-view")
+(map-key "ARROW-DOWN" '(move-cursor "down") "help-view")
+(map-key "PAGE-UP" move-cursor-page-up "help-view")
+(map-key "PAGE-DOWN" move-cursor-page-down "help-view")
+(map-key "q" editor-kill-buffer "help-view")
+(map-key "CTRL-x" '(editor-set-prefix "user") "help-view")
 
 ;; config
 (map-key "c" editor-open-config "config")
