@@ -3,6 +3,7 @@
 #include "../include/cJSON.h"
 #include "../include/color.h"
 #include "../include/completion.h"
+#include "../include/config_load.h"
 #include "../include/data.h"
 #include "../include/define.h"
 #include "../include/file_finder.h"
@@ -155,6 +156,70 @@ void initBuiltins(void) {
 }
 
 /**
+ * @brief The bindings needed to fix a broken config from inside beluga:
+ * move around, type, save, open a file and quit.
+ * @details Applied only after init.lisp reported an error, and only for
+ * keys the config didn't bind itself, so a config that half-loaded keeps
+ * whatever it did set up. A missing init.lisp ends up with exactly these.
+ */
+static const char *const EMERGENCY_BINDINGS[][3] = {
+    {"CTRL-x", "'(editor-set-prefix \"user\")", "no-prefix"},
+    {"CTRL-g", "'(editor-set-prefix \"no-prefix\")", "*"},
+    {"ARROW-UP", "'(move-cursor \"up\")", "no-prefix"},
+    {"ARROW-DOWN", "'(move-cursor \"down\")", "no-prefix"},
+    {"ARROW-RIGHT", "'(move-cursor \"right\")", "no-prefix"},
+    {"ARROW-LEFT", "'(move-cursor \"left\")", "no-prefix"},
+    {"ENTER", "editor-insert-new-line", "no-prefix"},
+    {"BACKSPACE", "editor-delete-previous-char", "no-prefix"},
+    {"PAGE-UP", "move-cursor-page-up", "no-prefix"},
+    {"PAGE-DOWN", "move-cursor-page-down", "no-prefix"},
+    {"ALT-x", "execute-command", "no-prefix"},
+    {"CTRL-c", "editor-quit", "user"},
+    {"CTRL-s", "editor-save", "user"},
+    {"f", "editor-open-file", "user"},
+    {"c", "editor-open-config", "user"},
+    {"b", "editor-switch-buffer-popup", "user"},
+};
+
+static int prefixExists(const char *name) {
+  int i;
+  for (i = 0; i <= E.number_of_prefix; i++)
+    if (strcmp(E.prefix[i].prefix_name, name) == 0)
+      return 1;
+  return 0;
+}
+
+static int keyBound(const char *key, const char *prefix_name) {
+  const int prefix_id = find_prefix(prefix_name).prefix_id;
+  int i;
+  for (i = 0; i < E.number_of_keybinds; i++)
+    if (E.key_binds[i].prefix_id == prefix_id &&
+        strcmp(E.key_binds[i].key_sequence, key) == 0)
+      return 1;
+  return 0;
+}
+
+static void ensureEmergencyBindings(void) {
+  char form[256];
+  LispError err;
+  size_t i;
+  if (!prefixExists("user")) {
+    err = LISP_ERROR_NONE;
+    lisp_eval(lisp_read("(add-prefix \"user\")", &err, E.ctx), &err, E.ctx);
+  }
+  for (i = 0; i < sizeof(EMERGENCY_BINDINGS) / sizeof(EMERGENCY_BINDINGS[0]);
+       i++) {
+    if (keyBound(EMERGENCY_BINDINGS[i][0], EMERGENCY_BINDINGS[i][2]))
+      continue;
+    snprintf(form, sizeof(form), "(map-key \"%s\" %s \"%s\")",
+             EMERGENCY_BINDINGS[i][0], EMERGENCY_BINDINGS[i][1],
+             EMERGENCY_BINDINGS[i][2]);
+    err = LISP_ERROR_NONE;
+    lisp_eval(lisp_read(form, &err, E.ctx), &err, E.ctx);
+  }
+}
+
+/**
  * @brief Sets up the Lisp interpreter, registers all builtins, then reads
  * and evaluates config/init.lisp.
  * @details This is the one call that actually loads the user's config:
@@ -170,22 +235,21 @@ void initBuiltins(void) {
 static void initConfig(void) {
 
   E.ctx = lisp_init();
-  E.ctx.p->err_port = fopen("lisp_log.err", "w");
+  // w+: config_load.c reads back what the interpreter wrote here to put
+  // the reason for a failing form in its error message.
+  E.ctx.p->err_port = fopen("lisp_log.err", "w+");
+  if (!E.ctx.p->err_port)
+    E.ctx.p->err_port = tmpfile();
   lisp_lib_load(E.ctx);
   // Init builtins lisp functions
   initBuiltins();
 
-  // Read config file
-  E.fd_init_file = fopen(E.init_file_path, "r");
-  if (!E.fd_init_file) {
-    die("init failed");
-  }
-  E.ctx_data = lisp_read_file(E.fd_init_file, &E.ctx_error, E.ctx);
-  if (E.ctx_error != LISP_ERROR_NONE) {
-    die("init failed");
-  }
-  lisp_eval(E.ctx_data, &E.ctx_error, E.ctx);
-  fclose(E.fd_init_file);
+  // Form by form: a mistake is reported (see configShowErrors(), called
+  // once the first buffer is up) instead of stopping the editor, and the
+  // rest of the file still loads.
+  configLoadFile(E.init_file_path, "init.lisp");
+  if (configErrorCount() > 0)
+    ensureEmergencyBindings();
 }
 
 /**
@@ -207,6 +271,19 @@ static int readBoolConst(const char *name, int fallback) {
 }
 
 /**
+ * @brief Read an integer setting from init.lisp, falling back to
+ * `fallback` when the symbol isn't defined or isn't an integer.
+ */
+static int readIntConst(const char *name, int fallback) {
+  int present = 0;
+  const Lisp val =
+      lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(name, E.ctx), &present);
+  if (!present || lisp_type(val) != LISP_INT)
+    return fallback;
+  return (int)lisp_int(val);
+}
+
+/**
  * @brief Reads non-color startup constants (LSP, LINE-NUMBERS, WHICH-KEY,
  * TAB-LENGTH, QUIT-TIMES) out of the Lisp environment initConfig() just
  * finished loading, into E.constantes.
@@ -221,20 +298,15 @@ static int readBoolConst(const char *name, int fallback) {
  * (LSP, TAB-LENGTH, ...) that only exist once init.lisp has been evaluated.
  */
 static void initStartupConstants(void) {
-  E.constantes.LSP = lisp_bool(
-      lisp_eval(lisp_read("LSP", &E.ctx_error, E.ctx), &E.ctx_error, E.ctx));
+  // Fallbacks are the bundled config's values, so a config that failed to
+  // load (or predates a setting) behaves like the default one.
+  E.constantes.LSP = readBoolConst("LSP", 1);
   E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
   E.constantes.WHICH_KEY = readBoolConst("WHICH-KEY", 1);
   E.constantes.LSP_SIGNATURE_HELP = readBoolConst("LSP-SIGNATURE-HELP", 1);
   appDebug("LSP ON : %d", E.constantes.LSP);
-  E.constantes.TAB_LENGTH =
-      (int)lisp_eval(lisp_read("TAB-LENGTH", &E.ctx_error, E.ctx), &E.ctx_error,
-                     E.ctx)
-          .val.int_val;
-  E.constantes.QUIT_TIMES =
-      (int)lisp_eval(lisp_read("QUIT-TIMES", &E.ctx_error, E.ctx), &E.ctx_error,
-                     E.ctx)
-          .val.int_val;
+  E.constantes.TAB_LENGTH = readIntConst("TAB-LENGTH", 2);
+  E.constantes.QUIT_TIMES = readIntConst("QUIT-TIMES", 1);
 }
 
 /**
@@ -371,14 +443,16 @@ void initEditor() {
   // initConfig() runs — a theme package's editor-set-theme-color calls
   // overwrite these during config load, but there's always something
   // valid in E.theme even if no theme package is installed/loaded.
-  E.theme.BACKGROUND_COLOR = ANSI_BG_RGB(40, 44, 52);
-  E.theme.LINE_CURSOR_BACKGROUND = ANSI_BG_RGB(60, 64, 72);
-  E.theme.COLOR_KEYWORD = ANSI_FG_RGB(198, 120, 221);
-  E.theme.COLOR_TYPE = ANSI_FG_RGB(97, 175, 239);
-  E.theme.COLOR_STRING = ANSI_FG_RGB(152, 195, 121);
-  E.theme.COLOR_COMMENT = ANSI_FG_RGB(92, 99, 112);
-  E.theme.COLOR_NUMBER = ANSI_FG_RGB(209, 154, 102);
-  E.theme.COLOR_DEFAULT = ANSI_FG_RGB(171, 178, 191);
+  // Copies, not the literals: a theme's editor-set-theme-color frees the
+  // color it replaces, and deInitEditor() frees all of them.
+  E.theme.BACKGROUND_COLOR = utilStrdup(ANSI_BG_RGB(40, 44, 52));
+  E.theme.LINE_CURSOR_BACKGROUND = utilStrdup(ANSI_BG_RGB(60, 64, 72));
+  E.theme.COLOR_KEYWORD = utilStrdup(ANSI_FG_RGB(198, 120, 221));
+  E.theme.COLOR_TYPE = utilStrdup(ANSI_FG_RGB(97, 175, 239));
+  E.theme.COLOR_STRING = utilStrdup(ANSI_FG_RGB(152, 195, 121));
+  E.theme.COLOR_COMMENT = utilStrdup(ANSI_FG_RGB(92, 99, 112));
+  E.theme.COLOR_NUMBER = utilStrdup(ANSI_FG_RGB(209, 154, 102));
+  E.theme.COLOR_DEFAULT = utilStrdup(ANSI_FG_RGB(171, 178, 191));
 
   initConfig();
   initStartupConstants();
@@ -436,6 +510,8 @@ void deInitEditor() {
   for (i = 0; i < 8; ++i) {
     gfree(*(temp + i));
   }
+
+  configErrorsFree();
 
   // free config
   fclose(E.ctx.p->err_port);

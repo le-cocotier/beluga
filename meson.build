@@ -79,6 +79,7 @@ src_files = files(
   'src/syntax_highlighter.c',
   'src/file_io.c',
   'src/init.c',
+  'src/config_load.c',
   'src/input.c',
   'src/output.c',
   'src/row_op.c',

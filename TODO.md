@@ -88,9 +88,10 @@ is actually left to do.
 - [ ] **[debt]** `nodejs` and `angular` both register the `ts` extension, and
   only the first one wins. Detect the conflict and say so in the debug log
   instead of silently ignoring the second one.
-- [ ] **[feature]** `add-package` of a package that isn't installed is a
-  silent no-op, and so is a Lisp error inside a package. Show a status-bar
-  message (and write to the debug log) naming the package and the error.
+- [x] ~~`add-package` errors~~: a missing package, and any error in
+  `init.lisp` or a package, is reported with its file and line (status bar
+  plus a `*config-errors*` buffer); the rest of the file still loads
+  (`src/config_load.c`).
 - [ ] **[feature]** An `after-init` hook, fired once all of `init.lisp` has
   loaded. `personal-config` loads before the helper functions defined further
   down the default config (`enter-and-tab`, `editor-buffer-picker`, …), so it

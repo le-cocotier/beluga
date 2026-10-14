@@ -31,6 +31,7 @@
 
 #include "../include/buffer_switcher.h"
 #include "../include/completion.h"
+#include "../include/config_load.h"
 #include "../include/init.h"
 #include "../include/list_popup.h"
 #include "../include/utf8.h"
@@ -583,6 +584,7 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx) {
   int b;
   int is_background;
   char *ansi;
+  char **slot = NULL;
   args = lisp_cdr(args);
   r = (int)lisp_int(lisp_car(args));
   args = lisp_cdr(args);
@@ -595,22 +597,28 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx) {
   snprintf(ansi, 24, "\x1b[%d;2;%d;%d;%dm", is_background ? 48 : 38, r, g, b);
 
   if (!strcmp(role, "background"))
-    E.theme.BACKGROUND_COLOR = ansi;
+    slot = &E.theme.BACKGROUND_COLOR;
   else if (!strcmp(role, "line-cursor-background"))
-    E.theme.LINE_CURSOR_BACKGROUND = ansi;
+    slot = &E.theme.LINE_CURSOR_BACKGROUND;
   else if (!strcmp(role, "keyword"))
-    E.theme.COLOR_KEYWORD = ansi;
+    slot = &E.theme.COLOR_KEYWORD;
   else if (!strcmp(role, "type"))
-    E.theme.COLOR_TYPE = ansi;
+    slot = &E.theme.COLOR_TYPE;
   else if (!strcmp(role, "string"))
-    E.theme.COLOR_STRING = ansi;
+    slot = &E.theme.COLOR_STRING;
   else if (!strcmp(role, "comment"))
-    E.theme.COLOR_COMMENT = ansi;
+    slot = &E.theme.COLOR_COMMENT;
   else if (!strcmp(role, "number"))
-    E.theme.COLOR_NUMBER = ansi;
+    slot = &E.theme.COLOR_NUMBER;
   else if (!strcmp(role, "default"))
-    E.theme.COLOR_DEFAULT = ansi;
-  else {
+    slot = &E.theme.COLOR_DEFAULT;
+
+  if (slot) {
+    // Every color is heap-allocated (initEditor() copies its fallbacks),
+    // so the one being replaced can be freed.
+    gfree(*slot);
+    *slot = ansi;
+  } else {
     gfree(ansi);
     editorSetStatusMessage("Unknown theme color role: %s", role);
   }
@@ -1083,7 +1091,8 @@ Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
   const char *package_name = lisp_string(lisp_car(args));
   const char *home;
   char *package_dir;
-  FILE *fd_package;
+  char *label;
+  OsFileInfo info;
   appDebug("%s\n", package_name);
   if (packageAlreadyLoaded(package_name))
     return lisp_null();
@@ -1093,8 +1102,9 @@ Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
   }
 
-  fd_package = fopen(package_dir, "r");
-  if (!fd_package) {
+  if (os_file_info(package_dir, &info) != 0) {
+    configReportError("package \"%s\" isn't installed (no %s)", package_name,
+                      package_dir);
     gfree(package_dir);
     return lisp_null();
   }
@@ -1107,9 +1117,12 @@ Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
     s_loaded_package_count++;
   }
 
-  lisp_eval(lisp_read_file(fd_package, &E.ctx_error, E.ctx), &E.ctx_error,
-            E.ctx);
-  fclose(fd_package);
+  // Errors inside the package are recorded with its file and line (see
+  // config_load.c) rather than raised: the add-package form itself
+  // succeeded, and the rest of init.lisp should keep loading.
+  label = utilFormat("packages/%s/init.lisp", package_name);
+  configLoadFile(package_dir, label ? label : package_name);
+  gfree(label);
   gfree(package_dir);
 
   return lisp_null();
