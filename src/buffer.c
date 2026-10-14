@@ -11,14 +11,12 @@
 #include "../include/split_screen.h"
 #include "../include/utils.h"
 
-#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#include "../include/append_buffer.h"
 #include "../include/builtins.h"
 #include "../include/completion.h"
 #include "../include/input.h"

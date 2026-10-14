@@ -32,7 +32,6 @@
 
 #include "../include/buffer_switcher.h"
 #include "../include/completion.h"
-#include "../include/init.h"
 #include "../include/list_popup.h"
 #include "../include/utf8.h"
 #include "../include/which_key.h"

@@ -6,7 +6,6 @@
 #include "../include/galloc.h"
 #include "../include/terminal.h"
 #include "../include/data.h"
-#include "../include/utils.h"
 #include "../include/os.h"
 
 #include <stdint.h>

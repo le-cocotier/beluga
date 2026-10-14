@@ -25,7 +25,6 @@
 #include "../include/project_files.h"
 #include "../include/subprocess.h"
 #include "../include/utils.h"
-#include "../include/terminal.h"
 #include "../include/utf8.h"
 
 #include <ctype.h>

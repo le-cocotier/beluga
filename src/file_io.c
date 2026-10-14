@@ -13,7 +13,6 @@
 #include "../include/buffer.h"
 #include "../include/data.h"
 #include "../include/split_screen.h"
-#include "../include/row_op.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>

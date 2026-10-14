@@ -5,7 +5,6 @@
 
 #include "../include/popup_ui.h"
 #include "../include/append_buffer.h"
-#include "../include/terminal.h"
 
 #include <stdio.h>
 #include <string.h>

@@ -80,7 +80,6 @@ src_files = files(
   'src/init.c',
   'src/input.c',
   'src/output.c',
-  'src/row_op.c',
   'src/terminal.c',
   'src/builtins.c',
   'src/buffer.c',

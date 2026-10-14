@@ -8,7 +8,6 @@
 #include "../include/galloc.h"
 #include "../include/output.h"
 #include "../include/split_screen.h"
-#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +20,6 @@
 #include "../include/syntax_highlighter.h"
 #include "../include/terminal.h"
 #include "../include/utf8.h"
-#include "include/cJSON.h"
 
 /**
  * @brief The id of the "*" (global) prefix, looked up by name and cached.

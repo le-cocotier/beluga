@@ -8,7 +8,6 @@
 #include "../include/buffer.h"
 #include "../include/utf8.h"
 #include <string.h>
-#include <stdlib.h>
 
 /**
  * @brief Ensure row->attrs is allocated and covers at least row->size elements.

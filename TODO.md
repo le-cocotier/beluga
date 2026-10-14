@@ -81,6 +81,3 @@ is actually left to do.
 - [ ] **[debt]** Commit the pty regression harness (pyte, openpty sized
   before fork, SIGALRM watchdog) as a `meson test` target. For now it only
   exists as throwaway scripts, and `test/` is gitignored.
-- [ ] **[debt]** Unused `#include`s flagged by the CLion analysis haven't
-  been verified as removed. Re-run the inspection (or `include-what-you-use`
-  / clangd's unused-include check) and clean up what's left.

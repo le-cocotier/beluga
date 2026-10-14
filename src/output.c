@@ -17,11 +17,9 @@
 #include "../include/file_finder.h"
 #include "../include/list_popup.h"
 #include "../include/which_key.h"
-#include "../include/row_op.h"
 #include "../include/split_screen.h"
 #include "../include/syntax_highlighter.h"
 #include "../include/term_render.h"
-#include "../include/terminal.h"
 #include "../include/utf8.h"
 #include <stdio.h>
 #include <stdlib.h>

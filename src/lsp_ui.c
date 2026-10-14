@@ -10,7 +10,6 @@
 // We use cJSON — drop cJSON.c + cJSON.h into src/ and include/
 #include "../include/cJSON.h"
 #include "../include/append_buffer.h"
-#include "../include/terminal.h"
 #include "../include/popup_ui.h"
 #include "../include/utf8.h"
 
