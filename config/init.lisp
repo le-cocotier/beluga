@@ -305,6 +305,11 @@
 (map-key "s" project-search "user")
 (map-key "r" query-replace "user")          ; y/n per match, ! rest, q stop
 (map-key "R" project-query-replace "user")  ; same over the project (A = all files)
+;; Keyboard macros: CTRL-x ( starts recording, CTRL-x ) stops, CTRL-x x
+;; replays. (macro-run 10) replays ten times.
+(map-key "(" macro-start "user")
+(map-key ")" macro-end "user")
+(map-key "x" macro-run "user")
 (if (app-debug?) (map-key "m" memory-inspector "user"))
 
 ;; config

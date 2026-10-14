@@ -224,4 +224,9 @@ Lisp l_regionBounds(Lisp args, LispError *e, LispContext ctx);
 Lisp l_bufferLocalSet(Lisp args, LispError *e, LispContext ctx);
 Lisp l_bufferLocal(Lisp args, LispError *e, LispContext ctx);
 
+// Keyboard macros — see macro.c
+Lisp macroStart(Lisp args, LispError *e, LispContext ctx);
+Lisp macroEnd(Lisp args, LispError *e, LispContext ctx);
+Lisp macroRunBuiltin(Lisp args, LispError *e, LispContext ctx);
+
 #endif

@@ -8,6 +8,7 @@
 #include "../include/define.h"
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
+#include "../include/macro.h"
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
@@ -93,6 +94,9 @@ void initBuiltins(void) {
   registerBuiltin("lsp-format-buffer", lspFormatBuffer);
   registerBuiltin("editor-open-terminal", editorOpenTerminal);
   registerBuiltin("editor-undo", editorUndo);
+  registerBuiltin("macro-start", macroStart);
+  registerBuiltin("macro-end", macroEnd);
+  registerBuiltin("macro-run", macroRunBuiltin);
   registerBuiltin("editor-redo", editorRedo);
   registerBuiltin("editor-set-mark", editorSetMark);
   registerBuiltin("editor-kill-region", editorKillRegion);
@@ -507,6 +511,9 @@ void deInitEditor() {
   for (i = 0; i < E.number_of_languages; i++)
     gfree(E.languages[i].words);
   gfree(E.languages);
+
+  // free the keyboard macro
+  macroFree();
 
   // Shut every LSP server down before freeing any client: shutting one
   // down looks up which client each buffer belongs to, which walks all of
