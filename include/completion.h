@@ -48,6 +48,11 @@ void lspAcceptCompletion(struct buffer_t* buf, const CompletionItem* item);
 // Response jumps the cursor to the definition, opening the target file
 // first if it isn't already open — see lspJumpToUri() in completion.c.
 void lspRequestDefinition(LspClient* lsp, struct buffer_t* buf, int line, int col);
+// textDocument/references: the answer is listed in the "*search*" buffer
+// (ENTER jumps), the declaration included.
+void lspRequestReferences(LspClient* lsp, struct buffer_t* buf, int line, int col);
+// Every diagnostic of the open buffers, listed the same way.
+void lspShowDiagnosticsList(void);
 // Prompts aren't this function's job — pass the already-chosen new name.
 // Response applies the server's WorkspaceEdit (both the "changes" and
 // "documentChanges" shapes) across every affected buffer, opening files

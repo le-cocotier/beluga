@@ -25,6 +25,18 @@ int projectSearchRun(const char *pattern, const char *root);
 // results stay visible; otherwise in place.
 void projectSearchGotoCursor(void);
 
+// One entry of a location list shown in the results buffer.
+typedef struct {
+  const char *abs_path;
+  int line;         // 1-based
+  int col;          // 0-based character the jump lands on
+  const char *text; // what to show for it (the line's text, a message, ...)
+} SearchLocation;
+
+// Shows a list of locations (LSP references, diagnostics, ...) in the same
+// "*search*" buffer, with the same ENTER-to-jump, under `title`.
+void projectSearchShowLocations(const char *title, const SearchLocation *locs, int n);
+
 // Frees the stored results. Called on shutdown.
 void projectSearchFree(void);
 

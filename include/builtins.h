@@ -102,6 +102,8 @@ Lisp editorGetPaneHeight(Lisp args, LispError *e, LispContext ctx);
 Lisp editorAutoComplete(Lisp args, LispError *e, LispContext ctx);
 // Lisp lspComplete(Lisp args, LispError *e, LispContext ctx);
 Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx);
+Lisp lspReferences(Lisp args, LispError *e, LispContext ctx);
+Lisp lspDiagnostics(Lisp args, LispError *e, LispContext ctx);
 Lisp lspHover(Lisp args, LispError *e, LispContext ctx);
 Lisp lspSignatureHelp(Lisp args, LispError *e, LispContext ctx);
 Lisp lspCodeAction(Lisp args, LispError *e, LispContext ctx);

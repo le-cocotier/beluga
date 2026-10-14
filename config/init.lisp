@@ -305,6 +305,8 @@
 (map-key "m" '(editor-open-file-path "~/.beluga/packages/personal-config/init.lisp") "config")
 ;; project
 (map-key "d" lsp-definition "project")
+(map-key "f" lsp-references "project")   ; listed in *search*, ENTER jumps
+(map-key "e" lsp-diagnostics "project")  ; every error/warning of the open files
 (map-key "h" lsp-hover "project")
 (map-key "s" lsp-signature-help "project")
 (map-key "a" lsp-code-action "project")

@@ -55,6 +55,7 @@ typedef struct {
   char *abs_path; // absolute, for opening the file
   char *rel_path; // relative to the search root, for display
   int line;       // 1-based, as grep reports it
+  int col;        // 0-based character to land on (0 for grep hits)
   char *text;     // the matching line, tabs expanded and trimmed
 } SearchHit;
 
@@ -71,6 +72,9 @@ static int s_row_count = 0;
 static int s_results_buffer_id = -1;
 static char s_root[PATH_MAX] = "";
 static int s_truncated = 0;
+// The results buffer's first line. Grep results describe their own query;
+// other lists (LSP references, diagnostics) bring theirs.
+static char s_title[SEARCH_MAX_PATTERN + 128] = "";
 
 // ─── Result storage ─────────────────────────────────────────────────────────
 
@@ -339,6 +343,7 @@ static int parseResults(char *output, const char *root) {
     hit->abs_path = utilStrdup(abs);
     hit->rel_path = utilStrdup(rel);
     hit->line = line_no;
+    hit->col = 0;
     hit->text = cleanText(text);
 
     if (!hit->abs_path || !hit->rel_path || !hit->text) {
@@ -388,15 +393,26 @@ static void clearBufferRows(Buffer *buf) {
 }
 
 /**
+ * @brief Number of distinct files among the hits (consecutive grouping, as
+ * displayed).
+ */
+static int countFiles(void) {
+  int files = 0;
+  int i;
+  for (i = 0; i < s_hit_count; i++)
+    if (i == 0 || strcmp(s_hits[i].rel_path, s_hits[i - 1].rel_path) != 0)
+      files++;
+  return files;
+}
+
+/**
  * @brief Fills the results buffer, grouping consecutive hits under the
  * file they came from.
  * @details Grep repeats the path on every line; a file heading plus bare
  * line numbers says the same thing in far less width, which matters as
  * soon as the results share the screen with the file you're jumping into.
  */
-static void renderResults(Buffer *buf, const char *pattern) {
-  char header[SEARCH_MAX_PATTERN + 128];
-  int files;
+static void renderResults(Buffer *buf) {
   int i;
   char row[SEARCH_MAX_TEXT + 32];
   int r;
@@ -405,15 +421,7 @@ static void renderResults(Buffer *buf, const char *pattern) {
   s_row_hit = NULL;
   s_row_count = 0;
 
-  files = 0;
-  for (i = 0; i < s_hit_count; i++)
-    if (i == 0 || strcmp(s_hits[i].rel_path, s_hits[i - 1].rel_path) != 0)
-      files++;
-
-  snprintf(header, sizeof(header), "%d match%s for \"%s\" in %d file%s%s",
-           s_hit_count, s_hit_count == 1 ? "" : "es", pattern, files,
-           files == 1 ? "" : "s", s_truncated ? " (truncated)" : "");
-  addRow(buf, header, -1);
+  addRow(buf, s_title, -1);
   addRow(buf, "", -1);
 
   for (i = 0; i < s_hit_count; i++) {
@@ -507,7 +515,10 @@ int projectSearchRun(const char *pattern, const char *root) {
   buf = openResultsBuffer();
   if (!buf)
     return -1;
-  renderResults(buf, pattern);
+  snprintf(s_title, sizeof(s_title), "%d match%s for \"%s\" in %d file%s%s",
+           s_hit_count, s_hit_count == 1 ? "" : "es", pattern, countFiles(),
+           countFiles() == 1 ? "" : "s", s_truncated ? " (truncated)" : "");
+  renderResults(buf);
 
   active = splitScreenGetActivePane();
   active->buffer_id = s_results_buffer_id;
@@ -651,11 +662,81 @@ void projectSearchGotoCursor(void) {
   if (line >= target->numrows)
     line = target->numrows > 0 ? target->numrows - 1 : 0;
   target->y = line;
-  target->x = 0;
+  target->x = hit->col;
+  if (target->numrows > 0 && target->x > target->row[line].size)
+    target->x = target->row[line].size;
 
   // Leave the scroll offset to editorScroll() on the next redraw, same
   // as editor-goto-line — it's the one place that knows the pane's
   // height and gutter width.
   E.prefix_state = 0;
   editorSetStatusMessage("%s:%d", hit->rel_path, hit->line);
+}
+
+// ─── Other location lists ───────────────────────────────────────────────────
+
+/**
+ * @brief Shows `n` locations in the results buffer, under `title`, with the
+ * same grouping by file and ENTER-to-jump as a project search.
+ * @details Paths are shown relative to the working directory when they're
+ * under it. Replaces whatever results were shown before.
+ */
+void projectSearchShowLocations(const char *title, const SearchLocation *locs,
+                                const int n) {
+  char *cwd;
+  size_t cwd_len;
+  const char *rel;
+  SearchHit *grown;
+  SearchHit *hit;
+  Buffer *buf;
+  EditorPane *active;
+  struct prefix_t prefix;
+  int i;
+
+  clearHits();
+  s_truncated = 0;
+  cwd = os_getcwd();
+  cwd_len = cwd ? strlen(cwd) : 0;
+  snprintf(s_root, sizeof(s_root), "%s", cwd ? cwd : "");
+
+  for (i = 0; i < n && i < SEARCH_MAX_HITS; i++) {
+    grown = grealloc(s_hits, (size_t)(s_hit_count + 1) * sizeof(SearchHit));
+    if (!grown)
+      break;
+    s_hits = grown;
+    rel = locs[i].abs_path;
+    if (cwd && strncmp(rel, cwd, cwd_len) == 0 && rel[cwd_len] == '/')
+      rel += cwd_len + 1;
+    hit = &s_hits[s_hit_count];
+    hit->abs_path = utilStrdup(locs[i].abs_path);
+    hit->rel_path = utilStrdup(rel);
+    hit->line = locs[i].line;
+    hit->col = locs[i].col;
+    hit->text = cleanText(locs[i].text ? locs[i].text : "");
+    if (!hit->abs_path || !hit->rel_path || !hit->text) {
+      gfree(hit->abs_path);
+      gfree(hit->rel_path);
+      gfree(hit->text);
+      break;
+    }
+    s_hit_count++;
+  }
+  s_truncated = n > s_hit_count;
+  free(cwd);
+
+  snprintf(s_title, sizeof(s_title), "%s%s", title,
+           s_truncated ? " (truncated)" : "");
+  buf = openResultsBuffer();
+  if (!buf)
+    return;
+  renderResults(buf);
+
+  active = splitScreenGetActivePane();
+  active->buffer_id = s_results_buffer_id;
+  active->cursor_y = buf->y;
+  active->cursor_x = 0;
+  active->y_offset = 0;
+  active->x_offset = 0;
+  prefix = find_prefix(SEARCH_PREFIX_NAME);
+  E.prefix_state = prefix.prefix_id;
 }
