@@ -1614,6 +1614,7 @@ void bufferFree(struct buffer_t *buf) {
   gfree(buf->redo_stack.entries);
   gfree(buf->git_lines);
   gfree(buf->comment_state);
+  gfree(buf->lsp_sent_text);
   gfree(buf);
 }
 

@@ -284,6 +284,14 @@ struct lsp_client_t
     // typing a following word-char keystroke did.
     char trigger_chars[LSP_MAX_TRIGGER_CHARS][LSP_TRIGGER_CHAR_MAXLEN];
     int num_trigger_chars;
+
+    // ── Document sync ─────────────────────────────────────────────────────────
+    // From the initialize response: whether the server takes incremental
+    // didChange (textDocumentSync.change == 2), and whether it agreed to
+    // UTF-8 positions (positionEncoding "utf-8") or uses the default,
+    // UTF-16 code units. See lspDidChange().
+    int sync_incremental;
+    int utf8_positions;
 };
 
 typedef struct
@@ -540,6 +548,11 @@ typedef struct buffer_t
     // edits — not just the word-char/trigger-char keystrokes that arm
     // completion.
     int lsp_synced_seq;
+    // The text as the server last saw it (didOpen or didChange), so the
+    // next didChange can send only the range that changed. NULL until the
+    // buffer is opened on a server that syncs incrementally.
+    char *lsp_sent_text;
+    size_t lsp_sent_len;
 
     // ── Undo/redo (per-buffer; zero-initialized by bufferCreate's calloc) ──
     UndoList undo_stack;
