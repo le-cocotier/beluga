@@ -111,6 +111,3 @@ is actually left to do.
 - [ ] **[debt]** Unused `#include`s flagged by the CLion analysis haven't
   been verified as removed. Re-run the inspection (or `include-what-you-use`
   / clangd's unused-include check) and clean up what's left.
-- [ ] **[debt]** `Doxyfile` has `GENERATE_TODOLIST = YES`, but nothing uses
-  `\todo`. Either keep this file as the only list and turn that off, or tag
-  the code and let Doxygen build the list.
