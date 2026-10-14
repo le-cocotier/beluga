@@ -54,10 +54,6 @@ is actually left to do.
     straight from the fd), so a key can't be lost between ticks. Likely
     macOS-specific; next step is a repro there (which shell, which
     terminal app, what was typed).
-- [ ] **[bug]** `map-key` (`src/builtins.c`, `mapKey()`) copies the key
-  with `strncpy(dst, src, 50)` into a `galloc(256)` buffer that isn't
-  zeroed. A key sequence of 50+ characters has no terminator. Copy with a
-  bound of `255` and terminate it explicitly, or `strdup` it.
 - [ ] **[feature]** Full-screen programs in the terminal buffer
   (`src/ansi_parser.c`): `htop`, `vim` and `less` need scroll regions
   (`ESC[r`), the alternate screen (`ESC[?1049h`), insert/delete line
@@ -72,16 +68,6 @@ is actually left to do.
 
 ## Configuration and packages
 
-- [ ] **[feature]** Let a later `map-key` replace an existing binding.
-  Bindings are appended and the **first** registered one wins, so:
-  - a key taken by a package can't be rebound from `personal-config` or at
-    runtime;
-  - every language package fights over `CTRL-d` (see the note in
-    `config/init.lisp`).
-
-  Replacing the existing key+prefix entry fixes both. It flips the load
-  order rule, though: `(add-package "personal-config")` would then have to
-  move to the end of `config/init.lisp`.
 - [ ] **[feature]** Per-language (buffer-local) keymaps, so the comment toggle
   and similar commands pick the right behaviour for the file type instead of
   whichever package loaded first.

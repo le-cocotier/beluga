@@ -6,17 +6,15 @@
 ;; replacing ~/.beluga/config/init.lisp with a newer default — keep that
 ;; file stock and put your tweaks here instead.
 ;;
-;; Loaded by (add-package "personal-config") in ~/.beluga/config/init.lisp:
-;; after the default packages and the theme, but BEFORE the default key
-;; bindings and helper functions defined further down that file. So:
+;; Loaded by (add-package "personal-config") at the very end of
+;; ~/.beluga/config/init.lisp, after the default packages, theme, key
+;; bindings and helper functions. So:
 ;;   - (define TAB-LENGTH ...) and the other settings override the defaults;
 ;;   - theme colors set here win over the theme package's;
-;;   - map-key bindings here win over the defaults (the first binding
-;;     registered for a key+prefix is the one that runs) — though not over
-;;     a package loaded before this one (e.g. outline's CTRL-o);
-;;   - but a function defined LATER in init.lisp (enter-and-tab,
-;;     editor-buffer-picker, ...) doesn't exist yet here — bind builtins,
-;;     your own functions, or a quoted form like '(move-cursor "up").
+;;   - a map-key here replaces the default binding for that key and prefix
+;;     (the last map-key for a key+prefix is the one that runs);
+;;   - every function defined in init.lisp (enter-and-tab,
+;;     editor-buffer-picker, ...) exists already, ready to bind.
 
 ;; SETTINGS
 ;; (define TAB-LENGTH 2)
