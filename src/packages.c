@@ -510,7 +510,7 @@ Lisp l_packageVersion(const Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
- * @brief Lisp function: (beluga-version) — "3.3", the running editor's.
+ * @brief Lisp function: (beluga-version) — "3.4", the running editor's.
  */
 Lisp l_belugaVersion(const Lisp args, LispError *e, LispContext ctx) {
   (void)args;

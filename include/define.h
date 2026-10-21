@@ -81,7 +81,7 @@
 
 #define ABUF_INIT {NULL, 0, 0}
 
-#define BELUGA_VERSION "3.3"
+#define BELUGA_VERSION "3.4"
 
 
 

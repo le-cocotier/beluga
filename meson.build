@@ -1,5 +1,5 @@
 project('beluga', 'c',
-  version : '3.3',
+  version : '3.4',
   default_options : [
     'c_std=c99'
   ]
@@ -128,7 +128,7 @@ test('os-boundary', find_program('tools/check_os_boundary.sh'),
 
 # Unit tests (test/): each is a small program linked against the editor's
 # code; test/test.c stands in for main.c's globals.
-foreach t : ['utf8', 'buffer', 'ansi_parser', 'completion', 'packages']
+foreach t : ['utf8', 'buffer', 'ansi_parser', 'completion', 'packages', 'highlight']
   test(t, executable('test_' + t,
     files('test/test_' + t + '.c', 'test/test.c'),
     c_args : core_args,

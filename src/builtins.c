@@ -3011,6 +3011,51 @@ Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function: color a word inside comments
+ * @details (syntax-add-comment-word "ext" "word" "role" ["next-role"]) —
+ * inside a comment of an `ext` file, `word` is drawn in `role`'s theme
+ * color ("keyword", "type", "string", "number", ...) instead of the comment
+ * color, and with `next-role`, the word after it too: the doxygen package
+ * registers ("@param" "keyword" "type") so the parameter's name stands
+ * out. The word must stand alone ("@param" in "@params" doesn't count).
+ * Works whether or not syntax-define-language has run for `ext` yet.
+ * @return #t, or #f for an unknown role or a word longer than 31 bytes
+ */
+Lisp l_syntaxAddCommentWord(Lisp args, LispError *e, LispContext ctx) {
+  const char *ext;
+  const char *word;
+  const char *role_name;
+  int role;
+  int next_role = -1;
+  (void)ctx;
+  if (!lisp_is_pair(args) || !lisp_is_pair(lisp_cdr(args)) || !lisp_is_pair(lisp_cdr(lisp_cdr(args))) ||
+      lisp_type(lisp_car(args)) != LISP_STRING || lisp_type(lisp_car(lisp_cdr(args))) != LISP_STRING ||
+      lisp_type(lisp_car(lisp_cdr(lisp_cdr(args)))) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  ext = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  word = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  role_name = lisp_string(lisp_car(args));
+  role = syntaxRoleFromName(role_name);
+  args = lisp_cdr(args);
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING) {
+    next_role = syntaxRoleFromName(lisp_string(lisp_car(args)));
+    if (next_role < 0) {
+      editorSetStatusMessage("syntax-add-comment-word: unknown role %s", lisp_string(lisp_car(args)));
+      return lisp_make_bool(0);
+    }
+  }
+  if (role < 0) {
+    editorSetStatusMessage("syntax-add-comment-word: unknown role %s", role_name);
+    return lisp_make_bool(0);
+  }
+  return lisp_make_bool(syntaxAddCommentWord(ext, word, role, next_role));
+}
+
+/**
  * @brief Lisp function: (write-file "path" "text") — writes text to path
  * as is (binary: no newline translation on Windows), replacing it.
  * @return #t, or #f if the file couldn't be written

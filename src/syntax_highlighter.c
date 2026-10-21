@@ -153,6 +153,92 @@ int syntaxRoleFromName(const char *name)
 
 static int comment_section = 0;
 
+// ─── Words inside comments ──────────────────────────────────────────────────
+// (syntax-add-comment-word "c" "@param" "keyword" "type"): inside a comment
+// of a "c" file, "@param" is drawn in the keyword color and the word after
+// it (the parameter's name) in the type color. Kept apart from
+// LanguageSyntax, by extension, so they survive the language being
+// (re)defined later — the doxygen package doesn't have to load after "c".
+
+typedef struct
+{
+    char extension[16];
+    char word[32];
+    int role;      // a TokenType
+    int next_role; // the following word's TokenType, or -1
+} CommentWord;
+
+static CommentWord *s_comment_words = NULL;
+static int s_num_comment_words = 0;
+static int s_comment_words_cap = 0;
+
+int syntaxAddCommentWord(const char *ext, const char *word, const int role, const int next_role)
+{
+    CommentWord *grown;
+    CommentWord *w;
+    int cap;
+    int i;
+    if (!ext[0] || !word[0] || strlen(ext) >= sizeof(w->extension) || strlen(word) >= sizeof(w->word))
+        return 0;
+    for (i = 0; i < s_num_comment_words; i++)
+    {
+        w = &s_comment_words[i];
+        if (!strcmp(w->extension, ext) && !strcmp(w->word, word))
+        {
+            w->role = role; // registered again: the new colors win
+            w->next_role = next_role;
+            return 1;
+        }
+    }
+    if (s_num_comment_words == s_comment_words_cap)
+    {
+        cap = s_comment_words_cap ? s_comment_words_cap * 2 : 32;
+        grown = grealloc(s_comment_words, (size_t) cap * sizeof(CommentWord));
+        if (!grown)
+            return 0;
+        s_comment_words = grown;
+        s_comment_words_cap = cap;
+    }
+    w = &s_comment_words[s_num_comment_words++];
+    memset(w, 0, sizeof(*w));
+    strcpy(w->extension, ext);
+    strcpy(w->word, word);
+    w->role = role;
+    w->next_role = next_role;
+    return 1;
+}
+
+void syntaxFreeCommentWords(void)
+{
+    gfree(s_comment_words);
+    s_comment_words = NULL;
+    s_num_comment_words = 0;
+    s_comment_words_cap = 0;
+}
+
+// The comment word starting at row->characters[i], if any: it must start
+// and end at a word boundary ("@param" in "@params" doesn't count).
+static const CommentWord *commentWordAt(const Row *row, const int i, const LanguageSyntax *lang,
+                                        int *len)
+{
+    int k;
+    int n;
+    if (i > 0 && is_word_char(&row->characters[i - 1]))
+        return NULL;
+    for (k = 0; k < s_num_comment_words; k++)
+    {
+        if (strcmp(s_comment_words[k].extension, lang->extension) != 0)
+            continue;
+        n = rowMatchesAt(row, i, s_comment_words[k].word);
+        if (n && (i + n >= row->size || !is_word_char(&row->characters[i + n])))
+        {
+            *len = n;
+            return &s_comment_words[k];
+        }
+    }
+    return NULL;
+}
+
 // ─── Block-comment state cache ──────────────────────────────────────────────
 //
 // highlight_line() relies on comment_section carrying state across
@@ -332,6 +418,65 @@ void syntaxHighlighterSeed(const int in_comment)
 }
 
 /**
+ * @brief Copies comment text from row->characters[*i], in the comment
+ * color (already emitted by the caller, and current again on return), with
+ * the language's comment words in their own colors.
+ * @details Stops at the end of the row, or, when `close` is non-empty,
+ * right after the block-comment close (clearing comment_section).
+ */
+static void copy_comment(char *result, int *result_pos, const int buf_size, const Row *row, int *i,
+                         const int x_start, const int x_end, const LanguageSyntax *lang,
+                         const char *close)
+{
+    const Utf8Char *chars = row->characters;
+    const CommentWord *cw;
+    int closeLen;
+    int len;
+    int k;
+    while (*i < row->size)
+    {
+        closeLen = rowMatchesAt(row, *i, close);
+        if (closeLen)
+        {
+            for (k = 0; k < closeLen; k++)
+                copy_utf8_char(result, result_pos, chars, i, x_start, x_end);
+            comment_section = 0;
+            return;
+        }
+        cw = s_num_comment_words ? commentWordAt(row, *i, lang, &len) : NULL;
+        if (!cw)
+        {
+            copy_utf8_char(result, result_pos, chars, i, x_start, x_end);
+            continue;
+        }
+        *result_pos += snprintf(&result[*result_pos], buf_size - *result_pos, "%s",
+                                get_color((TokenType) cw->role));
+        for (k = 0; k < len; k++)
+            copy_utf8_char(result, result_pos, chars, i, x_start, x_end);
+        if (cw->next_role >= 0)
+        {
+            // "@param[in] name": the direction goes with the tag.
+            if (*i < row->size && isAsciiChar(&chars[*i], '['))
+                while (*i < row->size)
+                {
+                    k = isAsciiChar(&chars[*i], ']');
+                    copy_utf8_char(result, result_pos, chars, i, x_start, x_end);
+                    if (k)
+                        break;
+                }
+            while (*i < row->size && (isAsciiChar(&chars[*i], ' ') || isAsciiChar(&chars[*i], '\t')))
+                copy_utf8_char(result, result_pos, chars, i, x_start, x_end);
+            *result_pos += snprintf(&result[*result_pos], buf_size - *result_pos, "%s",
+                                    get_color((TokenType) cw->next_role));
+            while (*i < row->size && is_word_char(&chars[*i]) && !rowMatchesAt(row, *i, close))
+                copy_utf8_char(result, result_pos, chars, i, x_start, x_end);
+        }
+        *result_pos += snprintf(&result[*result_pos], buf_size - *result_pos, "%s",
+                                E.theme.COLOR_COMMENT);
+    }
+}
+
+/**
  * @brief Highlight one editor row and return an ANSI-colored, ready-to-render
  * byte string (raw UTF-8 + color escapes — not a Utf8Char array, since this
  * is terminal output, not editable text).
@@ -363,7 +508,6 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
     int result_pos;
     int i;
     const Utf8Char *chars;
-    int closeLen;
     int k;
     int openLen;
     int quote_idx;
@@ -442,19 +586,8 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
             // same way; a row where comment_section carries in from a
             // *previous* row used to be the one case that didn't.
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_COMMENT);
-            while (i < row->size)
-            {
-                closeLen = rowMatchesAt(row, i, lang->block_comment_close);
-                if (closeLen)
-                {
-                    for (k = 0; k < closeLen; k++)
-                        copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-                    comment_section = 0;
-                    break;
-                }
-                copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-            }
-
+            copy_comment(result, &result_pos, buf_size, row, &i, x_start, x_end, lang,
+                         lang->block_comment_close);
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);
             continue;
         }
@@ -463,8 +596,7 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
         if (rowMatchesAt(row, i, lang->line_comment))
         {
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_COMMENT);
-            while (i < row->size)
-                copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
+            copy_comment(result, &result_pos, buf_size, row, &i, x_start, x_end, lang, "");
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);
             continue;
         }
@@ -477,18 +609,8 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_COMMENT);
             for (k = 0; k < openLen; k++)
                 copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-            while (i < row->size)
-            {
-                closeLen = rowMatchesAt(row, i, lang->block_comment_close);
-                if (closeLen)
-                {
-                    for (k = 0; k < closeLen; k++)
-                        copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-                    comment_section = 0;
-                    break;
-                }
-                copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-            }
+            copy_comment(result, &result_pos, buf_size, row, &i, x_start, x_end, lang,
+                         lang->block_comment_close);
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);
             continue;
         }

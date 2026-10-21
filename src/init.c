@@ -25,6 +25,11 @@
 #include "../include/lisp_lib.h"
 #pragma GCC diagnostic pop
 
+// From syntax_highlighter.h, which can't be included here: its TokenType
+// clashes with the one lisp.h's implementation (LISP_IMPLEMENTATION, above)
+// defines.
+void syntaxFreeCommentWords(void);
+
 /***********************************************************************************************************************
  *
  *                                                 extern definitions
@@ -139,6 +144,7 @@ void initBuiltins(void) {
   registerBuiltin("syntax-define-language", l_syntaxDefineLanguage);
   registerBuiltin("syntax-add-keyword", l_syntaxAddKeyword);
   registerBuiltin("syntax-add-type", l_syntaxAddType);
+  registerBuiltin("syntax-add-comment-word", l_syntaxAddCommentWord);
   registerBuiltin("syntax-add-line-prefix", l_syntaxAddLinePrefix);
   registerBuiltin("buffer-set-syntax", l_bufferSetSyntax);
   registerBuiltin("write-file", l_writeFile);
@@ -460,6 +466,7 @@ void deInitEditor() {
   for (i = 0; i < E.number_of_languages; i++)
     gfree(E.languages[i].words);
   gfree(E.languages);
+  syntaxFreeCommentWords();
 
   // free lsp_client
   if (E.lsp_client) {
