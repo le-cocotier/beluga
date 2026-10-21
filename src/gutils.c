@@ -41,7 +41,7 @@ static void indexGrow(void) {
     p->hashNext = table[slot];
     table[slot] = p;
   }
-  free(g_index);
+  gfree(g_index);
   g_index = table;
   g_index_size = new_size;
 }
@@ -172,7 +172,7 @@ void gfree(void * data){
   struct dataBlock_t * pBlock = data ? findBlock(data) : NULL;
   if (!pBlock) {
     // Not one of ours (calloc/strdup/asprintf/getline/NULL/...) -> defer to
-    // the real free() so nothing leaks just because it wasn't galloc'd.
+    // the real gfree() so nothing leaks just because it wasn't galloc'd.
     free(data);
     return;
   }

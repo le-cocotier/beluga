@@ -1,6 +1,7 @@
 #include "../include/init.h"
 #include "../include/builtins.h"
 #include "../include/color.h"
+#include "../include/cJSON.h"
 #include "../include/completion.h"
 #include "../include/config_load.h"
 #include "../include/data.h"
@@ -9,12 +10,12 @@
 #include "../include/define.h"
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
-#include "../include/packages.h"
 #include "../include/macro.h"
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
 #include "../include/utils.h"
+#include "../include/packages.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -285,7 +286,9 @@ static void initConfig(void) {
   // used to leave a lisp_log.err behind in every project). w+:
   // config_load.c reads back what the interpreter wrote here to put the
   // reason for a failing form in its error message.
-  lisp_log_path = utilFormat("%s/.beluga/lisp_log.err", os_home_dir());
+  char *home = os_home_dir();
+  lisp_log_path = utilFormat("%s/.beluga/lisp_log.err", home);
+  gfree(home);
   E.ctx.p->err_port = lisp_log_path ? fopen(lisp_log_path, "w+") : NULL;
   gfree(lisp_log_path);
   if (!E.ctx.p->err_port)

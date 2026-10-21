@@ -267,7 +267,7 @@ static Lisp readManifest(const char *dir, LispContext ctx) {
   if (!path)
     return lisp_null();
   forms = readDataFile(path, ctx);
-  free(path);
+  gfree(path);
   for (; lisp_is_pair(forms); forms = lisp_cdr(forms)) {
     form = lisp_car(forms);
     if (lisp_is_pair(form) && lisp_type(lisp_car(form)) == LISP_SYMBOL &&
@@ -285,7 +285,7 @@ static int fileExists(const char *dir, const char *name) {
   if (!path)
     return 0;
   exists = os_file_info(path, &info) == 0;
-  free(path);
+  gfree(path);
   return exists;
 }
 
@@ -375,7 +375,7 @@ static int loadPackage(const char *name, const char *dir_arg, LispContext ctx) {
   os_path_to_slashes(dir);
   init_path = utilFormat("%s/init.lisp", dir);
   if (!init_path) {
-    free(dir);
+    gfree(dir);
     return 0;
   }
 
@@ -385,8 +385,8 @@ static int loadPackage(const char *name, const char *dir_arg, LispContext ctx) {
     if (strcmp(name, "personal-config") != 0)
       editorSetStatusMessage("add-package: \"%s\" isn't installed (no %s)", name, init_path);
     appDebug("[PACKAGE] %s: can't open %s\n", name, init_path);
-    free(init_path);
-    free(dir);
+    gfree(init_path);
+    gfree(dir);
     return 0;
   }
 
@@ -394,8 +394,8 @@ static int loadPackage(const char *name, const char *dir_arg, LispContext ctx) {
     entry = addEntry(name);
   if (!entry) {
     fclose(fd_package);
-    free(init_path);
-    free(dir);
+    gfree(init_path);
+    gfree(dir);
     return 0;
   }
   entry->state = PACKAGE_LOADING;
@@ -424,8 +424,8 @@ static int loadPackage(const char *name, const char *dir_arg, LispContext ctx) {
     }
   }
   fclose(fd_package);
-  free(init_path);
-  free(dir);
+  gfree(init_path);
+  gfree(dir);
 
   // The table may have grown (and moved) while the requires loaded.
   entry = findPackage(name);
@@ -560,7 +560,7 @@ Lisp l_packageDirectory(const Lisp args, LispError *e, LispContext ctx) {
   if (!path)
     return lisp_make_bool(0);
   result = lisp_make_string2(path, ctx);
-  free(path);
+  gfree(path);
   return result;
 }
 
@@ -607,7 +607,7 @@ Lisp l_writeDataFile(const Lisp args, LispError *e, LispContext ctx) {
     return lisp_make_bool(0);
   f = fopen(tmp, "wb");
   if (!f) {
-    free(tmp);
+    gfree(tmp);
     return lisp_make_bool(0);
   }
   if (header)
@@ -625,6 +625,6 @@ Lisp l_writeDataFile(const Lisp args, LispError *e, LispContext ctx) {
   }
   if (!ok)
     remove(tmp);
-  free(tmp);
+  gfree(tmp);
   return lisp_make_bool(ok);
 }

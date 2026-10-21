@@ -782,7 +782,7 @@ char *os_realpath(const char *path) {
   if (!raw)
     return NULL;
   copy = gstrdup(raw);
-  free(raw); // galloc: raw — realpath() malloc'd it
+  gfree(raw); // galloc: raw — realpath() malloc'd it
   return copy;
 }
 

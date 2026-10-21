@@ -1328,8 +1328,35 @@ Lisp editorPaste(Lisp args, LispError *e, LispContext ctx) {
   char *text = editorGetClipboard();
   const unsigned char *p;
   Utf8Char ch;
+  char *src;
+  char *dst;
+  const EditorPane *active;
+  struct buffer_t *buf;
   if (!text)
     return lisp_null();
+
+  // CRLF (Windows clipboards, copies from a browser) is one line break,
+  // and so is a lone CR (classic Mac text).
+  for (src = dst = text; *src; src++) {
+    if (*src == '\r') {
+      *dst++ = '\n';
+      if (src[1] == '\n')
+        src++;
+    } else {
+      *dst++ = *src;
+    }
+  }
+  *dst = '\0';
+
+  // One bulk insert, undone in one step. Terminal buffers keep the
+  // per-key path (bufferInsertChar() decides what they accept).
+  active = splitScreenGetActivePane();
+  buf = active ? bufferFindById(active->buffer_id) : NULL;
+  if (buf && buf->type != TERMINAL_BUFF) {
+    bufferInsertText(buf, text);
+    gfree(text);
+    return lisp_null();
+  }
 
   p = (const unsigned char *)text;
   while (*p) {
@@ -1576,6 +1603,7 @@ Lisp editorMoveEndBuffer(Lisp args, LispError *e, LispContext ctx) {
 }
 
 Lisp editorAutoComplete(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buffer;
   if (!E.constantes.LSP) {
@@ -1584,7 +1612,7 @@ Lisp editorAutoComplete(Lisp args, LispError *e, LispContext ctx) {
   appDebug("editor-auto-complete\n");
   active = splitScreenGetActivePane();
   buffer = bufferFindById(active->buffer_id);
-  lspRequestCompletion(E.lsp_client, buffer, buffer->y, buffer->x,
+  lspRequestCompletion(lsp, buffer, buffer->y, buffer->x,
                        active->cursor_x + active->origin_x +
                            editorGutterWidth(buffer),
                        active->cursor_y + active->origin_y);
@@ -1872,12 +1900,13 @@ Lisp lspRegisterServer(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
     return lisp_null();
 
   active = splitScreenGetActivePane();
@@ -1885,7 +1914,47 @@ Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx) {
   if (!buf)
     return lisp_null();
 
-  lspRequestDefinition(E.lsp_client, buf, buf->y, buf->x);
+  lspRequestDefinition(lsp, buf, buf->y, buf->x);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to list the references to the symbol at the cursor
+ * @details (lsp-references) — asks the server (async); the answer is shown
+ * in the "*search*" buffer, grouped by file, ENTER jumps to one.
+ * @return lisp_null()
+ */
+Lisp lspReferences(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
+  EditorPane *active;
+  struct buffer_t *buf;
+  (void)args;
+  (void)e;
+  (void)ctx;
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY) {
+    editorSetStatusMessage("LSP not ready");
+    return lisp_null();
+  }
+
+  active = splitScreenGetActivePane();
+  buf = bufferFindById(active->buffer_id);
+  if (!buf)
+    return lisp_null();
+
+  lspRequestReferences(lsp, buf, buf->y, buf->x);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to list every diagnostic of the open buffers
+ * @details (lsp-diagnostics) — in the "*search*" buffer, ENTER jumps to one.
+ * @return lisp_null()
+ */
+Lisp lspDiagnostics(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  lspShowDiagnosticsList();
   return lisp_null();
 }
 
@@ -1895,12 +1964,13 @@ Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspHover(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
     return lisp_null();
 
   active = splitScreenGetActivePane();
@@ -1908,7 +1978,7 @@ Lisp lspHover(Lisp args, LispError *e, LispContext ctx) {
   if (!buf)
     return lisp_null();
 
-  lspRequestHover(E.lsp_client, buf, buf->y, buf->x);
+  lspRequestHover(lsp, buf, buf->y, buf->x);
   return lisp_null();
 }
 
@@ -1920,12 +1990,13 @@ Lisp lspHover(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspSignatureHelp(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
     return lisp_null();
 
   active = splitScreenGetActivePane();
@@ -1933,7 +2004,7 @@ Lisp lspSignatureHelp(Lisp args, LispError *e, LispContext ctx) {
   if (!buf)
     return lisp_null();
 
-  lspRequestSignatureHelp(E.lsp_client, buf, buf->y, buf->x);
+  lspRequestSignatureHelp(lsp, buf, buf->y, buf->x);
   return lisp_null();
 }
 
@@ -1944,12 +2015,13 @@ Lisp lspSignatureHelp(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspCodeAction(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY) {
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY) {
     editorSetStatusMessage("LSP not ready");
     return lisp_null();
   }
@@ -1959,7 +2031,7 @@ Lisp lspCodeAction(Lisp args, LispError *e, LispContext ctx) {
   if (!buf || buf->type != FILE_BUFF)
     return lisp_null();
 
-  lspRequestCodeAction(E.lsp_client, buf, buf->y, buf->x);
+  lspRequestCodeAction(lsp, buf, buf->y, buf->x);
   return lisp_null();
 }
 
@@ -1972,9 +2044,10 @@ Lisp lspCodeAction(Lisp args, LispError *e, LispContext ctx) {
 Lisp lspApplyCodeAction_L(Lisp args, LispError *e, LispContext ctx) {
   (void)e;
   (void)ctx;
-  if (!E.lsp_client || !lisp_is_pair(args))
+  if (!lisp_is_pair(args))
     return lisp_null();
-  lspApplyCodeAction(E.lsp_client, (int)lisp_int(lisp_car(args)));
+  // NULL: the server that offered the actions (see lspApplyCodeAction()).
+  lspApplyCodeAction(NULL, (int)lisp_int(lisp_car(args)));
   return lisp_null();
 }
 
@@ -1988,6 +2061,7 @@ Lisp lspApplyCodeAction_L(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspRename(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   Utf8Char *name_input;
@@ -1995,7 +2069,7 @@ Lisp lspRename(Lisp args, LispError *e, LispContext ctx) {
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY) {
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY) {
     editorSetStatusMessage("LSP not ready");
     return lisp_null();
   }
@@ -2016,7 +2090,7 @@ Lisp lspRename(Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
   }
 
-  lspRequestRename(E.lsp_client, buf, buf->y, buf->x, new_name);
+  lspRequestRename(lsp, buf, buf->y, buf->x, new_name);
   gfree(new_name);
   return lisp_null();
 }
@@ -2030,12 +2104,13 @@ Lisp lspRename(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp lspFormatBuffer(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
   EditorPane *active;
   struct buffer_t *buf;
   (void)args;
   (void)e;
   (void)ctx;
-  if (!E.constantes.LSP || !E.lsp_client || E.lsp_client->state != LSP_READY)
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
     return lisp_null();
 
   active = splitScreenGetActivePane();
@@ -2043,7 +2118,7 @@ Lisp lspFormatBuffer(Lisp args, LispError *e, LispContext ctx) {
   if (!buf || buf->type != FILE_BUFF)
     return lisp_null();
 
-  lspRequestFormatting(E.lsp_client, buf);
+  lspRequestFormatting(lsp, buf);
   return lisp_null();
 }
 
@@ -2061,6 +2136,34 @@ Lisp l_projectSearch(Lisp args, LispError *e, LispContext ctx) {
   (void)e;
   (void)ctx;
   projectSearchPrompt();
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function: query-replace in the current buffer
+ * @details (query-replace) prompts for the text and its replacement, then
+ * asks at each match from the cursor on. See replace.c.
+ * @return lisp_null()
+ */
+Lisp l_queryReplace(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  queryReplacePrompt();
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function: query-replace across the project
+ * @details (project-query-replace) — same, over every file project-search
+ * would find the text in. Buffers are left unsaved. See replace.c.
+ * @return lisp_null()
+ */
+Lisp l_projectQueryReplace(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  projectQueryReplacePrompt();
   return lisp_null();
 }
 
@@ -2290,7 +2393,7 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
     }
     snprintf(joined, sizeof(joined), "%s/%s", base, path);
   }
-  free(cwd);
+  gfree(cwd);
 
   os_path_to_slashes(joined); // "C:\\dir\\file" typed the Windows way
   normalizePath(joined, out, sizeof(out));
@@ -2395,7 +2498,7 @@ Lisp l_shellQuote(Lisp args, LispError *e, LispContext ctx) {
   if (!quoted)
     return lisp_null();
   result = lisp_make_string2(quoted, ctx);
-  free(quoted);
+  gfree(quoted);
   return result;
 }
 
@@ -2683,7 +2786,7 @@ Lisp l_stringSplit(Lisp args, LispError *e, LispContext ctx) {
     if (!piece)
       break;
     cell = lisp_cons(lisp_make_string2(piece, ctx), lisp_null(), ctx);
-    free(piece);
+    gfree(piece);
     if (lisp_is_null(head))
       head = cell;
     else
