@@ -107,6 +107,8 @@ void initBuiltins(void) {
   registerBuiltin("lsp-hover", lspHover);
   registerBuiltin("lsp-references", lspReferences);
   registerBuiltin("lsp-diagnostics", lspDiagnostics);
+  registerBuiltin("lsp-document-symbols", lspDocumentSymbols);
+  registerBuiltin("lsp-workspace-symbols", lspWorkspaceSymbols);
   registerBuiltin("lsp-signature-help", lspSignatureHelp);
   registerBuiltin("lsp-code-action", lspCodeAction);
   registerBuiltin("lsp-apply-code-action", lspApplyCodeAction_L);

@@ -397,6 +397,7 @@
 (map-key "d" lsp-definition "project")
 (map-key "f" lsp-references "project")   ; listed in *search*, ENTER jumps
 (map-key "e" lsp-diagnostics "project")  ; every error/warning of the open files
+(map-key "w" lsp-workspace-symbols "project") ; a function/type by name, anywhere
 (map-key "h" lsp-hover "project")
 (map-key "s" lsp-signature-help "project")
 (map-key "a" lsp-code-action "project")

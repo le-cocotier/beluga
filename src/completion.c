@@ -831,6 +831,245 @@ void lspShowDiagnosticsList(void)
     gfree(locs);
 }
 
+// ─── Symbols: the outline and symbol search ─────────────────────────────────
+
+/**
+ * @brief Lower-case name of an LSP SymbolKind ("function", "struct", ...),
+ * or "symbol" for one this table doesn't know.
+ */
+const char *lspSymbolKindName(const int kind)
+{
+    static const char *const names[] = {
+        "symbol", "file", "module", "namespace", "package", "class", "method",
+        "property", "field", "constructor", "enum", "interface", "function",
+        "variable", "constant", "string", "number", "boolean", "array",
+        "object", "key", "null", "enum member", "struct", "event", "operator",
+        "type parameter"};
+    if (kind < 1 || kind >= (int) (sizeof(names) / sizeof(names[0])))
+        return names[0];
+    return names[kind];
+}
+
+static int lspReadPosition(const cJSON *pos, int *line, int *col);
+
+/**
+ * @brief The 0-based line/character a range starts at.
+ * @return 1 when `range` has a well-formed start, else 0.
+ */
+static int lsp_range_start(const cJSON *range, int *line, int *col)
+{
+    return range && lspReadPosition(cJSON_GetObjectItem(range, "start"), line, col);
+}
+
+/**
+ * @brief Appends one symbol to (*out, *count, *cap), growing it as needed.
+ * The strings are copied. @return 0 when out of memory, else 1.
+ */
+static int lsp_push_symbol(LspSymbol **out, int *count, int *cap, const char *name,
+                           const char *detail, const int kind, const int depth,
+                           const char *path, const int line, const int col)
+{
+    LspSymbol *grown;
+    LspSymbol *s;
+    if (*count == *cap)
+    {
+        *cap = *cap ? *cap * 2 : 32;
+        grown = grealloc(*out, (size_t) *cap * sizeof(LspSymbol));
+        if (!grown)
+            return 0;
+        *out = grown;
+    }
+    s = &(*out)[*count];
+    s->name = utilStrdup(name);
+    s->detail = (detail && detail[0]) ? utilStrdup(detail) : NULL;
+    s->path = path ? utilStrdup(path) : NULL;
+    s->kind = kind;
+    s->depth = depth;
+    s->line = line;
+    s->col = col;
+    (*count)++;
+    return s->name != NULL;
+}
+
+/**
+ * @brief Flattens a DocumentSymbol tree (what clangd sends, since the
+ * client says hierarchicalDocumentSymbolSupport) depth first, so a struct
+ * comes right before its fields. Lands on selectionRange — the name —
+ * rather than range, which starts at the doc comment above it.
+ */
+static int lsp_flatten_document_symbols(const cJSON *array, const int depth, LspSymbol **out,
+                                        int *count, int *cap)
+{
+    const cJSON *sym;
+    const cJSON *name;
+    const cJSON *detail;
+    const cJSON *kind;
+    int line;
+    int col;
+    cJSON_ArrayForEach(sym, array)
+    {
+        name = cJSON_GetObjectItem(sym, "name");
+        detail = cJSON_GetObjectItem(sym, "detail");
+        kind = cJSON_GetObjectItem(sym, "kind");
+        if (!cJSON_IsString(name) ||
+            (!lsp_range_start(cJSON_GetObjectItem(sym, "selectionRange"), &line, &col) &&
+             !lsp_range_start(cJSON_GetObjectItem(sym, "range"), &line, &col)))
+            continue;
+        if (!lsp_push_symbol(out, count, cap, name->valuestring,
+                             cJSON_IsString(detail) ? detail->valuestring : NULL,
+                             cJSON_IsNumber(kind) ? kind->valueint : 0, depth, NULL, line, col))
+            return 0;
+        if (!lsp_flatten_document_symbols(cJSON_GetObjectItem(sym, "children"), depth + 1, out,
+                                          count, cap))
+            return 0;
+    }
+    return 1;
+}
+
+int lspParseSymbols(const char *message_json, LspSymbol **out)
+{
+    cJSON *root;
+    const cJSON *result;
+    const cJSON *sym;
+    const cJSON *name;
+    const cJSON *kind;
+    const cJSON *container;
+    const cJSON *location;
+    const cJSON *uri;
+    char path[PATH_MAX];
+    int count = 0;
+    int cap = 0;
+    int ok = 1;
+    int line;
+    int col;
+    *out = NULL;
+    root = cJSON_Parse(message_json);
+    if (!root)
+        return -1;
+    result = cJSON_GetObjectItem(root, "result");
+    if (!cJSON_IsArray(result))
+    {
+        // An error, or a server without the request: not "no symbols".
+        count = cJSON_IsNull(result) ? 0 : -1;
+        cJSON_Delete(root);
+        return count;
+    }
+
+    sym = cJSON_GetArrayItem(result, 0);
+    if (sym && cJSON_GetObjectItem(sym, "location") == NULL)
+        ok = lsp_flatten_document_symbols(result, 0, out, &count, &cap);
+    else
+    {
+        // SymbolInformation[]: flat, each with its own location — what
+        // workspace/symbol always sends, and documentSymbol from servers
+        // without the hierarchical form.
+        cJSON_ArrayForEach(sym, result)
+        {
+            name = cJSON_GetObjectItem(sym, "name");
+            kind = cJSON_GetObjectItem(sym, "kind");
+            container = cJSON_GetObjectItem(sym, "containerName");
+            location = cJSON_GetObjectItem(sym, "location");
+            uri = cJSON_GetObjectItem(location, "uri");
+            if (!cJSON_IsString(name) || !cJSON_IsString(uri) ||
+                !lspUriToPath(uri->valuestring, path, sizeof(path)) ||
+                !lsp_range_start(cJSON_GetObjectItem(location, "range"), &line, &col))
+                continue;
+            ok = lsp_push_symbol(out, &count, &cap, name->valuestring,
+                                 cJSON_IsString(container) ? container->valuestring : NULL,
+                                 cJSON_IsNumber(kind) ? kind->valueint : 0, 0, path, line, col);
+            if (!ok)
+                break;
+        }
+    }
+    cJSON_Delete(root);
+    if (!ok)
+    {
+        lspFreeSymbols(*out, count);
+        *out = NULL;
+        return -1;
+    }
+    return count;
+}
+
+void lspFreeSymbols(LspSymbol *symbols, const int count)
+{
+    int i;
+    for (i = 0; i < count; i++)
+    {
+        gfree(symbols[i].name);
+        gfree(symbols[i].detail);
+        gfree(symbols[i].path);
+    }
+    gfree(symbols);
+}
+
+// Where lsp_on_document_symbol_response() leaves its answer for
+// lspRequestDocumentSymbols(), which waits for it. A reply that arrives
+// after the wait gave up finds g_doc_symbols_waiting at 0 and is dropped.
+static int g_doc_symbols_waiting = 0;
+static LspSymbol *g_doc_symbols = NULL;
+static int g_doc_symbols_count = -1;
+
+static void lsp_on_document_symbol_response(LspClient *lsp, const char *result_json)
+{
+    (void) lsp;
+    if (!g_doc_symbols_waiting)
+        return;
+    g_doc_symbols_count = lspParseSymbols(result_json, &g_doc_symbols);
+}
+
+static void lsp_on_workspace_symbol_response(LspClient *lsp, const char *result_json)
+{
+    LspSymbol *symbols;
+    SearchLocation *locs;
+    char **texts;
+    char title[64];
+    char text[512];
+    int n;
+    int i;
+    (void) lsp;
+    n = lspParseSymbols(result_json, &symbols);
+    if (n <= 0)
+    {
+        editorSetStatusMessage(n < 0 ? "Symbol search failed" : "No symbols found");
+        return;
+    }
+
+    locs = gcalloc((size_t) n, sizeof(SearchLocation));
+    texts = gcalloc((size_t) n, sizeof(char *));
+    if (!locs || !texts)
+    {
+        gfree(locs);
+        gfree(texts);
+        lspFreeSymbols(symbols, n);
+        return;
+    }
+    for (i = 0; i < n; i++)
+    {
+        if (symbols[i].detail)
+            snprintf(text, sizeof(text), "%s %s (in %s)", lspSymbolKindName(symbols[i].kind),
+                     symbols[i].name, symbols[i].detail);
+        else
+            snprintf(text, sizeof(text), "%s %s", lspSymbolKindName(symbols[i].kind),
+                     symbols[i].name);
+        texts[i] = utilStrdup(text);
+        locs[i].abs_path = symbols[i].path;
+        locs[i].line = symbols[i].line + 1;
+        locs[i].col = symbols[i].col;
+        locs[i].text = texts[i] ? texts[i] : symbols[i].name;
+    }
+
+    snprintf(title, sizeof(title), "%d symbol%s", n, n == 1 ? "" : "s");
+    projectSearchShowLocations(title, locs, n);
+    editorSetStatusMessage("%s - ENTER to jump", title);
+
+    for (i = 0; i < n; i++)
+        gfree(texts[i]);
+    gfree(texts);
+    gfree(locs);
+    lspFreeSymbols(symbols, n);
+}
+
 /**
  * @brief Extracts the display text from a hover response's
  * `result.contents`, which per spec may be a plain string, a
@@ -1455,6 +1694,7 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
     cJSON *general;
     cJSON *encodings;
     cJSON *hover_caps;
+    cJSON *sym_caps;
     cJSON *formats;
     cJSON *sig_caps;
     cJSON *sig_info;
@@ -1551,6 +1791,10 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
         cJSON_AddItemToObject(action_caps, "codeActionLiteralSupport", literal);
         cJSON_AddItemToObject(td_caps, "codeAction", action_caps);
         cJSON_AddItemToObject(td_caps, "definition", cJSON_CreateObject());
+        // The tree form: the outline then shows a struct's fields under it.
+        sym_caps = cJSON_CreateObject();
+        cJSON_AddBoolToObject(sym_caps, "hierarchicalDocumentSymbolSupport", 1);
+        cJSON_AddItemToObject(td_caps, "documentSymbol", sym_caps);
         cJSON_AddItemToObject(td_caps, "publishDiagnostics", cJSON_CreateObject());
         cJSON_AddItemToObject(caps, "textDocument", td_caps);
 
@@ -2036,6 +2280,86 @@ void lspRequestReferences(LspClient *lsp, struct buffer_t *buf, const int line, 
     msg = cJSON_PrintUnformatted(req);
     lsp_send(lsp, msg);
     lsp_track_pending(lsp, req_id, lsp_on_references_response);
+
+    gfree(msg);
+    cJSON_Delete(req);
+}
+
+int lspRequestDocumentSymbols(LspClient *lsp, struct buffer_t *buf, LspSymbol **out)
+{
+    char uri[PATH_MAX + 8];
+    int req_id;
+    int count;
+    cJSON* req;
+    cJSON* params;
+    cJSON* textDoc;
+    char* msg;
+    *out = NULL;
+    if (!lsp || lsp->state != LSP_READY || !buf)
+        return -1;
+
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return -1;
+
+    // The outline lists rows of the buffer as it is now, not as the server
+    // last saw it.
+    lsp_sync_if_dirty(lsp, buf);
+
+    req_id = lsp->next_id++;
+
+    req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(req, "id", req_id);
+    cJSON_AddStringToObject(req, "method", "textDocument/documentSymbol");
+
+    params = cJSON_CreateObject();
+    textDoc = cJSON_CreateObject();
+    cJSON_AddStringToObject(textDoc, "uri", uri);
+    cJSON_AddItemToObject(params, "textDocument", textDoc);
+    cJSON_AddItemToObject(req, "params", params);
+
+    msg = cJSON_PrintUnformatted(req);
+    lsp_send(lsp, msg);
+    g_doc_symbols = NULL;
+    g_doc_symbols_count = -1;
+    g_doc_symbols_waiting = 1;
+    lsp_track_pending(lsp, req_id, lsp_on_document_symbol_response);
+    lspAwaitResponse(lsp, req_id, 2000);
+    g_doc_symbols_waiting = 0;
+
+    *out = g_doc_symbols;
+    count = g_doc_symbols_count;
+    g_doc_symbols = NULL;
+    g_doc_symbols_count = -1;
+
+    gfree(msg);
+    cJSON_Delete(req);
+    return count;
+}
+
+void lspRequestWorkspaceSymbols(LspClient *lsp, const char *query)
+{
+    int req_id;
+    cJSON* req;
+    cJSON* params;
+    char* msg;
+    if (!lsp || lsp->state != LSP_READY || !query)
+        return;
+
+    req_id = lsp->next_id++;
+
+    req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(req, "id", req_id);
+    cJSON_AddStringToObject(req, "method", "workspace/symbol");
+
+    params = cJSON_CreateObject();
+    cJSON_AddStringToObject(params, "query", query);
+    cJSON_AddItemToObject(req, "params", params);
+
+    msg = cJSON_PrintUnformatted(req);
+    lsp_send(lsp, msg);
+    lsp_track_pending(lsp, req_id, lsp_on_workspace_symbol_response);
 
     gfree(msg);
     cJSON_Delete(req);
