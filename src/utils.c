@@ -116,3 +116,25 @@ void utilDirname(const char *path, char *out, const size_t out_size)
         len--;
     snprintf(out, out_size, "%.*s", (int) len, path);
 }
+
+const char *utilBelugaDir(void)
+{
+    static char dir[OS_PATH_MAX];
+    const char *env;
+    const char *home;
+
+    if (dir[0])
+        return dir;
+    env = getenv("BELUGA_HOME");
+    if (env && env[0])
+        snprintf(dir, sizeof(dir), "%s", env);
+    else
+    {
+        home = os_home_dir();
+        if (!home)
+            return NULL;
+        snprintf(dir, sizeof(dir), "%s/.beluga", home);
+    }
+    os_path_to_slashes(dir);
+    return dir;
+}

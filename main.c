@@ -20,6 +20,7 @@
 #include "include/split_screen.h"
 #include "include/terminal.h"
 #include "include/utf8.h"
+#include "include/utils.h"
 
 EditorConfig E;
 int buffer_id = 0;
@@ -32,7 +33,7 @@ static void reportMemoryAtExit(void) {
   char path[OS_PATH_MAX];
   FILE *out;
   int left;
-  snprintf(path, sizeof(path), "%s/.beluga/memory-at-exit.log", os_home_dir());
+  snprintf(path, sizeof(path), "%s/memory-at-exit.log", utilBelugaDir());
   out = fopen(path, "w");
   if (!out)
     return;
@@ -44,8 +45,46 @@ static void reportMemoryAtExit(void) {
 }
 #endif
 
+/**
+ * @brief beluga --sync-packages: install what the config declares, without
+ * opening the editor.
+ * @details Loads the config as a normal start would, but with no screen
+ * (E.batch): status messages are printed instead of drawn, and the package
+ * manager installs missing packages in the foreground while init.lisp
+ * loads. Then (package-sync) brings every declared package to its locked
+ * commit and reports what it did. For a new machine, a container, or a
+ * dotfiles bootstrap script.
+ * @return the exit status: 0 when every package is installed and loads
+ */
+static int syncPackages(void) {
+  int present = 0;
+  int ok;
+  Lisp sync;
+  LispError error = LISP_ERROR_NONE;
+
+  os_init();
+  E.batch = 1;
+  initEditor();
+  sync = lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol("package-sync", E.ctx), &present);
+  if (!present) {
+    printf("beluga: the \"package\" package isn't loaded by %s, so there is nothing to sync\n",
+           E.init_file_path);
+    ok = 0;
+  } else {
+    ok = lisp_is_true(lisp_eval(lisp_cons(sync, lisp_null(), E.ctx), &error, E.ctx)) &&
+         error == LISP_ERROR_NONE;
+    if (error != LISP_ERROR_NONE)
+      printf("beluga: package-sync failed: %s\n", lisp_error_string(error));
+  }
+  deInitEditor();
+  bFree_structs();
+#ifdef APP_DEBUG
+  reportMemoryAtExit();
+#endif
+  return ok ? 0 : 1;
+}
+
 int main(const int argc, char *argv[]) {
-  const char *home;
   Utf8Char *splash_screen;
   EditorPane *active;
   Utf8Char *filename;
@@ -54,15 +93,16 @@ int main(const int argc, char *argv[]) {
     printf("Beluga %s\n", BELUGA_VERSION);
     return 0;
   }
+  if (argc >= 2 && !strcmp(argv[1], "--sync-packages"))
+    return syncPackages();
 
   // SIGPIPE ignored on Unix (a write to a dead shell or language server
   // must not kill the editor); binary stdio and a UTF-8 console on Windows.
   os_init();
 
-  home = os_home_dir();
   splash_screen = gcalloc(PATH_MAX, sizeof(Utf8Char));
   active = NULL;
-  utf8Printf(splash_screen, PATH_MAX, "%s/.beluga/assets/beluga.txt", home);
+  utf8Printf(splash_screen, PATH_MAX, "%s/assets/beluga.txt", utilBelugaDir());
 
   enableRawMode();
   initEditor();

@@ -26,6 +26,21 @@
 ;; (add-package "c")
 ;; (add-package "python")
 
+;; YOUR PACKAGES — packages that don't ship with beluga. Each line installs
+;; the package if it's missing (while beluga starts) and loads it, in this
+;; order. The exact commit goes to packages.lock, next to this file: keep
+;; both, and `beluga --sync-packages` sets up the same packages elsewhere.
+;; CTRL-x c l lists every package: u update, r roll back, d remove, ...
+;; (use-package "rainbow" "https://example.org/rainbow.git")           ; default branch
+;; (use-package "rainbow" "https://example.org/rainbow.git" "v1.2.0")  ; tag, branch or commit
+;; (use-package "rainbow" "https://example.org/rainbow.git" "latest")  ; highest version tag
+;; (use-package "mine" "~/code/beluga-mine")                           ; a folder, loaded in place
+;;
+;; An index lets use-package and package-search find packages by name:
+;; (define package-index-url "https://example.org/beluga-packages.git")
+;; package-remove moves a package to ~/.beluga/packages.bak; to delete:
+;; (define package-remove-deletes #t)
+
 ;; THEME OVERRIDES — roles are listed in packages/theme-dark/init.lisp
 ;; (editor-set-theme-color "line-cursor-background" 50 54 62)
 

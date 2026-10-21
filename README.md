@@ -71,6 +71,46 @@ the file and line that allocated them, and a debug build (`install.sh --debug`,
 `install.ps1 -DebugBuild`) writes what is still allocated at exit to
 `~/.beluga/memory-at-exit.log`, grouped by allocation site.
 
+## Packages
+
+Everything beyond the core editor is a package: a folder with an `init.lisp`, loaded by
+`(add-package "name")`. The bundled ones (`packages/` here) are installed by `install.sh` /
+`install.ps1` and versioned with the editor. For other packages, declare them in
+`~/.beluga/packages/personal-config/init.lisp`:
+
+```lisp
+(use-package "rainbow" "https://example.org/rainbow.git")           ; default branch
+(use-package "rainbow" "https://example.org/rainbow.git" "v1.2.0")  ; a tag, branch or commit
+(use-package "rainbow" "https://example.org/rainbow.git" "latest")  ; the highest version tag
+(use-package "mine" "~/code/beluga-mine")                           ; a folder, loaded in place
+```
+
+A declared package that's missing is cloned when beluga starts, then loaded in the order the
+lines are written. The commit each one is at goes to `personal-config/packages.lock`; with that
+folder on another machine, `beluga --sync-packages` installs exactly the same commits without
+opening the editor. `CTRL-x c l` lists every package (version, commit, loaded or not) and
+installs (`i`), updates after showing the new commits (`u`, `U` for all), rolls back (`r`) and
+removes (`d`) them. Updates apply at the next start.
+
+A package can describe itself in a `package.lisp` next to its `init.lisp` (read, never run):
+
+```lisp
+(define-package "git-blame"
+  (version "1.2.0")
+  (description "Blame annotations in the gutter")
+  (requires ("beluga" "3.4") ("git" "3.3"))
+  (sources ("git" "https://example.org/beluga-git.git")))
+```
+
+`add-package` then loads what it requires first and refuses it on an older beluga, and
+installing it installs its missing requirements. `(define package-index-url "...")` points at a
+git repository whose `index.lisp` lists packages by name, for `use-package` without a URL and
+`M-x package-search`. All the details are at the top of
+[`packages/package/init.lisp`](packages/package/init.lisp).
+
+`BELUGA_HOME` moves `~/.beluga` elsewhere (tests, a portable copy). `meson test` runs the
+package manager end to end against throwaway repositories (`test/test_packages.sh`).
+
 ## How beluga talks to the operating system
 
 Everything beluga needs from the OS — the terminal, waiting for input, running programs,

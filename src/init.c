@@ -7,6 +7,7 @@
 #include "../include/define.h"
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
+#include "../include/packages.h"
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
@@ -61,6 +62,17 @@ void initBuiltins(void) {
   registerBuiltin("editor-insert-char", editorPrintC);
   registerBuiltin("add-package", addPackage);
   registerBuiltin("package-loaded?", packageLoaded);
+  registerBuiltin("package-state", l_packageState);
+  registerBuiltin("package-version", l_packageVersion);
+  registerBuiltin("package-directory", l_packageDirectory);
+  registerBuiltin("beluga-directory", l_belugaDirectory);
+  registerBuiltin("beluga-version", l_belugaVersion);
+  registerBuiltin("version-compare", l_versionCompare);
+  registerBuiltin("read-data-file", l_readDataFile);
+  registerBuiltin("write-data-file", l_writeDataFile);
+  registerBuiltin("editor-redisplay", l_editorRedisplay);
+  registerBuiltin("editor-initialized?", l_editorInitialized);
+  registerBuiltin("editor-batch?", l_editorBatch);
   registerBuiltin("buffer-find", bufferFind_L);
   registerBuiltin("buffer-find-reverse", bufferFindReverse_L);
   registerBuiltin("editor-read-char", editorReadChar_L);
@@ -258,6 +270,17 @@ static void initJsonHooks(void) {
 }
 
 /**
+ * @brief A galloc'd copy of a fallback theme color, so that every color in
+ * E.theme can be freed, whether a theme package replaced it or not.
+ */
+static char *themeColor(const char *ansi) {
+  char *copy = galloc(strlen(ansi) + 1);
+  if (copy)
+    strcpy(copy, ansi);
+  return copy;
+}
+
+/**
  * @brief Init all editor variable
  * @note Dynamic allocation for :\n
  *   - E.status_msg \n
@@ -271,7 +294,8 @@ void initEditor() {
   // Before anything can build a cJSON object (the LSP client, later on).
   initJsonHooks();
 
-  if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+  // No terminal to ask in batch mode (and asking writes to stdout).
+  if (E.batch || getWindowSize(&E.screenrows, &E.screencols) == -1) {
     E.screencols = 80;
     E.screenrows = 24;
     //    die("getWindowSize");
@@ -296,7 +320,7 @@ void initEditor() {
     die("HOME environment variable not set");
   }
 
-  E.init_file_path = utilFormat("%s/.beluga/config/init.lisp", home);
+  E.init_file_path = utilFormat("%s/config/init.lisp", utilBelugaDir());
   if (!E.init_file_path) {
     die("out of memory");
   }
@@ -375,18 +399,20 @@ void initEditor() {
   // initConfig() runs — a theme package's editor-set-theme-color calls
   // overwrite these during config load, but there's always something
   // valid in E.theme even if no theme package is installed/loaded.
-  E.theme.BACKGROUND_COLOR = ANSI_BG_RGB(40, 44, 52);
-  E.theme.LINE_CURSOR_BACKGROUND = ANSI_BG_RGB(60, 64, 72);
-  E.theme.COLOR_KEYWORD = ANSI_FG_RGB(198, 120, 221);
-  E.theme.COLOR_TYPE = ANSI_FG_RGB(97, 175, 239);
-  E.theme.COLOR_STRING = ANSI_FG_RGB(152, 195, 121);
-  E.theme.COLOR_COMMENT = ANSI_FG_RGB(92, 99, 112);
-  E.theme.COLOR_NUMBER = ANSI_FG_RGB(209, 154, 102);
-  E.theme.COLOR_DEFAULT = ANSI_FG_RGB(171, 178, 191);
-  E.theme.COLOR_ADDED = ANSI_FG_RGB(152, 195, 121);
-  E.theme.COLOR_REMOVED = ANSI_FG_RGB(224, 108, 117);
+  E.theme.BACKGROUND_COLOR = themeColor(ANSI_BG_RGB(40, 44, 52));
+  E.theme.LINE_CURSOR_BACKGROUND = themeColor(ANSI_BG_RGB(60, 64, 72));
+  E.theme.COLOR_KEYWORD = themeColor(ANSI_FG_RGB(198, 120, 221));
+  E.theme.COLOR_TYPE = themeColor(ANSI_FG_RGB(97, 175, 239));
+  E.theme.COLOR_STRING = themeColor(ANSI_FG_RGB(152, 195, 121));
+  E.theme.COLOR_COMMENT = themeColor(ANSI_FG_RGB(92, 99, 112));
+  E.theme.COLOR_NUMBER = themeColor(ANSI_FG_RGB(209, 154, 102));
+  E.theme.COLOR_DEFAULT = themeColor(ANSI_FG_RGB(171, 178, 191));
+  E.theme.COLOR_ADDED = themeColor(ANSI_FG_RGB(152, 195, 121));
+  E.theme.COLOR_REMOVED = themeColor(ANSI_FG_RGB(224, 108, 117));
 
+  E.initialized = 0;
   initConfig();
+  E.initialized = 1;
   initStartupConstants();
   E.lsp_client = (LspClient *)gcalloc(1, sizeof(LspClient));
   E.lsp_client->state = LSP_NOT_STARTED;
@@ -418,6 +444,8 @@ void deInitEditor() {
   // free init_file_path
   gfree(E.init_file_path);
 
+  packagesFree();
+
   // free prefix
   gfree(E.prefix);
 
@@ -439,7 +467,7 @@ void deInitEditor() {
   }
 
   temp = &E.theme.BACKGROUND_COLOR;
-  for (i = 0; i < 8; ++i) {
+  for (i = 0; i < THEME_COLOR_COUNT; ++i) {
     gfree(*(temp + i));
   }
 

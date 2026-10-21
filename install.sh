@@ -200,6 +200,11 @@ fi
 if ! grep -q '^[[:space:]]*(add-package[[:space:]]*"personal-config")' ~/.beluga/config/init.lisp; then
     warn "~/.beluga/config/init.lisp doesn't load personal-config — add (add-package \"personal-config\") after the theme's add-package line"
 fi
+# use-package comes from the package manager: a config from before it
+# existed doesn't load it, and every use-package line would fail.
+if ! grep -q '^[[:space:]]*(add-package[[:space:]]*"package")' ~/.beluga/config/init.lisp; then
+    warn "~/.beluga/config/init.lisp doesn't load the package manager — add (add-package \"package\") before the other add-package lines (see ~/.beluga/config/init.lisp.new or config/init.lisp)"
+fi
 
 # --- packages ----------------------------------------------------------
 

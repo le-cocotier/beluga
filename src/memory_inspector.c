@@ -235,7 +235,6 @@ void memoryInspectorCycleSort(void) {
 }
 
 void memoryReport(void) {
-  const char *home = os_home_dir();
   char *memory_report_location;
   FILE *f;
   int count;
@@ -244,7 +243,7 @@ void memoryReport(void) {
   int i;
   char row[160];
 
-  memory_report_location = utilFormat("%s/.beluga/memory_report.log", home);
+  memory_report_location = utilFormat("%s/memory_report.log", utilBelugaDir());
 
   f = fopen(memory_report_location, "w");
   if (!f) {

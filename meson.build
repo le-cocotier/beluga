@@ -102,7 +102,8 @@ src_files = files(
   'src/async_process.c',
   'src/project_files.c',
   'src/project_search.c',
-  'src/file_finder.c'
+  'src/file_finder.c',
+  'src/packages.c'
 )
 
 # Everything but main(), so the unit tests link the same code.
@@ -113,7 +114,7 @@ core_lib = static_library('beluga-core',
   dependencies : [m]
 )
 
-executable('beluga',
+beluga_exe = executable('beluga',
   files('main.c') + extra_sources,
   c_args : core_args,
   link_with : [core_lib, os_lib],
@@ -127,7 +128,7 @@ test('os-boundary', find_program('tools/check_os_boundary.sh'),
 
 # Unit tests (test/): each is a small program linked against the editor's
 # code; test/test.c stands in for main.c's globals.
-foreach t : ['utf8', 'buffer', 'ansi_parser', 'completion']
+foreach t : ['utf8', 'buffer', 'ansi_parser', 'completion', 'packages']
   test(t, executable('test_' + t,
     files('test/test_' + t + '.c', 'test/test.c'),
     c_args : core_args,
@@ -135,3 +136,13 @@ foreach t : ['utf8', 'buffer', 'ansi_parser', 'completion']
     dependencies : [m],
     link_args : link_args))
 endforeach
+
+# The package manager end to end (test/test_packages.sh): beluga
+# --sync-packages against throwaway package repositories. A shell script
+# with file:// git remotes, so not on Windows.
+if not is_windows
+  test('package-manager', find_program('test/test_packages.sh'),
+    args : [beluga_exe.full_path(), meson.current_source_dir()],
+    depends : beluga_exe,
+    timeout : 300)
+endif

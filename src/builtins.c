@@ -8,6 +8,8 @@
 
 #include "../include/builtins.h"
 #include "../include/async_process.h"
+#include "../include/append_buffer.h"
+#include "../include/os.h"
 #include "../include/buffer.h"
 #include "../include/data.h"
 #include "../include/define.h"
@@ -635,6 +637,7 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx) {
   int b;
   int is_background;
   char *ansi;
+  char **slot;
   args = lisp_cdr(args);
   r = (int)lisp_int(lisp_car(args));
   args = lisp_cdr(args);
@@ -646,27 +649,24 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx) {
   ansi = galloc(24); // "\x1b[38;2;255;255;255m" + NUL fits well within this
   snprintf(ansi, 24, "\x1b[%d;2;%d;%d;%dm", is_background ? 48 : 38, r, g, b);
 
-  if (!strcmp(role, "background"))
-    E.theme.BACKGROUND_COLOR = ansi;
-  else if (!strcmp(role, "line-cursor-background"))
-    E.theme.LINE_CURSOR_BACKGROUND = ansi;
-  else if (!strcmp(role, "keyword"))
-    E.theme.COLOR_KEYWORD = ansi;
-  else if (!strcmp(role, "type"))
-    E.theme.COLOR_TYPE = ansi;
-  else if (!strcmp(role, "string"))
-    E.theme.COLOR_STRING = ansi;
-  else if (!strcmp(role, "comment"))
-    E.theme.COLOR_COMMENT = ansi;
-  else if (!strcmp(role, "number"))
-    E.theme.COLOR_NUMBER = ansi;
-  else if (!strcmp(role, "default"))
-    E.theme.COLOR_DEFAULT = ansi;
-  else if (!strcmp(role, "added"))
-    E.theme.COLOR_ADDED = ansi;
-  else if (!strcmp(role, "removed"))
-    E.theme.COLOR_REMOVED = ansi;
-  else {
+  slot = !strcmp(role, "background")               ? &E.theme.BACKGROUND_COLOR
+         : !strcmp(role, "line-cursor-background") ? &E.theme.LINE_CURSOR_BACKGROUND
+         : !strcmp(role, "keyword")                ? &E.theme.COLOR_KEYWORD
+         : !strcmp(role, "type")                   ? &E.theme.COLOR_TYPE
+         : !strcmp(role, "string")                 ? &E.theme.COLOR_STRING
+         : !strcmp(role, "comment")                ? &E.theme.COLOR_COMMENT
+         : !strcmp(role, "number")                 ? &E.theme.COLOR_NUMBER
+         : !strcmp(role, "default")                ? &E.theme.COLOR_DEFAULT
+         : !strcmp(role, "added")                  ? &E.theme.COLOR_ADDED
+         : !strcmp(role, "removed")                ? &E.theme.COLOR_REMOVED
+                                                   : NULL;
+  if (slot) {
+    // Every color is galloc'd (initEditor() copies the fallback ones), so
+    // the one replaced here can be freed: a second theme, or a
+    // personal-config override, no longer leaks the first.
+    gfree(*slot);
+    *slot = ansi;
+  } else {
     gfree(ansi);
     editorSetStatusMessage("Unknown theme color role: %s", role);
   }
@@ -1102,98 +1102,6 @@ Lisp editorPrintC(const Lisp args, LispError *e, LispContext ctx) {
     utf8CreateChar((const unsigned char *)src, &ch);
     bufferInsertChar(&ch);
   }
-  return lisp_null();
-}
-
-// Names of the packages add-package has already loaded, so loading one
-// twice is a no-op — the default config and personal-config can both name
-// a package without it running twice (its hooks registered twice, its
-// prefix and keys duplicated). A fixed table: past 128 packages the
-// dedup simply stops, which only costs a double load.
-#define MAX_LOADED_PACKAGES 128
-static char s_loaded_packages[MAX_LOADED_PACKAGES][64];
-static int s_loaded_package_count = 0;
-
-static int packageAlreadyLoaded(const char *name) {
-  int i;
-  for (i = 0; i < s_loaded_package_count; i++)
-    if (strcmp(s_loaded_packages[i], name) == 0)
-      return 1;
-  return 0;
-}
-
-/**
- * @brief Lisp function: (package-loaded? "name") — #t once add-package has
- * loaded that package in this session.
- */
-Lisp packageLoaded(const Lisp args, LispError *e, LispContext ctx) {
-  (void)e;
-  (void)ctx;
-  return lisp_make_bool(packageAlreadyLoaded(lisp_string(lisp_car(args))));
-}
-
-/**
- * @brief Lisp function to load and execute a package
- * @details Loads a Lisp package from the user's packages directory
- * (~/.beluga/packages/<package_name>/init.lisp) and evaluates it — once:
- * naming a package that's already loaded again does nothing, like Emacs'
- * require.
- * @param args Lisp list with one argument: package name (string)
- * @param e Error pointer for Lisp error handling
- * @param ctx Lisp context
- * @return lisp_null()
- * @note Package files must be valid Lisp code
- * @note Package directory defaults to ~/.beluga/packages/
- */
-Lisp addPackage(const Lisp args, LispError *e, LispContext ctx) {
-  const char *package_name = lisp_string(lisp_car(args));
-  const char *home;
-  char *package_dir;
-  FILE *fd_package;
-  Lisp code;
-  LispError package_error = LISP_ERROR_NONE;
-  appDebug("%s\n", package_name);
-  if (packageAlreadyLoaded(package_name))
-    return lisp_null();
-  home = os_home_dir();
-  package_dir = utilFormat("%s/.beluga/packages/%s/init.lisp", home, package_name);
-  if (!package_dir) {
-    return lisp_null();
-  }
-
-  fd_package = fopen(package_dir, "r");
-  if (!fd_package) {
-    // personal-config is optional: having none isn't worth a message.
-    if (strcmp(package_name, "personal-config") != 0)
-      editorSetStatusMessage("add-package: \"%s\" isn't installed (no %s)",
-                             package_name, package_dir);
-    appDebug("[PACKAGE] %s: can't open %s\n", package_name, package_dir);
-    gfree(package_dir);
-    return lisp_null();
-  }
-
-  // Recorded before evaluating, so a package that (directly or not) names
-  // itself can't recurse into loading itself again.
-  if (s_loaded_package_count < MAX_LOADED_PACKAGES &&
-      strlen(package_name) < sizeof(s_loaded_packages[0])) {
-    strcpy(s_loaded_packages[s_loaded_package_count], package_name);
-    s_loaded_package_count++;
-  }
-
-  // A local error, so a broken package is reported and init.lisp carries on
-  // with the next form.
-  code = lisp_read_file(fd_package, &package_error, E.ctx);
-  if (package_error == LISP_ERROR_NONE)
-    lisp_eval(code, &package_error, E.ctx);
-  if (package_error != LISP_ERROR_NONE) {
-    editorSetStatusMessage("add-package: error in \"%s\": %s", package_name,
-                           lisp_error_string(package_error));
-    appDebug("[PACKAGE] %s: %s\n", package_name,
-             lisp_error_string(package_error));
-  }
-  fclose(fd_package);
-  gfree(package_dir);
-
   return lisp_null();
 }
 
@@ -2438,7 +2346,9 @@ Lisp l_fileAttributes(Lisp args, LispError *e, LispContext ctx) {
  * verbatim, so file names with spaces or quotes need no escaping. stdout
  * and stderr are captured together; stdin is empty.
  * Blocks the editor until the program exits, up to 60 seconds (then it's
- * killed), keeping at most 1 MiB of output.
+ * killed), keeping at most 1 MiB of output. A number before the program,
+ * (process-run 300000 "git" "clone" ...), is a longer (or shorter) limit
+ * in milliseconds.
  * @return (exit-code . "output"): exit-code 0 on success, 127 if the
  * program couldn't be run, -1 if it was killed; output with trailing
  * newlines stripped, "" if none.
@@ -2626,8 +2536,13 @@ Lisp l_processRun(Lisp args, LispError *e, LispContext ctx) {
   char **argv;
   char *out;
   int status;
+  long timeout_ms = 60000;
   Lisp result;
 
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT) {
+    timeout_ms = (long)lisp_int(lisp_car(args));
+    args = lisp_cdr(args);
+  }
   for (it = args; lisp_is_pair(it); it = lisp_cdr(it)) {
     if (lisp_type(lisp_car(it)) != LISP_STRING) {
       *e = LISP_ERROR_ARG_TYPE;
@@ -2648,7 +2563,7 @@ Lisp l_processRun(Lisp args, LispError *e, LispContext ctx) {
     argv[i++] = (char *)lisp_string(lisp_car(it));
   argv[argc] = NULL;
 
-  out = runArgvCapture(argv, 60000, 1 << 20, &status);
+  out = runArgvCapture(argv, timeout_ms, 1 << 20, &status);
   gfree(argv);
 
   result = lisp_cons(lisp_make_int(status),
@@ -2798,6 +2713,54 @@ Lisp l_editorMessage(Lisp args, LispError *e, LispContext ctx) {
   }
   editorSetStatusMessage("%s", lisp_string(lisp_car(args)));
   return lisp_null();
+}
+
+/**
+ * @brief Lisp function: (editor-redisplay) — draw the screen now, from
+ * inside a long-running command, so a message set just before it shows.
+ * @details While init.lisp is still loading there are no buffers to draw
+ * yet: only the message line is drawn (the package manager's "Installing
+ * …" at startup). In batch mode (beluga --sync-packages) messages go to
+ * stdout as they're set, and this does nothing.
+ */
+Lisp l_editorRedisplay(Lisp args, LispError *e, LispContext ctx) {
+  struct abuf ab = ABUF_INIT;
+  (void)args;
+  (void)e;
+  (void)ctx;
+  if (E.batch)
+    return lisp_null();
+  if (E.initialized) {
+    editorRefreshScreen();
+    return lisp_null();
+  }
+  editorDrawMessageBar(&ab);
+  os_term_write(ab.b, (size_t)ab.len);
+  abFree(&ab);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function: (editor-initialized?) — #f while init.lisp (and
+ * every package it loads) is being evaluated, #t from then on.
+ */
+Lisp l_editorInitialized(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  return lisp_make_bool(E.initialized);
+}
+
+/**
+ * @brief Lisp function: (editor-batch?) — #t when beluga runs without a
+ * screen (beluga --sync-packages): nothing can be asked, and background
+ * processes would never report back.
+ */
+Lisp l_editorBatch(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  return lisp_make_bool(E.batch);
 }
 
 /**

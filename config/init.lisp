@@ -35,39 +35,18 @@
 ;;
 ;; Bundled packages come with beluga (packages/ in its repo) and install.sh
 ;; puts them in ~/.beluga/packages/ — all of the ones named in this file.
-;; A package that isn't there (your own, or a third-party one: git clone it
-;; into ~/.beluga/packages/<name>) makes (add-package ...) a silent no-op.
+;; (add-package "name") loads one, once; a package that isn't installed is
+;; reported in the status bar.
 ;;
-;; (use-package "name" ["git-url"]) is add-package for packages that don't
-;; ship with beluga: a missing package is cloned from git-url into
-;; ~/.beluga/packages/name in the background and loaded once the clone
-;; finishes. Without a URL, or if the clone fails, the status bar says so.
-;; Update a cloned package from the *packages* list (CTRL-x c l) or with
-;; git pull in its directory.
-(define (use-package--first-line lines)
-  (cond ((null? lines) "")
-        ((string=? (car lines) "") (use-package--first-line (cdr lines)))
-        (else (car lines))))
-
-(define (use-package name . url)
-  (let ((dir (expand-path (string-append "~/.beluga/packages/" name))))
-    (cond ((file-attributes (string-append dir "/init.lisp"))
-           (add-package name))
-          ((null? url)
-           (editor-message (string-append "use-package: \"" name "\" isn't installed and has no URL to clone it from")))
-          ((file-attributes dir)
-           (editor-message (string-append "use-package: " dir " exists but has no init.lisp")))
-          ((process-start
-            (lambda (result)
-              (if (= (car result) 0)
-                  (begin (add-package name)
-                         (editor-message (string-append "use-package: installed " name)))
-                  (editor-message (string-append "use-package: couldn't clone " name ": "
-                                                 (use-package--first-line (string-split (cdr result) "\n" 50))))))
-            "git" "clone" "--depth" "1" (car url) dir)
-           (editor-message (string-append "use-package: cloning " name "…")))
-          (else (editor-message "use-package: couldn't start git")))))
-
+;; "package" is the package manager and loads first: it defines
+;; use-package, for packages that don't ship with beluga. Declare yours in
+;; personal-config, e.g.
+;;   (use-package "rainbow" "https://example.org/rainbow.git" "v1.2.0")
+;; A declared package that's missing is cloned while beluga starts, and the
+;; exact commit is recorded in personal-config/packages.lock. CTRL-x c l
+;; lists every package, with install, update, roll back and remove keys;
+;; see packages/package/init.lisp for the rest.
+(add-package "package")
 (add-package "smart_delimiters")
 (add-package "outline")
 (add-package "explorer")
@@ -328,8 +307,8 @@
 
 ;; config
 (map-key "c" editor-open-config "config")
-(map-key "p" '(dired-open "~/.beluga/packages") "config")
-(map-key "m" '(editor-open-file-path "~/.beluga/packages/personal-config/init.lisp") "config")
+(map-key "p" '(dired-open (package-directory)) "config")
+(map-key "m" '(editor-open-file-path (string-append (package-directory "personal-config") "/init.lisp")) "config")
 ;; project
 (map-key "d" lsp-definition "project")
 (map-key "h" lsp-hover "project")
