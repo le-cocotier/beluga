@@ -141,6 +141,10 @@ struct const_t
     int WHICH_KEY;     // (define WHICH-KEY #t)    — pending-prefix / M-x help panel
     int LSP_SIGNATURE_HELP; // (define LSP-SIGNATURE-HELP #t) — signature popup on "(" and ","
     int AUTOSAVE_INTERVAL; // (define AUTOSAVE-INTERVAL 15) — seconds; 0 = off (autosave.c)
+    int STICKY_SCROLL;      // (define STICKY-SCROLL #t) — enclosing definitions pinned atop a pane
+    int BREADCRUMBS;        // (define BREADCRUMBS #t) — "struct › function" in the status bar
+    int INLINE_DIAGNOSTICS; // (define INLINE-DIAGNOSTICS #t) — the message after the line
+    int INLAY_HINTS;        // (define INLAY-HINTS #t) — parameter names / types inside the line
 };
 
 struct prefix_t
@@ -297,6 +301,7 @@ struct lsp_client_t
     // has moved past what was last sent, regardless of which edit caused
     // it — see lspSyncDebounceTick() in completion.c.
     int sync_debounce_pending;       // 1 = a resync is scheduled but not sent yet
+    int inlay_hints;                 // 1 = the server answers textDocument/inlayHint
     long sync_debounce_deadline_ms;  // monotonic ms timestamp to fire at
     int sync_debounce_buffer_id;     // which buffer the pending resync is for
 
@@ -418,6 +423,30 @@ typedef struct
 // step — a mismatch here previously made severity-4 (Hint) diagnostics
 // render as invisible blanks in the gutter (fell through to the "no
 // diagnostic" case since nothing in the enum matched the value 4).
+// One symbol of a document (textDocument/documentSymbol) or of the whole
+// project (workspace/symbol).
+typedef struct {
+  char *name;   // galloc'd
+  char *detail; // galloc'd or NULL: the signature (document) or the
+                // enclosing scope (workspace)
+  char *path;   // galloc'd absolute path, workspace symbols only, else NULL
+  int kind;     // LSP SymbolKind, see lspSymbolKindName()
+  int depth;    // nesting: 0 at top level, 1 for a struct's fields, ...
+  int line;     // 0-based, where the name is
+  int col;
+  int start_line; // 0-based, the whole symbol (doc comment to closing brace)
+  int end_line;
+} LspSymbol;
+
+// One inlay hint (textDocument/inlayHint): text the server wants shown
+// between the characters of a row without being part of it — a parameter
+// name before an argument ("count:"), a deduced type.
+typedef struct {
+  int line;    // 0-based
+  int col;     // the character it is drawn before
+  char *label; // galloc'd, padding spaces included
+} LspInlayHint;
+
 typedef enum { DIAG_ERROR = 1, DIAG_WARNING, DIAG_INFO, DIAG_HINT } DiagSeverity;
 
 typedef struct
@@ -635,6 +664,18 @@ typedef struct buffer_t
     int git_dirty;             // `git status --porcelain` non-empty for this file
     GitLineStatus* git_lines;  // one entry per row, NULL until refreshed
     int git_lines_count;       // rows git_lines[] currently covers
+
+    // ── LSP decorations ──────────────────────────────────────────────────
+    // The server's symbols (sticky scroll, breadcrumbs) and inlay hints for
+    // this buffer, asked for in the background once the server has caught
+    // up with an edit (lspDecorationsTick()). Between an edit and the
+    // answer, rows may have moved: they're drawn as they are, a moment
+    // stale, rather than blinking off.
+    LspSymbol* lsp_symbols;
+    int lsp_symbols_count;
+    LspInlayHint* lsp_hints; // sorted by (line, col)
+    int lsp_hints_count;
+    int lsp_decor_seq; // edit_seq + 1 they were asked for at; 0 = never
 
     // ── Syntax highlighter: block-comment state cache ────────────────────
     // highlight_line() only ever sees whichever rows are currently on

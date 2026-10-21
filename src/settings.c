@@ -43,6 +43,14 @@ static Setting s_settings[] = {
      "Show the called function's signature when \"(\" or \",\" is typed."},
     {"AUTOSAVE-INTERVAL", SETTING_INT, 15, 0, &E.constantes.AUTOSAVE_INTERVAL,
      "Seconds between autosave copies of modified files (~/.beluga/autosave/); 0 turns it off."},
+    {"STICKY-SCROLL", SETTING_BOOL, 1, 0, &E.constantes.STICKY_SCROLL,
+     "Pin the definitions enclosing the top of a pane (function, struct) to its first rows."},
+    {"BREADCRUMBS", SETTING_BOOL, 1, 0, &E.constantes.BREADCRUMBS,
+     "Show the definitions the cursor is in (struct > function) in the status bar."},
+    {"INLINE-DIAGNOSTICS", SETTING_BOOL, 1, 0, &E.constantes.INLINE_DIAGNOSTICS,
+     "Show a line's error or warning message after its text."},
+    {"INLAY-HINTS", SETTING_BOOL, 1, 0, &E.constantes.INLAY_HINTS,
+     "Show the server's inlay hints (parameter names, deduced types) inside lines."},
 };
 
 #define SETTING_COUNT ((int)(sizeof(s_settings) / sizeof(s_settings[0])))

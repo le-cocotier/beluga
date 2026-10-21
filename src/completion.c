@@ -174,8 +174,10 @@ static void lspReadSyncCapabilities(LspClient *lsp, cJSON *caps)
     cJSON *sync;
     cJSON *change;
     cJSON *encoding;
+    cJSON *hints;
     lsp->sync_incremental = 0;
     lsp->utf8_positions = 0;
+    lsp->inlay_hints = 0;
     if (!caps)
         return;
     sync = cJSON_GetObjectItem(caps, "textDocumentSync");
@@ -185,6 +187,9 @@ static void lspReadSyncCapabilities(LspClient *lsp, cJSON *caps)
     encoding = cJSON_GetObjectItem(caps, "positionEncoding");
     if (encoding && cJSON_IsString(encoding) && strcmp(encoding->valuestring, "utf-8") == 0)
         lsp->utf8_positions = 1;
+    // true, or an options object: either way it answers textDocument/inlayHint.
+    hints = cJSON_GetObjectItem(caps, "inlayHintProvider");
+    lsp->inlay_hints = hints && !cJSON_IsFalse(hints);
 }
 
 static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
@@ -867,8 +872,10 @@ static int lsp_range_start(const cJSON *range, int *line, int *col)
  */
 static int lsp_push_symbol(LspSymbol **out, int *count, int *cap, const char *name,
                            const char *detail, const int kind, const int depth,
-                           const char *path, const int line, const int col)
+                           const char *path, const int line, const int col,
+                           const cJSON *range)
 {
+    int end_col;
     LspSymbol *grown;
     LspSymbol *s;
     if (*count == *cap)
@@ -887,6 +894,10 @@ static int lsp_push_symbol(LspSymbol **out, int *count, int *cap, const char *na
     s->depth = depth;
     s->line = line;
     s->col = col;
+    if (!lsp_range_start(range, &s->start_line, &end_col))
+        s->start_line = line;
+    if (!range || !lspReadPosition(cJSON_GetObjectItem(range, "end"), &s->end_line, &end_col))
+        s->end_line = line;
     (*count)++;
     return s->name != NULL;
 }
@@ -917,7 +928,8 @@ static int lsp_flatten_document_symbols(const cJSON *array, const int depth, Lsp
             continue;
         if (!lsp_push_symbol(out, count, cap, name->valuestring,
                              cJSON_IsString(detail) ? detail->valuestring : NULL,
-                             cJSON_IsNumber(kind) ? kind->valueint : 0, depth, NULL, line, col))
+                             cJSON_IsNumber(kind) ? kind->valueint : 0, depth, NULL, line, col,
+                             cJSON_GetObjectItem(sym, "range")))
             return 0;
         if (!lsp_flatten_document_symbols(cJSON_GetObjectItem(sym, "children"), depth + 1, out,
                                           count, cap))
@@ -976,7 +988,8 @@ int lspParseSymbols(const char *message_json, LspSymbol **out)
                 continue;
             ok = lsp_push_symbol(out, &count, &cap, name->valuestring,
                                  cJSON_IsString(container) ? container->valuestring : NULL,
-                                 cJSON_IsNumber(kind) ? kind->valueint : 0, 0, path, line, col);
+                                 cJSON_IsNumber(kind) ? kind->valueint : 0, 0, path, line, col,
+                                 cJSON_GetObjectItem(location, "range"));
             if (!ok)
                 break;
         }
@@ -1795,6 +1808,7 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
         sym_caps = cJSON_CreateObject();
         cJSON_AddBoolToObject(sym_caps, "hierarchicalDocumentSymbolSupport", 1);
         cJSON_AddItemToObject(td_caps, "documentSymbol", sym_caps);
+        cJSON_AddItemToObject(td_caps, "inlayHint", cJSON_CreateObject());
         cJSON_AddItemToObject(td_caps, "publishDiagnostics", cJSON_CreateObject());
         cJSON_AddItemToObject(caps, "textDocument", td_caps);
 
@@ -2363,6 +2377,276 @@ void lspRequestWorkspaceSymbols(LspClient *lsp, const char *query)
 
     gfree(msg);
     cJSON_Delete(req);
+}
+
+// ─── Decorations: symbols and inlay hints, kept fresh in the background ─────
+//
+// Sticky scroll, breadcrumbs and inlay hints are drawn every frame, so they
+// can't wait on the server. lspDecorationsTick() asks for them once the
+// server has caught up with the latest edit of a shown buffer, and the
+// answers replace the buffer's copies when they arrive.
+
+typedef struct {
+    const LspClient *lsp;
+    int request_id;
+    int buffer_id;
+} DecorRequest;
+
+// In flight: at most a symbols and a hints request per shown buffer.
+#define DECOR_MAX_REQUESTS 16
+static DecorRequest g_decor_requests[DECOR_MAX_REQUESTS];
+
+static int lsp_message_id(const char *message_json)
+{
+    cJSON *root = cJSON_Parse(message_json);
+    const cJSON *id = root ? cJSON_GetObjectItem(root, "id") : NULL;
+    const int value = cJSON_IsNumber(id) ? id->valueint : -1;
+    cJSON_Delete(root);
+    return value;
+}
+
+/**
+ * @brief The buffer a decorations answer is for, taking its request off
+ * the in-flight list. NULL when the buffer has been killed meanwhile.
+ */
+static struct buffer_t *lsp_decor_take(const LspClient *lsp, const char *message_json)
+{
+    const int id = lsp_message_id(message_json);
+    int i;
+    int buffer_id;
+    for (i = 0; i < DECOR_MAX_REQUESTS; i++)
+    {
+        if (g_decor_requests[i].lsp == lsp && g_decor_requests[i].request_id == id)
+        {
+            buffer_id = g_decor_requests[i].buffer_id;
+            g_decor_requests[i].lsp = NULL;
+            return bufferFindById(buffer_id);
+        }
+    }
+    return NULL;
+}
+
+static int lsp_decor_in_flight(const LspClient *lsp, const int buffer_id)
+{
+    int i;
+    for (i = 0; i < DECOR_MAX_REQUESTS; i++)
+        if (g_decor_requests[i].lsp == lsp && g_decor_requests[i].buffer_id == buffer_id)
+            return 1;
+    return 0;
+}
+
+static void lsp_decor_track(LspClient *lsp, const int request_id, const int buffer_id,
+                            void (*callback)(LspClient *, const char *))
+{
+    int i;
+    for (i = 0; i < DECOR_MAX_REQUESTS; i++)
+    {
+        if (!g_decor_requests[i].lsp)
+        {
+            g_decor_requests[i].lsp = lsp;
+            g_decor_requests[i].request_id = request_id;
+            g_decor_requests[i].buffer_id = buffer_id;
+            lsp_track_pending(lsp, request_id, callback);
+            return;
+        }
+    }
+    // Full (a server that stopped answering): the reply, if it ever
+    // comes, finds no buffer and is dropped.
+    lsp_track_pending(lsp, request_id, callback);
+}
+
+static void lsp_on_decor_symbols_response(LspClient *lsp, const char *result_json)
+{
+    struct buffer_t *buf = lsp_decor_take(lsp, result_json);
+    LspSymbol *symbols;
+    int n;
+    if (!buf)
+        return;
+    n = lspParseSymbols(result_json, &symbols);
+    if (n < 0)
+        return; // keep what we had
+    lspFreeSymbols(buf->lsp_symbols, buf->lsp_symbols_count);
+    buf->lsp_symbols = symbols;
+    buf->lsp_symbols_count = n;
+}
+
+static int lsp_hint_cmp(const void *a, const void *b)
+{
+    const LspInlayHint *x = a;
+    const LspInlayHint *y = b;
+    if (x->line != y->line)
+        return x->line < y->line ? -1 : 1;
+    return (x->col > y->col) - (x->col < y->col);
+}
+
+int lspParseInlayHints(const char *message_json, LspInlayHint **out)
+{
+    cJSON *root;
+    const cJSON *result;
+    const cJSON *hint;
+    const cJSON *label;
+    const cJSON *part;
+    const cJSON *value;
+    LspInlayHint *hints;
+    char text[128];
+    size_t len;
+    int count = 0;
+    int line;
+    int col;
+    *out = NULL;
+    root = cJSON_Parse(message_json);
+    if (!root)
+        return -1;
+    result = cJSON_GetObjectItem(root, "result");
+    if (!cJSON_IsArray(result))
+    {
+        count = cJSON_IsNull(result) ? 0 : -1;
+        cJSON_Delete(root);
+        return count;
+    }
+    hints = gcalloc((size_t) cJSON_GetArraySize(result) + 1, sizeof(LspInlayHint));
+    if (!hints)
+    {
+        cJSON_Delete(root);
+        return -1;
+    }
+    cJSON_ArrayForEach(hint, result)
+    {
+        if (!lspReadPosition(cJSON_GetObjectItem(hint, "position"), &line, &col))
+            continue;
+        // The label is a string, or parts (each its own "value") to join.
+        text[0] = '\0';
+        if (cJSON_IsTrue(cJSON_GetObjectItem(hint, "paddingLeft")))
+            strcat(text, " ");
+        label = cJSON_GetObjectItem(hint, "label");
+        if (cJSON_IsString(label))
+            strncat(text, label->valuestring, sizeof(text) - strlen(text) - 2);
+        else
+            cJSON_ArrayForEach(part, label)
+            {
+                value = cJSON_GetObjectItem(part, "value");
+                if (cJSON_IsString(value))
+                    strncat(text, value->valuestring, sizeof(text) - strlen(text) - 2);
+            }
+        // Control characters would break the frame; keep the line flat.
+        for (len = 0; text[len]; len++)
+            if ((unsigned char) text[len] < 0x20)
+                text[len] = ' ';
+        if (cJSON_IsTrue(cJSON_GetObjectItem(hint, "paddingRight")))
+            strcat(text, " ");
+        if (text[0] == '\0')
+            continue;
+        hints[count].line = line;
+        hints[count].col = col;
+        hints[count].label = utilStrdup(text);
+        if (hints[count].label)
+            count++;
+    }
+    cJSON_Delete(root);
+    qsort(hints, (size_t) count, sizeof(LspInlayHint), lsp_hint_cmp);
+    *out = hints;
+    return count;
+}
+
+void lspFreeInlayHints(LspInlayHint *hints, const int count)
+{
+    int i;
+    for (i = 0; i < count; i++)
+        gfree(hints[i].label);
+    gfree(hints);
+}
+
+static void lsp_on_inlay_hint_response(LspClient *lsp, const char *result_json)
+{
+    struct buffer_t *buf = lsp_decor_take(lsp, result_json);
+    LspInlayHint *hints;
+    int n;
+    if (!buf)
+        return;
+    n = lspParseInlayHints(result_json, &hints);
+    if (n < 0)
+        return;
+    lspFreeInlayHints(buf->lsp_hints, buf->lsp_hints_count);
+    buf->lsp_hints = hints;
+    buf->lsp_hints_count = n;
+}
+
+/**
+ * @brief Sends `method` for `buf` with just its textDocument (plus, for
+ * inlay hints, the range: the whole buffer).
+ */
+static void lsp_send_decor_request(LspClient *lsp, struct buffer_t *buf, const char *uri,
+                                   const char *method, void (*callback)(LspClient *, const char *))
+{
+    const int req_id = lsp->next_id++;
+    cJSON *req = cJSON_CreateObject();
+    cJSON *params = cJSON_CreateObject();
+    cJSON *textDoc = cJSON_CreateObject();
+    cJSON *range;
+    cJSON *pos;
+    char *msg;
+
+    cJSON_AddStringToObject(req, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(req, "id", req_id);
+    cJSON_AddStringToObject(req, "method", method);
+    cJSON_AddStringToObject(textDoc, "uri", uri);
+    cJSON_AddItemToObject(params, "textDocument", textDoc);
+    if (!strcmp(method, "textDocument/inlayHint"))
+    {
+        range = cJSON_CreateObject();
+        pos = cJSON_CreateObject();
+        cJSON_AddNumberToObject(pos, "line", 0);
+        cJSON_AddNumberToObject(pos, "character", 0);
+        cJSON_AddItemToObject(range, "start", pos);
+        pos = cJSON_CreateObject();
+        cJSON_AddNumberToObject(pos, "line", buf->numrows);
+        cJSON_AddNumberToObject(pos, "character", 0);
+        cJSON_AddItemToObject(range, "end", pos);
+        cJSON_AddItemToObject(params, "range", range);
+    }
+    cJSON_AddItemToObject(req, "params", params);
+
+    msg = cJSON_PrintUnformatted(req);
+    lsp_send(lsp, msg);
+    lsp_decor_track(lsp, req_id, buf->buffer_id, callback);
+    gfree(msg);
+    cJSON_Delete(req);
+}
+
+static void lsp_refresh_decorations(struct buffer_t *buf)
+{
+    LspClient *lsp;
+    char uri[PATH_MAX + 8];
+    if (!buf || buf->type != FILE_BUFF || !buf->b_lsp_open)
+        return;
+    // Only once the server has the latest text: asking earlier would get
+    // positions for an older version of the rows.
+    if (buf->edit_seq != buf->lsp_synced_seq || buf->lsp_decor_seq == buf->edit_seq + 1)
+        return;
+    lsp = lspClientForBuffer(buf);
+    if (!lsp || lsp->state != LSP_READY || lsp_decor_in_flight(lsp, buf->buffer_id))
+        return;
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return;
+
+    buf->lsp_decor_seq = buf->edit_seq + 1;
+    if (E.constantes.STICKY_SCROLL || E.constantes.BREADCRUMBS)
+        lsp_send_decor_request(lsp, buf, uri, "textDocument/documentSymbol",
+                               lsp_on_decor_symbols_response);
+    if (E.constantes.INLAY_HINTS && lsp->inlay_hints)
+        lsp_send_decor_request(lsp, buf, uri, "textDocument/inlayHint",
+                               lsp_on_inlay_hint_response);
+}
+
+void lspDecorationsTick(void)
+{
+    const ScreenLayout *layout;
+    int i;
+    if (!E.constantes.LSP)
+        return;
+    layout = splitScreenGetLayout();
+    for (i = 0; i < layout->num_panes; i++)
+        lsp_refresh_decorations(bufferFindById(layout->panes[i].buffer_id));
 }
 
 void lspRequestHover(LspClient *lsp, struct buffer_t *buf, const int line, const int col)

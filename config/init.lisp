@@ -28,6 +28,18 @@
 ;; 0 turns autosave off. Omitting this means 15.
 (define AUTOSAVE-INTERVAL 15)
 
+;; With a language server (clangd for C), a few things drawn from what it
+;; knows about the code. Omitting any of these leaves it on.
+;; STICKY-SCROLL: the function (or struct) the top of a pane is inside stays
+;; pinned to its first row, so you always see whose body you're reading.
+;; BREADCRUMBS: the status bar shows where the cursor is, "point > main".
+;; INLINE-DIAGNOSTICS: an error's message after the line it's about.
+;; INLAY-HINTS: parameter names before arguments, "add(a: 1, b: 2)".
+(define STICKY-SCROLL #t)
+(define BREADCRUMBS #t)
+(define INLINE-DIAGNOSTICS #t)
+(define INLAY-HINTS #t)
+
 ;; Prefixes need to exist before anything below tries to (map-key ... "user")
 ;; or "term" — including packages, which load next. A package that tried to
 ;; bind under a not-yet-registered prefix would silently fall back to

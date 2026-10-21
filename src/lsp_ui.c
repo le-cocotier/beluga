@@ -619,3 +619,132 @@ void lspParseDiagnostics(const char *json, DiagnosticList *diags,
 
     cJSON_Delete(root);
 }
+
+// ─── Inline decorations: diagnostics after the line, symbols around it ──────
+
+int lspUiClipToColumns(const char *s, const int nbytes, const int max_cols, int *cols)
+{
+    int i = 0;
+    int used = 0;
+    int w;
+    Utf8Char c;
+    while (i < nbytes && s[i])
+    {
+        utf8CreateChar((const unsigned char *) s + i, &c);
+        if (c.length > nbytes - i)
+            c.length = 1; // a cut-off sequence: one column, never past the end
+        w = utf8CharWidth(&c);
+        if (used + w > max_cols)
+            break;
+        used += w;
+        i += c.length;
+    }
+    if (cols)
+        *cols = used;
+    return i;
+}
+
+const Diagnostic *lspUiWorstDiagnostic(const DiagnosticList *diags, const int buffer_id,
+                                       const int line)
+{
+    const Diagnostic *worst = NULL;
+    int i;
+    for (i = 0; i < diags->count; i++)
+    {
+        const Diagnostic *d = &diags->entries[i];
+        if (d->buffer_id == buffer_id && d->line == line &&
+            (!worst || d->severity < worst->severity))
+            worst = d;
+    }
+    return worst;
+}
+
+int lspUiDrawInlineDiagnostic(struct abuf *ab, const Diagnostic *d, const int max_cols)
+{
+    // Three columns of gap, the marker the gutter uses, a space: below
+    // eight columns there's no room left for a word of the message.
+    static const char gap[] = "   ";
+    const char *marker;
+    const char *color;
+    int msg_len;
+    int bytes;
+    int cols;
+    if (!d || max_cols < 8)
+        return 0;
+    switch (d->severity)
+    {
+        case DIAG_ERROR:   color = "31"; marker = "● "; break;
+        case DIAG_WARNING: color = "33"; marker = "◆ "; break;
+        case DIAG_INFO:    color = "36"; marker = "● "; break;
+        default:           color = "37"; marker = "· "; break;
+    }
+    // Just the first line: clangd puts the notes on the next ones.
+    msg_len = (int) strcspn(d->message, "\r\n");
+    bytes = lspUiClipToColumns(d->message, msg_len, max_cols - 5, &cols);
+
+    abAppend(ab, gap, 3);
+    ab_sgr(ab, color);
+    ab_sgr(ab, "3"); // italic: it's not part of the file
+    abAppend(ab, marker, (int) strlen(marker));
+    abAppend(ab, d->message, bytes);
+    ab_sgr(ab, "23");
+    abAppend(ab, E.theme.COLOR_DEFAULT, (int) strlen(E.theme.COLOR_DEFAULT));
+    return 5 + cols;
+}
+
+/**
+ * @brief Is this kind of symbol one that has a body worth naming — a
+ * function, a struct, an enum — rather than a field or a variable?
+ */
+static int lspUiIsScope(const int kind)
+{
+    switch (kind)
+    {
+        case 2:  // module
+        case 3:  // namespace
+        case 5:  // class (clangd's C structs)
+        case 6:  // method
+        case 9:  // constructor
+        case 10: // enum
+        case 11: // interface
+        case 12: // function
+        case 23: // struct
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+int lspUiEnclosingSymbols(const struct buffer_t *buf, const int row,
+                          const LspSymbol **out, const int max)
+{
+    int n = 0;
+    int i;
+    const LspSymbol *s;
+    if (!buf->lsp_symbols)
+        return 0;
+    // Flattened depth first, so the ones containing `row` come outermost
+    // first; a one-line symbol has no body to be inside of.
+    for (i = 0; i < buf->lsp_symbols_count && n < max; i++)
+    {
+        s = &buf->lsp_symbols[i];
+        if (lspUiIsScope(s->kind) && s->start_line <= row && row <= s->end_line &&
+            s->start_line < s->end_line)
+            out[n++] = s;
+    }
+    return n;
+}
+
+int lspUiBreadcrumbs(const struct buffer_t *buf, const int row, char *out, const size_t size)
+{
+    const LspSymbol *chain[8];
+    const int n = lspUiEnclosingSymbols(buf, row, chain, 8);
+    size_t len = 0;
+    int i;
+    out[0] = '\0';
+    for (i = 0; i < n && len + 1 < size; i++)
+        len += (size_t) snprintf(out + len, size - len, "%s%s", i ? " › " : "", chain[i]->name);
+    if (len >= size)
+        len = size - 1;
+    return (int) len;
+}

@@ -54,19 +54,6 @@ void lspRequestReferences(LspClient* lsp, struct buffer_t* buf, int line, int co
 // Every diagnostic of the open buffers, listed the same way.
 void lspShowDiagnosticsList(void);
 
-// One symbol of a document (textDocument/documentSymbol) or of the whole
-// project (workspace/symbol).
-typedef struct {
-  char *name;   // galloc'd
-  char *detail; // galloc'd or NULL: the signature (document) or the
-                // enclosing scope (workspace)
-  char *path;   // galloc'd absolute path, workspace symbols only, else NULL
-  int kind;     // LSP SymbolKind, see lspSymbolKindName()
-  int depth;    // nesting: 0 at top level, 1 for a struct's fields, ...
-  int line;     // 0-based, where the name is
-  int col;
-} LspSymbol;
-
 // Parses a documentSymbol or workspace/symbol response (the whole message)
 // into a flat array, a symbol's children right after it.
 // @return how many, or -1 when the response is an error or malformed.
@@ -78,6 +65,15 @@ const char* lspSymbolKindName(int kind);
 int lspRequestDocumentSymbols(LspClient* lsp, struct buffer_t* buf, LspSymbol** out);
 // The project's symbols matching `query`, listed in "*search*" (ENTER jumps).
 void lspRequestWorkspaceSymbols(LspClient* lsp, const char* query);
+
+// Parses a textDocument/inlayHint response (the whole message), sorted by
+// position. @return how many, or -1 when it's an error or malformed.
+int lspParseInlayHints(const char* message_json, LspInlayHint** out);
+void lspFreeInlayHints(LspInlayHint* hints, int count);
+// Called once per editorRunLoop() iteration: refreshes the symbols and
+// inlay hints of every shown buffer whose server has caught up with its
+// latest edit (see buffer_t's lsp_symbols / lsp_hints).
+void lspDecorationsTick(void);
 // Prompts aren't this function's job — pass the already-chosen new name.
 // Response applies the server's WorkspaceEdit (both the "changes" and
 // "documentChanges" shapes) across every affected buffer, opening files

@@ -40,5 +40,20 @@ int lspUiInfoHandleKey(LspInfoPopup *popup, const Utf8Char *key);
 const char *lspUiDiagnosticAtCursor(DiagnosticList *diags,
                                     int buffer_id, int cursor_line);
 
+// How many bytes of `s` (at most nbytes) fit in max_cols screen columns,
+// never splitting a character; *cols gets the columns they take.
+int lspUiClipToColumns(const char *s, int nbytes, int max_cols, int *cols);
+// The most severe diagnostic on `line` of the buffer, or NULL.
+const Diagnostic *lspUiWorstDiagnostic(const DiagnosticList *diags, int buffer_id, int line);
+// Draws "   ● message" in the severity's color, clipped to max_cols (nothing
+// when that's too narrow to read). @return the columns drawn.
+int lspUiDrawInlineDiagnostic(struct abuf *ab, const Diagnostic *d, int max_cols);
+// The functions, structs, enums, ... whose body contains `row`, outermost
+// first, from the buffer's background-refreshed LSP symbols. @return how many.
+int lspUiEnclosingSymbols(const struct buffer_t *buf, int row,
+                          const LspSymbol **out, int max);
+// Their names joined with " › " ("point › main"). @return its length in bytes.
+int lspUiBreadcrumbs(const struct buffer_t *buf, int row, char *out, size_t size);
+
 
 #endif
