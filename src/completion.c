@@ -3007,6 +3007,509 @@ int lspAwaitResponse(LspClient *lsp, const int request_id, const int timeout_ms)
     return 0;
 }
 
+// ─── Synchronous requests: macro expansion, struct layout, callers ──────────
+//
+// Commands that need an answer before they can show anything send their
+// request through lsp_request_sync(), which waits for it (like formatting
+// and rename do) and hands back the parsed reply.
+
+static int g_sync_waiting = 0;
+static char *g_sync_reply = NULL;
+
+static void lsp_on_sync_response(LspClient *lsp, const char *result_json)
+{
+    (void) lsp;
+    if (!g_sync_waiting)
+        return; // the wait gave up on it
+    gfree(g_sync_reply);
+    g_sync_reply = utilStrdup(result_json);
+}
+
+/**
+ * @brief Sends `method` with `params` (taken over) and waits up to
+ * timeout_ms for the reply.
+ * @return Its "result", detached from the reply (cJSON_Delete it), or NULL
+ * on a timeout, an error or a null result.
+ */
+static cJSON *lsp_request_sync(LspClient *lsp, const char *method, cJSON *params,
+                               const int timeout_ms)
+{
+    const int req_id = lsp->next_id++;
+    cJSON *req = cJSON_CreateObject();
+    cJSON *root;
+    cJSON *result = NULL;
+    char *msg;
+
+    cJSON_AddStringToObject(req, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(req, "id", req_id);
+    cJSON_AddStringToObject(req, "method", method);
+    cJSON_AddItemToObject(req, "params", params);
+    msg = cJSON_PrintUnformatted(req);
+    lsp_send(lsp, msg);
+    gfree(msg);
+    cJSON_Delete(req);
+
+    g_sync_waiting = 1;
+    lsp_track_pending(lsp, req_id, lsp_on_sync_response);
+    lspAwaitResponse(lsp, req_id, timeout_ms);
+    g_sync_waiting = 0;
+
+    if (g_sync_reply)
+    {
+        root = cJSON_Parse(g_sync_reply);
+        result = root ? cJSON_DetachItemFromObject(root, "result") : NULL;
+        if (result && cJSON_IsNull(result))
+        {
+            cJSON_Delete(result);
+            result = NULL;
+        }
+        cJSON_Delete(root);
+        gfree(g_sync_reply);
+        g_sync_reply = NULL;
+    }
+    return result;
+}
+
+static cJSON *lsp_position_params(const char *uri, const int line, const int col)
+{
+    cJSON *params = cJSON_CreateObject();
+    cJSON *textDoc = cJSON_CreateObject();
+    cJSON *position = cJSON_CreateObject();
+    cJSON_AddStringToObject(textDoc, "uri", uri);
+    cJSON_AddItemToObject(params, "textDocument", textDoc);
+    cJSON_AddNumberToObject(position, "line", line);
+    cJSON_AddNumberToObject(position, "character", col);
+    cJSON_AddItemToObject(params, "position", position);
+    return params;
+}
+
+/**
+ * @brief The plain text of the server's hover for (line, col) of `buf`,
+ * galloc'd, or NULL.
+ */
+static char *lsp_hover_text_sync(LspClient *lsp, struct buffer_t *buf, const int line,
+                                 const int col)
+{
+    char uri[PATH_MAX + 8];
+    cJSON *result;
+    const char *text;
+    char *out;
+    if (!lspBufferUri(buf, uri, sizeof(uri)))
+        return NULL;
+    result = lsp_request_sync(lsp, "textDocument/hover", lsp_position_params(uri, line, col), 1500);
+    text = result ? lsp_hover_contents_text(cJSON_GetObjectItem(result, "contents")) : NULL;
+    out = (text && text[0]) ? utilStrdup(text) : NULL;
+    cJSON_Delete(result);
+    return out;
+}
+
+/**
+ * @brief Appends `text` to `ab`, cut into lines of at most `width` bytes —
+ * at a space when there's one in the second half of the line — so a long
+ * one-line macro expansion stays readable in the popup.
+ */
+static void lsp_append_wrapped(struct abuf *ab, const char *text, const int len, const int width)
+{
+    int start = 0;
+    int cut;
+    int i;
+    while (len - start > width)
+    {
+        cut = start + width;
+        for (i = cut; i > start + width / 2; i--)
+            if (text[i] == ' ')
+            {
+                cut = i;
+                break;
+            }
+        // Never inside a UTF-8 sequence.
+        while (cut > start + 1 && ((unsigned char) text[cut] & 0xC0) == 0x80)
+            cut--;
+        abAppend(ab, text + start, cut - start);
+        abAppend(ab, "\n  ", 3);
+        start = cut;
+        while (start < len && text[start] == ' ')
+            start++;
+    }
+    abAppend(ab, text + start, len - start);
+}
+
+void lspShowMacroExpansion(LspClient *lsp, struct buffer_t *buf)
+{
+    struct abuf ab = ABUF_INIT;
+    char *hover;
+    const char *p;
+    const char *eol;
+    int width;
+    int x;
+    int y;
+    if (!lsp || lsp->state != LSP_READY || !buf)
+        return;
+    lsp_sync_if_dirty(lsp, buf);
+    hover = lsp_hover_text_sync(lsp, buf, buf->y, buf->x);
+    // clangd: "macro NAME\n\n#define ...\n\n// Expands to\n<expansion>".
+    if (!hover || strncmp(hover, "macro ", 6) != 0)
+    {
+        editorSetStatusMessage("No macro under the cursor");
+        gfree(hover);
+        return;
+    }
+
+    width = E.screencols - 10;
+    if (width > LSP_INFO_LINE_W - 8)
+        width = LSP_INFO_LINE_W - 8;
+    if (width < 20)
+        width = 20;
+    for (p = hover; *p; p = eol + 1)
+    {
+        eol = strchr(p, '\n');
+        if (!eol)
+            eol = p + strlen(p);
+        if (eol - p == 13 && strncmp(p, "// Expands to", 13) == 0)
+            abAppend(&ab, "Expands to:", 11);
+        else
+            lsp_append_wrapped(&ab, p, (int) (eol - p), width);
+        abAppend(&ab, "\n", 1);
+        if (!*eol)
+            break;
+    }
+    abAppend(&ab, "", 1); // terminator
+    lsp_cursor_screen_pos(&x, &y);
+    lspUiSetInfo(&E.lsp_info, LSP_INFO_HOVER, ab.b, x, y);
+    abFree(&ab);
+    gfree(hover);
+}
+
+// ─── Struct layout ──────────────────────────────────────────────────────────
+
+/**
+ * @brief The text after `key` on its line of `hover`, up to `stop` (or the
+ * end of the line), into out; 0 when `key` isn't there.
+ */
+static int lsp_hover_field(const char *hover, const char *key, const char *stop, char *out,
+                           const size_t size)
+{
+    const char *p = strstr(hover, key);
+    size_t n;
+    const char *s;
+    if (!p)
+        return 0;
+    p += strlen(key);
+    n = strcspn(p, "\r\n");
+    if (stop && (s = strstr(p, stop)) != NULL && (size_t) (s - p) < n)
+        n = (size_t) (s - p);
+    if (n >= size)
+        n = size - 1;
+    memcpy(out, p, n);
+    out[n] = '\0';
+    return 1;
+}
+
+/** @brief The N of "(+N bytes padding)" in a hover, else 0. */
+static int lsp_hover_padding(const char *hover)
+{
+    const char *p = strstr(hover, "(+");
+    return (p && strstr(p, "padding")) ? atoi(p + 2) : 0;
+}
+
+/**
+ * @brief Adds (or extends, for "int x, y;") the note shown after `line`.
+ */
+static void lsp_layout_note(struct buffer_t *buf, int *cap, const int line, const char *text)
+{
+    LspInlayHint *grown;
+    LspInlayHint *last = buf->lsp_layout_count ? &buf->lsp_layout[buf->lsp_layout_count - 1] : NULL;
+    char *joined;
+    size_t len;
+    if (last && last->line == line)
+    {
+        len = strlen(last->label) + strlen(text) + 3;
+        joined = galloc(len);
+        if (!joined)
+            return;
+        snprintf(joined, len, "%s; %s", last->label, text);
+        gfree(last->label);
+        last->label = joined;
+        return;
+    }
+    if (buf->lsp_layout_count == *cap)
+    {
+        *cap = *cap ? *cap * 2 : 16;
+        grown = grealloc(buf->lsp_layout, (size_t) *cap * sizeof(LspInlayHint));
+        if (!grown)
+            return;
+        buf->lsp_layout = grown;
+    }
+    buf->lsp_layout[buf->lsp_layout_count].line = line;
+    buf->lsp_layout[buf->lsp_layout_count].col = 0;
+    buf->lsp_layout[buf->lsp_layout_count].label = utilStrdup(text);
+    if (buf->lsp_layout[buf->lsp_layout_count].label)
+        buf->lsp_layout_count++;
+}
+
+void lspClearStructLayout(struct buffer_t *buf)
+{
+    lspFreeInlayHints(buf->lsp_layout, buf->lsp_layout_count);
+    buf->lsp_layout = NULL;
+    buf->lsp_layout_count = 0;
+    buf->lsp_layout_seq = 0;
+}
+
+void lspToggleStructLayout(LspClient *lsp, struct buffer_t *buf)
+{
+    LspSymbol *symbols;
+    int n;
+    int i;
+    int s = -1;
+    int cap = 0;
+    int padding = 0;
+    int header_line;
+    char *hover;
+    char offset[64];
+    char size[96];
+    char note[192];
+    if (!lsp || lsp->state != LSP_READY || !buf)
+        return;
+
+    // Shown and still current: the same command hides it.
+    if (buf->lsp_layout_count > 0 && buf->lsp_layout_seq == buf->edit_seq + 1)
+    {
+        lspClearStructLayout(buf);
+        editorSetStatusMessage("Struct layout hidden");
+        return;
+    }
+    lspClearStructLayout(buf);
+
+    n = lspRequestDocumentSymbols(lsp, buf, &symbols);
+    // The innermost struct (clangd calls a C struct a "class") around the cursor.
+    for (i = 0; i < n; i++)
+        if ((symbols[i].kind == 23 || symbols[i].kind == 5) &&
+            symbols[i].start_line <= buf->y && buf->y <= symbols[i].end_line)
+            s = i;
+    if (s < 0)
+    {
+        editorSetStatusMessage("No struct around the cursor");
+        if (n > 0)
+            lspFreeSymbols(symbols, n);
+        return;
+    }
+
+    // Its fields: the symbols right after it, one level deeper.
+    for (i = s + 1; i < n && symbols[i].depth > symbols[s].depth && i - s <= 256; i++)
+    {
+        if (symbols[i].depth != symbols[s].depth + 1 || symbols[i].kind != 8)
+            continue;
+        hover = lsp_hover_text_sync(lsp, buf, symbols[i].line, symbols[i].col);
+        if (hover && lsp_hover_field(hover, "Offset: ", NULL, offset, sizeof(offset)) &&
+            lsp_hover_field(hover, "Size: ", ", alignment", size, sizeof(size)))
+        {
+            snprintf(note, sizeof(note), "+%s, %s", offset, size);
+            lsp_layout_note(buf, &cap, symbols[i].line, note);
+            padding += lsp_hover_padding(hover);
+        }
+        gfree(hover);
+    }
+
+    // The struct's own size, on the line of its name.
+    header_line = symbols[s].line;
+    hover = lsp_hover_text_sync(lsp, buf, symbols[s].line, symbols[s].col);
+    if (hover && lsp_hover_field(hover, "Size: ", NULL, size, sizeof(size)))
+    {
+        if (padding > 0)
+            snprintf(note, sizeof(note), "%s, %d byte%s of padding", size, padding,
+                     padding == 1 ? "" : "s");
+        else
+            snprintf(note, sizeof(note), "%s, no padding", size);
+        // Before the fields' notes: they're kept in line order.
+        lsp_layout_note(buf, &cap, header_line, note);
+        if (buf->lsp_layout_count > 1)
+        {
+            LspInlayHint header = buf->lsp_layout[buf->lsp_layout_count - 1];
+            memmove(&buf->lsp_layout[1], &buf->lsp_layout[0],
+                    (size_t) (buf->lsp_layout_count - 1) * sizeof(LspInlayHint));
+            buf->lsp_layout[0] = header;
+        }
+    }
+    gfree(hover);
+
+    if (buf->lsp_layout_count == 0)
+        editorSetStatusMessage("The server gave no layout for %s", symbols[s].name);
+    else
+    {
+        buf->lsp_layout_seq = buf->edit_seq + 1;
+        editorSetStatusMessage("Layout of %s - run again (or edit) to hide it", symbols[s].name);
+    }
+    lspFreeSymbols(symbols, n);
+}
+
+// ─── Call hierarchy ─────────────────────────────────────────────────────────
+
+typedef struct {
+    LspCallNode *nodes;
+    int count;
+    int cap;
+} CallTree;
+
+static void lsp_call_push(CallTree *tree, const char *label, const char *path, const int line,
+                          const int col)
+{
+    LspCallNode *grown;
+    if (tree->count == tree->cap)
+    {
+        tree->cap = tree->cap ? tree->cap * 2 : 32;
+        grown = grealloc(tree->nodes, (size_t) tree->cap * sizeof(LspCallNode));
+        if (!grown)
+            return;
+        tree->nodes = grown;
+    }
+    tree->nodes[tree->count].label = utilStrdup(label);
+    tree->nodes[tree->count].path = utilStrdup(path);
+    tree->nodes[tree->count].line = line;
+    tree->nodes[tree->count].col = col;
+    if (tree->nodes[tree->count].label && tree->nodes[tree->count].path)
+        tree->count++;
+    else
+    {
+        gfree(tree->nodes[tree->count].label);
+        gfree(tree->nodes[tree->count].path);
+    }
+}
+
+static const char *lsp_basename(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+/**
+ * @brief Adds the callers of `item` (a CallHierarchyItem), each followed
+ * by its own callers, down to max_depth. A caller already on the path to
+ * the root is a recursion: listed, not followed.
+ */
+static void lsp_collect_callers(LspClient *lsp, const cJSON *item, const int depth,
+                                const int max_depth, const char **ancestors, CallTree *tree)
+{
+    cJSON *params;
+    cJSON *calls;
+    const cJSON *call;
+    const cJSON *from;
+    const cJSON *name;
+    const cJSON *uri;
+    int line;
+    int col;
+    int recursive;
+    int i;
+    char path[PATH_MAX];
+    char label[384];
+
+    params = cJSON_CreateObject();
+    cJSON_AddItemToObject(params, "item", cJSON_Duplicate(item, 1));
+    calls = lsp_request_sync(lsp, "callHierarchy/incomingCalls", params, 3000);
+    cJSON_ArrayForEach(call, calls)
+    {
+        if (tree->count >= LSP_CALL_TREE_MAX)
+            break;
+        from = cJSON_GetObjectItem(call, "from");
+        name = cJSON_GetObjectItem(from, "name");
+        uri = cJSON_GetObjectItem(from, "uri");
+        if (!cJSON_IsString(name) || !cJSON_IsString(uri) ||
+            !lspUriToPath(uri->valuestring, path, sizeof(path)))
+            continue;
+        // Land on the call itself, not on the caller's name.
+        if (!lsp_range_start(cJSON_GetArrayItem(cJSON_GetObjectItem(call, "fromRanges"), 0),
+                             &line, &col) &&
+            !lsp_range_start(cJSON_GetObjectItem(from, "selectionRange"), &line, &col))
+            continue;
+        recursive = 0;
+        for (i = 0; i <= depth; i++)
+            recursive |= strcmp(ancestors[i], name->valuestring) == 0;
+        snprintf(label, sizeof(label), "%*s<- %s  %s:%d%s", depth * 3 + 1, "",
+                 name->valuestring, lsp_basename(path), line + 1,
+                 recursive ? "  (recursive)" : "");
+        lsp_call_push(tree, label, path, line, col);
+        if (!recursive && depth + 1 < max_depth)
+        {
+            ancestors[depth + 1] = name->valuestring;
+            lsp_collect_callers(lsp, from, depth + 1, max_depth, ancestors, tree);
+        }
+    }
+    cJSON_Delete(calls);
+}
+
+int lspIncomingCallTree(LspClient *lsp, struct buffer_t *buf, const int max_depth,
+                        LspCallNode **out)
+{
+    char uri[PATH_MAX + 8];
+    char path[PATH_MAX];
+    char label[384];
+    const char *ancestors[LSP_CALL_MAX_DEPTH + 1];
+    cJSON *items;
+    const cJSON *item;
+    const cJSON *name;
+    const cJSON *item_uri;
+    CallTree tree = {NULL, 0, 0};
+    int line;
+    int col;
+    *out = NULL;
+    if (!lsp || lsp->state != LSP_READY || !buf || !lspBufferUri(buf, uri, sizeof(uri)))
+        return -1;
+    lsp_sync_if_dirty(lsp, buf);
+
+    items = lsp_request_sync(lsp, "textDocument/prepareCallHierarchy",
+                             lsp_position_params(uri, buf->y, buf->x), 3000);
+    item = cJSON_GetArrayItem(items, 0);
+    name = cJSON_GetObjectItem(item, "name");
+    item_uri = cJSON_GetObjectItem(item, "uri");
+    if (!cJSON_IsString(name) || !cJSON_IsString(item_uri) ||
+        !lspUriToPath(item_uri->valuestring, path, sizeof(path)) ||
+        !lsp_range_start(cJSON_GetObjectItem(item, "selectionRange"), &line, &col))
+    {
+        cJSON_Delete(items);
+        return -1;
+    }
+
+    // The function itself first, then who calls it.
+    snprintf(label, sizeof(label), "%s  %s:%d", name->valuestring, lsp_basename(path), line + 1);
+    lsp_call_push(&tree, label, path, line, col);
+    ancestors[0] = name->valuestring;
+    lsp_collect_callers(lsp, item, 0,
+                        max_depth < 1 ? 1 : (max_depth > LSP_CALL_MAX_DEPTH ? LSP_CALL_MAX_DEPTH : max_depth),
+                        ancestors, &tree);
+    cJSON_Delete(items);
+    *out = tree.nodes;
+    return tree.count;
+}
+
+void lspFreeCallTree(LspCallNode *nodes, const int count)
+{
+    int i;
+    for (i = 0; i < count; i++)
+    {
+        gfree(nodes[i].label);
+        gfree(nodes[i].path);
+    }
+    gfree(nodes);
+}
+
+void lspGotoLocation(const char *path, const int line, const int col)
+{
+    const int buffer_id = projectSearchOpenFile(path);
+    struct buffer_t *buf;
+    if (buffer_id < 0)
+    {
+        editorSetStatusMessage("Couldn't open %s", path);
+        return;
+    }
+    bufferSwitch(buffer_id);
+    buf = bufferFindById(buffer_id);
+    if (!buf)
+        return;
+    buf->y = line < 0 ? 0 : (line >= buf->numrows ? (buf->numrows > 0 ? buf->numrows - 1 : 0) : line);
+    buf->x = col < 0 ? 0 : col;
+    if (buf->numrows > 0 && buf->x > buf->row[buf->y].size)
+        buf->x = buf->row[buf->y].size;
+}
+
 // ─── Completion debounce ───────────────────────────────────────────────────
 //
 // editorProcessKeypress() used to call lspDidChange + lspRequestCompletion

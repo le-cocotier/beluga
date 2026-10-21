@@ -48,6 +48,9 @@ const Diagnostic *lspUiWorstDiagnostic(const DiagnosticList *diags, int buffer_i
 // Draws "   ● message" in the severity's color, clipped to max_cols (nothing
 // when that's too narrow to read). @return the columns drawn.
 int lspUiDrawInlineDiagnostic(struct abuf *ab, const Diagnostic *d, int max_cols);
+// Draws "   // text" in the comment color (a struct layout note), clipped to
+// max_cols. @return the columns drawn.
+int lspUiDrawEolNote(struct abuf *ab, const char *text, int max_cols);
 // The functions, structs, enums, ... whose body contains `row`, outermost
 // first, from the buffer's background-refreshed LSP symbols. @return how many.
 int lspUiEnclosingSymbols(const struct buffer_t *buf, int row,

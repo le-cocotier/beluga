@@ -74,6 +74,34 @@ void lspFreeInlayHints(LspInlayHint* hints, int count);
 // inlay hints of every shown buffer whose server has caught up with its
 // latest edit (see buffer_t's lsp_symbols / lsp_hints).
 void lspDecorationsTick(void);
+
+// ── Waiting for the answer: commands that show it right away ────────────────
+// The macro under the cursor, its definition and what it expands to, in
+// the hover popup (from clangd's hover).
+void lspShowMacroExpansion(LspClient* lsp, struct buffer_t* buf);
+// Notes each field of the struct around the cursor with its offset, size
+// and the padding after it, and the struct with its size and total padding
+// (buffer_t's lsp_layout, drawn after the lines). Again, or any edit,
+// hides them.
+void lspToggleStructLayout(LspClient* lsp, struct buffer_t* buf);
+void lspClearStructLayout(struct buffer_t* buf);
+
+#define LSP_CALL_MAX_DEPTH 5
+#define LSP_CALL_TREE_MAX 200
+// One row of a call tree: the function, then its callers indented under it.
+typedef struct {
+  char* label; // galloc'd: "   <- main  main.c:12"
+  char* path;  // galloc'd, where ENTER goes: the call itself
+  int line;    // 0-based
+  int col;
+} LspCallNode;
+// Who calls the function at the cursor, and who calls those, max_depth
+// levels deep (callHierarchy/incomingCalls). @return how many rows, or -1.
+int lspIncomingCallTree(LspClient* lsp, struct buffer_t* buf, int max_depth,
+                        LspCallNode** out);
+void lspFreeCallTree(LspCallNode* nodes, int count);
+// Opens `path` (or switches to its buffer) with the cursor at line/col.
+void lspGotoLocation(const char* path, int line, int col);
 // Prompts aren't this function's job — pass the already-chosen new name.
 // Response applies the server's WorkspaceEdit (both the "changes" and
 // "documentChanges" shapes) across every affected buffer, opening files
