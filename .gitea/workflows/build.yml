@@ -73,18 +73,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y meson ninja-build mingw-w64 wine
 
-      # cross/wine.ini adds Wine as the exe wrapper, so meson test runs
-      # the Windows test programs (and so os_win32.c) under Wine.
+      # giorgio-runner is ARM64, and its Wine can't run x86_64 .exe files,
+      # so this job only builds beluga.exe and doesn't run the Windows
+      # tests (cross/wine.ini stays in the repo for running them locally).
       - name: Configure Meson (cross-compiling for Windows)
-        run: meson setup --cross-file cross/mingw-w64.ini --cross-file cross/wine.ini build-windows
+        run: meson setup --cross-file cross/mingw-w64.ini build-windows
 
       - name: Build project
         run: meson compile -C build-windows
 
-      - name: Run tests under Wine (includes the OS-boundary check)
-        env:
-          WINEDEBUG: -all
-        run: meson test -C build-windows --print-errorlogs
+      - name: Check the OS boundary
+        run: tools/check_os_boundary.sh .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
