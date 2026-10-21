@@ -122,6 +122,9 @@ typedef struct theme
     char* COLOR_REMOVED; // diff "-" lines
 } Theme;
 
+// Theme is nothing but these char* fields, freed in a loop (deInitEditor).
+#define THEME_COLOR_COUNT ((int)(sizeof(Theme) / sizeof(char *)))
+
 enum bufferStatus_e
 {
     IDLE,
@@ -752,6 +755,11 @@ typedef struct editor_config_t
     int prompt_match_selected;
 
     int exit_requested;
+
+    // initialized: init.lisp has finished loading (set by initEditor()).
+    // batch: no screen, messages go to stdout (beluga --sync-packages).
+    int initialized;
+    int batch;
 
     Buffer *buffers;
     int number_of_buffer;

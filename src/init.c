@@ -9,6 +9,7 @@
 #include "../include/define.h"
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
+#include "../include/packages.h"
 #include "../include/macro.h"
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
@@ -26,6 +27,11 @@
 #include "../include/lisp.h"
 #include "../include/lisp_lib.h"
 #pragma GCC diagnostic pop
+
+// From syntax_highlighter.h, which can't be included here: its TokenType
+// clashes with the one lisp.h's implementation (LISP_IMPLEMENTATION, above)
+// defines.
+void syntaxFreeCommentWords(void);
 
 /***********************************************************************************************************************
  *
@@ -64,6 +70,17 @@ void initBuiltins(void) {
   registerBuiltin("editor-insert-char", editorPrintC);
   registerBuiltin("add-package", addPackage);
   registerBuiltin("package-loaded?", packageLoaded);
+  registerBuiltin("package-state", l_packageState);
+  registerBuiltin("package-version", l_packageVersion);
+  registerBuiltin("package-directory", l_packageDirectory);
+  registerBuiltin("beluga-directory", l_belugaDirectory);
+  registerBuiltin("beluga-version", l_belugaVersion);
+  registerBuiltin("version-compare", l_versionCompare);
+  registerBuiltin("read-data-file", l_readDataFile);
+  registerBuiltin("write-data-file", l_writeDataFile);
+  registerBuiltin("editor-redisplay", l_editorRedisplay);
+  registerBuiltin("editor-initialized?", l_editorInitialized);
+  registerBuiltin("editor-batch?", l_editorBatch);
   registerBuiltin("buffer-find", bufferFind_L);
   registerBuiltin("buffer-find-reverse", bufferFindReverse_L);
   registerBuiltin("editor-read-char", editorReadChar_L);
@@ -151,6 +168,7 @@ void initBuiltins(void) {
   registerBuiltin("syntax-define-language", l_syntaxDefineLanguage);
   registerBuiltin("syntax-add-keyword", l_syntaxAddKeyword);
   registerBuiltin("syntax-add-type", l_syntaxAddType);
+  registerBuiltin("syntax-add-comment-word", l_syntaxAddCommentWord);
   registerBuiltin("syntax-add-line-prefix", l_syntaxAddLinePrefix);
   registerBuiltin("buffer-set-syntax", l_bufferSetSyntax);
   registerBuiltin("write-file", l_writeFile);
@@ -276,18 +294,41 @@ static void initConfig(void) {
   // Init builtins lisp functions
   initBuiltins();
 
-  // Form by form: a mistake is reported (see configShowErrors(), called
-  // once the first buffer is up) instead of stopping the editor, and the
-  // rest of the file still loads.
-  configLoadFile(E.init_file_path, "init.lisp");
-  if (configErrorCount() > 0)
-    ensureEmergencyBindings();
+  // Read config file
+  E.fd_init_file = fopen(E.init_file_path, "r");
+  if (!E.fd_init_file) {
+    die("init failed");
+  }
+  E.ctx_data = lisp_read_file(E.fd_init_file, &E.ctx_error, E.ctx);
+  if (E.ctx_error != LISP_ERROR_NONE) {
+    die("init failed");
+  }
+  lisp_eval(E.ctx_data, &E.ctx_error, E.ctx);
+  fclose(E.fd_init_file);
 }
 
 /**
- * @brief Reads the settings (LSP, LINE-NUMBERS, WHICH-KEY, TAB-LENGTH, ...)
- * out of the Lisp environment initConfig() just finished loading, into
- * E.constantes — see the table in settings.c.
+ * @brief Read a boolean setting from init.lisp, falling back to `fallback`
+ * when the symbol isn't defined at all.
+ * @details Uses an env lookup rather than lisp_read+lisp_eval (as the
+ * older constants do) precisely so a config predating the setting still
+ * loads: evaluating an unbound symbol raises a Lisp error and yields a
+ * junk value, which would silently turn the feature on or off at random
+ * for every existing ~/.beluga/config/init.lisp out there.
+ */
+static int readBoolConst(const char *name, int fallback) {
+  int present = 0;
+  const Lisp val =
+      lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(name, E.ctx), &present);
+  if (!present)
+    return fallback;
+  return lisp_is_true(val);
+}
+
+/**
+ * @brief Reads non-color startup constants (LSP, LINE-NUMBERS, WHICH-KEY,
+ * TAB-LENGTH, QUIT-TIMES) out of the Lisp environment initConfig() just
+ * finished loading, into E.constantes.
  * @details Despite the historical name this doesn't touch theme *colors*
  * at all — those are set directly onto E.theme by the editor-set-theme-color
  * builtin, called as a side effect of evaluating config/init.lisp inside
@@ -299,8 +340,47 @@ static void initConfig(void) {
  * (LSP, TAB-LENGTH, ...) that only exist once init.lisp has been evaluated.
  */
 static void initStartupConstants(void) {
-  settingsLoad();
+  E.constantes.LSP = lisp_bool(
+      lisp_eval(lisp_read("LSP", &E.ctx_error, E.ctx), &E.ctx_error, E.ctx));
+  E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
+  E.constantes.WHICH_KEY = readBoolConst("WHICH-KEY", 1);
+  E.constantes.LSP_SIGNATURE_HELP = readBoolConst("LSP-SIGNATURE-HELP", 1);
   appDebug("LSP ON : %d", E.constantes.LSP);
+  E.constantes.TAB_LENGTH =
+      (int)lisp_eval(lisp_read("TAB-LENGTH", &E.ctx_error, E.ctx), &E.ctx_error,
+                     E.ctx)
+          .val.int_val;
+  E.constantes.QUIT_TIMES =
+      (int)lisp_eval(lisp_read("QUIT-TIMES", &E.ctx_error, E.ctx), &E.ctx_error,
+                     E.ctx)
+          .val.int_val;
+}
+
+/**
+ * @brief cJSON's allocation hooks: route its nodes and printed strings
+ * through galloc, so they show up in the memory inspector and the exit
+ * report like everything else. galloc is a macro, hence the wrapper.
+ * cJSON_InitHooks() with a non-malloc allocator drops realloc, so cJSON's
+ * print buffers grow by allocate + copy + free, all through these two.
+ */
+static void *cjsonAlloc(size_t size) { return galloc(size); }
+
+static void initJsonHooks(void) {
+  cJSON_Hooks hooks;
+  hooks.malloc_fn = cjsonAlloc;
+  hooks.free_fn = gfree;
+  cJSON_InitHooks(&hooks);
+}
+
+/**
+ * @brief A galloc'd copy of a fallback theme color, so that every color in
+ * E.theme can be freed, whether a theme package replaced it or not.
+ */
+static char *themeColor(const char *ansi) {
+  char *copy = galloc(strlen(ansi) + 1);
+  if (copy)
+    strcpy(copy, ansi);
+  return copy;
 }
 
 /**
@@ -314,7 +394,11 @@ void initEditor() {
   const char *home = os_home_dir();
   EditorPane *active = NULL;
 
-  if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
+  // Before anything can build a cJSON object (the LSP client, later on).
+  initJsonHooks();
+
+  // No terminal to ask in batch mode (and asking writes to stdout).
+  if (E.batch || getWindowSize(&E.screenrows, &E.screencols) == -1) {
     E.screencols = 80;
     E.screenrows = 24;
     //    die("getWindowSize");
@@ -339,7 +423,7 @@ void initEditor() {
     die("HOME environment variable not set");
   }
 
-  E.init_file_path = utilFormat("%s/.beluga/config/init.lisp", home);
+  E.init_file_path = utilFormat("%s/config/init.lisp", utilBelugaDir());
   if (!E.init_file_path) {
     die("out of memory");
   }
@@ -421,20 +505,20 @@ void initEditor() {
   // initConfig() runs — a theme package's editor-set-theme-color calls
   // overwrite these during config load, but there's always something
   // valid in E.theme even if no theme package is installed/loaded.
-  // Copies, not the literals: a theme's editor-set-theme-color frees the
-  // color it replaces, and deInitEditor() frees all of them.
-  E.theme.BACKGROUND_COLOR = utilStrdup(ANSI_BG_RGB(40, 44, 52));
-  E.theme.LINE_CURSOR_BACKGROUND = utilStrdup(ANSI_BG_RGB(60, 64, 72));
-  E.theme.COLOR_KEYWORD = utilStrdup(ANSI_FG_RGB(198, 120, 221));
-  E.theme.COLOR_TYPE = utilStrdup(ANSI_FG_RGB(97, 175, 239));
-  E.theme.COLOR_STRING = utilStrdup(ANSI_FG_RGB(152, 195, 121));
-  E.theme.COLOR_COMMENT = utilStrdup(ANSI_FG_RGB(92, 99, 112));
-  E.theme.COLOR_NUMBER = utilStrdup(ANSI_FG_RGB(209, 154, 102));
-  E.theme.COLOR_DEFAULT = utilStrdup(ANSI_FG_RGB(171, 178, 191));
-  E.theme.COLOR_ADDED = utilStrdup(ANSI_FG_RGB(152, 195, 121));
-  E.theme.COLOR_REMOVED = utilStrdup(ANSI_FG_RGB(224, 108, 117));
+  E.theme.BACKGROUND_COLOR = themeColor(ANSI_BG_RGB(40, 44, 52));
+  E.theme.LINE_CURSOR_BACKGROUND = themeColor(ANSI_BG_RGB(60, 64, 72));
+  E.theme.COLOR_KEYWORD = themeColor(ANSI_FG_RGB(198, 120, 221));
+  E.theme.COLOR_TYPE = themeColor(ANSI_FG_RGB(97, 175, 239));
+  E.theme.COLOR_STRING = themeColor(ANSI_FG_RGB(152, 195, 121));
+  E.theme.COLOR_COMMENT = themeColor(ANSI_FG_RGB(92, 99, 112));
+  E.theme.COLOR_NUMBER = themeColor(ANSI_FG_RGB(209, 154, 102));
+  E.theme.COLOR_DEFAULT = themeColor(ANSI_FG_RGB(171, 178, 191));
+  E.theme.COLOR_ADDED = themeColor(ANSI_FG_RGB(152, 195, 121));
+  E.theme.COLOR_REMOVED = themeColor(ANSI_FG_RGB(224, 108, 117));
 
+  E.initialized = 0;
   initConfig();
+  E.initialized = 1;
   initStartupConstants();
   // Clients are created per server, the first time a matching file is
   // opened (bufferMaybeStartLsp()).
@@ -455,6 +539,8 @@ void deInitEditor() {
   // free init_file_path
   gfree(E.init_file_path);
 
+  packagesFree();
+
   // free prefix
   gfree(E.prefix);
 
@@ -469,6 +555,7 @@ void deInitEditor() {
   for (i = 0; i < E.number_of_languages; i++)
     gfree(E.languages[i].words);
   gfree(E.languages);
+  syntaxFreeCommentWords();
 
   // free the keyboard macro
   macroFree();
@@ -483,7 +570,7 @@ void deInitEditor() {
   E.number_of_lsp_clients = 0;
 
   temp = &E.theme.BACKGROUND_COLOR;
-  for (i = 0; i < 10; ++i) {
+  for (i = 0; i < THEME_COLOR_COUNT; ++i) {
     gfree(*(temp + i));
   }
 

@@ -1,5 +1,5 @@
 project('beluga', 'c',
-  version : '3.3',
+  version : '3.4',
   default_options : [
     'c_std=c99'
   ]
@@ -110,8 +110,9 @@ src_files = files(
   'src/async_process.c',
   'src/project_files.c',
   'src/project_search.c',
-  'src/replace.c',
   'src/file_finder.c',
+  'src/packages.c',
+  'src/replace.c',
   'src/macro.c',
   'src/screen_diff.c',
   'src/describe.c',
@@ -145,7 +146,7 @@ test('galloc', find_program('tools/check_galloc.sh'),
 # Unit tests (test/): each is a small program linked against the editor's
 # code; test/test.c stands in for main.c's globals. On Windows they get
 # beluga.exe's manifest too, so file names are UTF-8 for them as well.
-foreach t : ['utf8', 'buffer', 'ansi_parser', 'os', 'completion']
+foreach t : ['utf8', 'buffer', 'ansi_parser', 'os', 'completion', 'packages', 'highlight']
   test(t, executable('test_' + t,
     files('test/test_' + t + '.c', 'test/test.c') + extra_sources,
     c_args : core_args,
@@ -191,3 +192,13 @@ foreach f : ['ansi_parser', 'lsp']
       args : [meson.current_source_dir() / 'test/fuzz/corpus' / f])
   endif
 endforeach
+
+# The package manager end to end (test/test_packages.sh): beluga
+# --sync-packages against throwaway package repositories. A shell script
+# with file:// git remotes, so not on Windows.
+if not is_windows
+  test('package-manager', find_program('test/test_packages.sh'),
+    args : [beluga_exe.full_path(), meson.current_source_dir()],
+    depends : beluga_exe,
+    timeout : 300)
+endif

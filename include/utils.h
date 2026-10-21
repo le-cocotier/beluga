@@ -23,4 +23,8 @@ char *utilFormat(const char *fmt, ...);
 // ("a/b/c.txt" -> "a/b", "c.txt" -> ".", "/c.txt" -> "/", "C:/x" -> "C:/").
 void utilDirname(const char *path, char *out, size_t out_size);
 
+// Where beluga keeps its config, packages and logs: $BELUGA_HOME when set
+// (tests, a portable install), else ~/.beluga. Never NULL once HOME is.
+const char *utilBelugaDir(void);
+
 #endif

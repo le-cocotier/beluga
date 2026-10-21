@@ -191,6 +191,11 @@ if (Test-Path $PersonalConfig) {
 if (-not (Select-String -Path $ConfigFile -Pattern '^\s*\(add-package\s*"personal-config"\)' -Quiet)) {
     Warn "$ConfigFile doesn't load personal-config - add (add-package `"personal-config`") after the theme's add-package line"
 }
+# use-package comes from the package manager: a config from before it
+# existed doesn't load it, and every use-package line would fail.
+if (-not (Select-String -Path $ConfigFile -Pattern '^\s*\(add-package\s*"package"\)' -Quiet)) {
+    Warn "$ConfigFile doesn't load the package manager - add (add-package `"package`") before the other add-package lines (see config\init.lisp)"
+}
 
 # --- packages ---------------------------------------------------------------
 

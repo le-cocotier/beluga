@@ -13,6 +13,7 @@
 #include <time.h>
 
 #include "../include/utf8.h"
+#include "../include/utils.h"
 
 /***********************************************************************************************************************
  *
@@ -169,7 +170,7 @@ static const char *debugLogPath(void)
 {
     static char path[PATH_MAX];
     if (!path[0])
-        snprintf(path, sizeof(path), "%s/.beluga/debug.log", os_home_dir());
+        snprintf(path, sizeof(path), "%s/debug.log", utilBelugaDir());
     return path;
 }
 

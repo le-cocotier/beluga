@@ -41,6 +41,13 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
                      const LanguageSyntax *lang);
 int is_word_char(const Utf8Char *c);
 
+// Inside a comment of an `ext` file, draws `word` in `role`'s color and,
+// when next_role >= 0, the word after it in next_role's (a TokenType each).
+// Independent of the language being defined yet. 0 if `word` or `ext` is
+// too long (31 / 15 bytes) or out of memory.
+int syntaxAddCommentWord(const char *ext, const char *word, int role, int next_role);
+void syntaxFreeCommentWords(void);
+
 // ── Block-comment state cache ──────────────────────────────────────────────
 // See the comment_state fields on struct buffer_t (data.h) for why this
 // exists: highlight_line() only ever sees the rows currently on screen, so
