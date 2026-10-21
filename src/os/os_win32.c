@@ -39,6 +39,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
+#include <malloc.h> // _heapwalk
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1667,18 +1668,14 @@ char *os_getcwd(void)
     return utf8;
 }
 
-const char *os_home_dir(void)
+char *os_home_dir(void)
 {
-    static char *home = NULL;
-    const wchar_t *profile;
+    const wchar_t *profile = _wgetenv(L"USERPROFILE");
+    char *home = (profile && *profile) ? toUtf8(profile) : NULL;
     if (!home)
-    {
-        profile = _wgetenv(L"USERPROFILE");
-        home = profile ? toUtf8(profile) : NULL;
-        if (!home)
-            home = gstrdup("C:/");
+        home = gstrdup("C:/");
+    if (home)
         backslashesToSlashes(home);
-    }
     return home;
 }
 
@@ -2087,4 +2084,34 @@ static char *powerShellEncode(const char *script)
     }
     gfree(w);
     return out;
+}
+
+/***********************************************************************************************************************
+ *
+ *                                                 Heap
+ *
+ **********************************************************************************************************************/
+
+int os_heap_in_use(long long *blocks, long long *bytes)
+{
+    _HEAPINFO info;
+    int status;
+    *blocks = 0;
+    *bytes = 0;
+    info._pentry = NULL;
+    while ((status = _heapwalk(&info)) == _HEAPOK)
+    {
+        if (info._useflag == _USEDENTRY)
+        {
+            (*blocks)++;
+            *bytes += (long long) info._size;
+        }
+    }
+    if (status != _HEAPEND && status != _HEAPEMPTY)
+    {
+        *blocks = -1;
+        *bytes = -1;
+        return -1;
+    }
+    return 0;
 }

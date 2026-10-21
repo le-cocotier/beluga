@@ -280,14 +280,15 @@ static void ensureEmergencyBindings(void) {
  */
 static void initConfig(void) {
   char *lisp_log_path;
+  char *home;
 
   E.ctx = lisp_init();
   // In ~/.beluga, not the directory beluga was started from (where it
   // used to leave a lisp_log.err behind in every project). w+:
   // config_load.c reads back what the interpreter wrote here to put the
   // reason for a failing form in its error message.
-  char *home = os_home_dir();
-  lisp_log_path = utilFormat("%s/.beluga/lisp_log.err", home);
+  home = os_home_dir();
+  lisp_log_path = home ? utilFormat("%s/.beluga/lisp_log.err", home) : NULL;
   gfree(home);
   E.ctx.p->err_port = lisp_log_path ? fopen(lisp_log_path, "w+") : NULL;
   gfree(lisp_log_path);
@@ -297,41 +298,18 @@ static void initConfig(void) {
   // Init builtins lisp functions
   initBuiltins();
 
-  // Read config file
-  E.fd_init_file = fopen(E.init_file_path, "r");
-  if (!E.fd_init_file) {
-    die("init failed");
-  }
-  E.ctx_data = lisp_read_file(E.fd_init_file, &E.ctx_error, E.ctx);
-  if (E.ctx_error != LISP_ERROR_NONE) {
-    die("init failed");
-  }
-  lisp_eval(E.ctx_data, &E.ctx_error, E.ctx);
-  fclose(E.fd_init_file);
+  // Form by form: a mistake is reported (see configShowErrors(), called
+  // once the first buffer is up) instead of stopping the editor, and the
+  // rest of the file still loads.
+  configLoadFile(E.init_file_path, "init.lisp");
+  if (configErrorCount() > 0)
+    ensureEmergencyBindings();
 }
 
 /**
- * @brief Read a boolean setting from init.lisp, falling back to `fallback`
- * when the symbol isn't defined at all.
- * @details Uses an env lookup rather than lisp_read+lisp_eval (as the
- * older constants do) precisely so a config predating the setting still
- * loads: evaluating an unbound symbol raises a Lisp error and yields a
- * junk value, which would silently turn the feature on or off at random
- * for every existing ~/.beluga/config/init.lisp out there.
- */
-static int readBoolConst(const char *name, int fallback) {
-  int present = 0;
-  const Lisp val =
-      lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(name, E.ctx), &present);
-  if (!present)
-    return fallback;
-  return lisp_is_true(val);
-}
-
-/**
- * @brief Reads non-color startup constants (LSP, LINE-NUMBERS, WHICH-KEY,
- * TAB-LENGTH, QUIT-TIMES) out of the Lisp environment initConfig() just
- * finished loading, into E.constantes.
+ * @brief Reads the settings (LSP, LINE-NUMBERS, WHICH-KEY, TAB-LENGTH, ...)
+ * out of the Lisp environment initConfig() just finished loading, into
+ * E.constantes — see the table in settings.c.
  * @details Despite the historical name this doesn't touch theme *colors*
  * at all — those are set directly onto E.theme by the editor-set-theme-color
  * builtin, called as a side effect of evaluating config/init.lisp inside
@@ -343,20 +321,8 @@ static int readBoolConst(const char *name, int fallback) {
  * (LSP, TAB-LENGTH, ...) that only exist once init.lisp has been evaluated.
  */
 static void initStartupConstants(void) {
-  E.constantes.LSP = lisp_bool(
-      lisp_eval(lisp_read("LSP", &E.ctx_error, E.ctx), &E.ctx_error, E.ctx));
-  E.constantes.LINE_NUMBERS = readBoolConst("LINE-NUMBERS", 1);
-  E.constantes.WHICH_KEY = readBoolConst("WHICH-KEY", 1);
-  E.constantes.LSP_SIGNATURE_HELP = readBoolConst("LSP-SIGNATURE-HELP", 1);
+  settingsLoad();
   appDebug("LSP ON : %d", E.constantes.LSP);
-  E.constantes.TAB_LENGTH =
-      (int)lisp_eval(lisp_read("TAB-LENGTH", &E.ctx_error, E.ctx), &E.ctx_error,
-                     E.ctx)
-          .val.int_val;
-  E.constantes.QUIT_TIMES =
-      (int)lisp_eval(lisp_read("QUIT-TIMES", &E.ctx_error, E.ctx), &E.ctx_error,
-                     E.ctx)
-          .val.int_val;
 }
 
 /**
@@ -394,7 +360,7 @@ static char *themeColor(const char *ansi) {
  *   - E.panes.layout (via SplitScreenInit)
  */
 void initEditor() {
-  const char *home = os_home_dir();
+  char *home;
   EditorPane *active = NULL;
 
   // Before anything can build a cJSON object (the LSP client, later on).
@@ -422,9 +388,11 @@ void initEditor() {
   active->width = E.screencols;
   active->height = E.screenrows;
 
+  home = os_home_dir();
   if (!home) {
     die("HOME environment variable not set");
   }
+  gfree(home);
 
   E.init_file_path = utilFormat("%s/config/init.lisp", utilBelugaDir());
   if (!E.init_file_path) {

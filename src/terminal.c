@@ -186,20 +186,32 @@ static const char *debugLogPath(void)
  * or a hang doesn't lose whatever was written right before it — the
  * exact moment a debug log is actually needed.
  */
+static FILE *s_debug_log = NULL;
+static int s_debug_log_tried = 0;
+
 static FILE *debugLogFile(void)
 {
-    static FILE *f = NULL;
-    static int tried = 0;
-    if (!tried)
+    if (!s_debug_log_tried)
     {
-        tried = 1;
-        f = fopen(debugLogPath(), "w");
-        if (f)
-            setvbuf(f, NULL, _IOLBF, 0);
+        s_debug_log_tried = 1;
+        s_debug_log = fopen(debugLogPath(), "w");
+        if (s_debug_log)
+            setvbuf(s_debug_log, NULL, _IOLBF, 0);
     }
-    return f;
+    return s_debug_log;
 }
 #endif
+
+void appDebugClose(void)
+{
+#ifdef APP_DEBUG
+    // Stays closed: appDebug() after this writes nothing.
+    if (s_debug_log)
+        fclose(s_debug_log);
+    s_debug_log = NULL;
+    s_debug_log_tried = 1;
+#endif
+}
 
 const char *appDebugLogPath(void)
 {

@@ -191,6 +191,13 @@ void gfree(void * data){
     pBlock->nextBlock->lastBlock = pBlock->lastBlock;
   }
   free(pBlock);
+  if (blockAmount == 0) {
+    // Nothing left to find: give the index back too, so a clean exit
+    // leaves nothing allocated at all. The next galloc() rebuilds it.
+    free(g_index);
+    g_index = NULL;
+    g_index_size = 0;
+  }
 }
 
 // One allocation site in gReportMemory()'s summary.

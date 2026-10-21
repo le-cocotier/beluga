@@ -2367,7 +2367,7 @@ static void normalizePath(const char *in, char *out, const size_t out_size) {
 Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
   const char *path;
   const char *base = NULL;
-  const char *home;
+  char *home;
   char *cwd = NULL;
   char joined[PATH_MAX * 2];
   char out[PATH_MAX];
@@ -2381,8 +2381,8 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
   if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING)
     base = lisp_string(lisp_car(args));
 
-  home = os_home_dir();
-  if (path[0] == '~' && (path[1] == '/' || path[1] == '\0')) {
+  home = (path[0] == '~' && (path[1] == '/' || path[1] == '\0')) ? os_home_dir() : NULL;
+  if (home) {
     snprintf(joined, sizeof(joined), "%s/%s", home, path + 1);
   } else if (os_path_is_absolute(path)) {
     snprintf(joined, sizeof(joined), "%s", path);
@@ -2394,6 +2394,7 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
     snprintf(joined, sizeof(joined), "%s/%s", base, path);
   }
   gfree(cwd);
+  gfree(home);
 
   os_path_to_slashes(joined); // "C:\\dir\\file" typed the Windows way
   normalizePath(joined, out, sizeof(out));

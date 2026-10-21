@@ -177,8 +177,16 @@ class Beluga:
         cleanly: under a sanitizer build, a report or a leak fails here."""
         self.keys('\x1b', delay=0.3)
         for _ in range(3):
-            self.keys('\x18', '\x03', delay=0.3)
-            done, status = os.waitpid(self.pid, os.WNOHANG)
+            try:
+                self.keys('\x18', '\x03', delay=0.3)
+            except OSError:
+                break  # the pty closed: it exited while we were typing
+            end = time.time() + 1  # tearing down takes a moment
+            done = 0
+            while not done and time.time() < end:
+                done, status = os.waitpid(self.pid, os.WNOHANG)
+                if not done:
+                    time.sleep(0.05)
             if done:
                 self.status = status
                 break

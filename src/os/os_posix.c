@@ -11,6 +11,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE // forkpty, memmem, ... ; this library is allowed to be
                     // POSIX
+#include <stddef.h>
 #endif
 
 #include "../../include/galloc.h"
@@ -33,9 +34,13 @@
 #include <time.h>
 #include <unistd.h>
 #ifdef __APPLE__
+#include <malloc/malloc.h> // malloc_zone_statistics
 #include <util.h> // forkpty
 #else
 #include <pty.h> // forkpty (libutil on Linux)
+#if defined(__GLIBC__)
+#include <malloc.h> // mallinfo2
+#endif
 #endif
 
 /***********************************************************************************************************************
@@ -791,9 +796,9 @@ char *os_getcwd(void) {
   return getcwd(buf, sizeof(buf)) ? gstrdup(buf) : NULL;
 }
 
-const char *os_home_dir(void) {
+char *os_home_dir(void) {
   const char *home = getenv("HOME");
-  return (home && *home) ? home : "/";
+  return gstrdup((home && *home) ? home : "/");
 }
 
 int os_path_is_absolute(const char *path) { return path && path[0] == '/'; }
@@ -1039,6 +1044,31 @@ int os_move(const char *const *sources, const int count, const char *dest,
 int os_copy_tree(const char *const *sources, const int count, const char *dest,
                  char *err, const size_t err_size) {
   return transfer(0, sources, count, dest, err, err_size);
+}
+
+/***********************************************************************************************************************
+ *
+ *                                                 Heap
+ *
+ **********************************************************************************************************************/
+
+int os_heap_in_use(long long *blocks, long long *bytes) {
+#if defined(__APPLE__)
+  malloc_statistics_t st;
+  malloc_zone_statistics(NULL, &st); // NULL: every zone, the whole process
+  *blocks = (long long)st.blocks_in_use;
+  *bytes = (long long)st.size_in_use;
+  return 0;
+#elif defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+  struct mallinfo2 mi = mallinfo2();
+  *blocks = -1;
+  *bytes = (long long)(mi.uordblks + mi.hblkhd); // arena + mmap'd chunks
+  return 0;
+#else
+  *blocks = -1;
+  *bytes = -1;
+  return -1;
+#endif
 }
 
 /***********************************************************************************************************************

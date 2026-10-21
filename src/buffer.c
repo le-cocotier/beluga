@@ -27,6 +27,7 @@
 #include "../include/syntax_highlighter.h"
 #include "../include/terminal.h"
 #include "../include/utf8.h"
+#include "include/os.h"
 
 /***********************************************************************************************************************
  *
@@ -810,17 +811,19 @@ int bufferSetPath(struct buffer_t *buf, const char *path) {
   char expanded[PATH_MAX + 1];
   char fullname[PATH_MAX + 1];
   char directory[PATH_MAX + 1];
-  const char *home = os_home_dir();
+  char *home;
   const char *name;
   char *real;
   Utf8Char *new_filename;
   Utf8Char *new_fullname;
   Utf8Char *new_path;
 
-  if (path[0] == '~' && (path[1] == '/' || path[1] == '\0'))
+  home = (path[0] == '~' && (path[1] == '/' || path[1] == '\0')) ? os_home_dir() : NULL;
+  if (home)
     snprintf(expanded, sizeof(expanded), "%s%s", home, path + 1);
   else
     snprintf(expanded, sizeof(expanded), "%s", path);
+  gfree(home);
   os_path_to_slashes(expanded); // "src\\main.c" given the Windows way
 
   real = os_realpath(expanded);

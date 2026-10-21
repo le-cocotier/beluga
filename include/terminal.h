@@ -42,4 +42,8 @@ void appDebug(const char *fmt, ...);
 // too instead of onto the terminal beluga is drawing on.
 const char *appDebugLogPath(void);
 
+// Closes the debug log at exit (its stdio buffer is the last thing beluga
+// would otherwise still hold when the memory report is written).
+void appDebugClose(void);
+
 #endif
