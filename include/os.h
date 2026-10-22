@@ -256,8 +256,10 @@ char *os_realpath(const char *path);
 
 char *os_getcwd(void);
 
-// The user's home directory: $HOME, or %USERPROFILE% on Windows.
-const char *os_home_dir(void);
+// The user's home directory: $HOME, or %USERPROFILE% on Windows ("/" or
+// "C:/" when unset). A galloc'd copy the caller gfree()s; NULL only when
+// out of memory.
+char *os_home_dir(void);
 
 int os_path_is_absolute(const char *path);
 
@@ -302,6 +304,14 @@ int os_mkdirs(const char *path, char *err, size_t err_size);
  */
 int os_file_flush(FILE *f);
 int os_replace_file(const char *tmp, const char *dest, char *err, size_t err_size);
+
+/**
+ * The C heap as the platform's allocator sees it: every block still in use,
+ * galloc'd or not (libc's own, a library's, a raw malloc galloc never saw).
+ * 0, or -1 where the platform can't tell. `blocks` is -1 when only the
+ * byte count is known (glibc).
+ */
+int os_heap_in_use(long long *blocks, long long *bytes);
 
 /***********************************************************************************************************************
  *

@@ -121,7 +121,7 @@ const char *utilBelugaDir(void)
 {
     static char dir[OS_PATH_MAX];
     const char *env;
-    const char *home;
+    char *home;
 
     if (dir[0])
         return dir;
@@ -134,6 +134,7 @@ const char *utilBelugaDir(void)
         if (!home)
             return NULL;
         snprintf(dir, sizeof(dir), "%s/.beluga", home);
+        gfree(home);
     }
     os_path_to_slashes(dir);
     return dir;

@@ -112,6 +112,8 @@ Lisp editorAutoComplete(Lisp args, LispError *e, LispContext ctx);
 Lisp lspDefinition(Lisp args, LispError *e, LispContext ctx);
 Lisp lspReferences(Lisp args, LispError *e, LispContext ctx);
 Lisp lspDiagnostics(Lisp args, LispError *e, LispContext ctx);
+Lisp lspDocumentSymbols(Lisp args, LispError *e, LispContext ctx);
+Lisp lspWorkspaceSymbols(Lisp args, LispError *e, LispContext ctx);
 Lisp lspHover(Lisp args, LispError *e, LispContext ctx);
 Lisp lspSignatureHelp(Lisp args, LispError *e, LispContext ctx);
 Lisp lspCodeAction(Lisp args, LispError *e, LispContext ctx);

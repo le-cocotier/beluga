@@ -227,6 +227,7 @@ void editorRunLoop(void) {
     if (E.constantes.LSP) {
       lspCompletionDebounceTick();
       lspSyncDebounceTick();
+      lspDecorationsTick();
     }
     autosaveTick();
     fileCheckDiskChanges();

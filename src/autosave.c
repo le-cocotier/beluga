@@ -43,17 +43,24 @@ static char *autosavePath(const struct buffer_t *buf) {
   char *full;
   char *p;
   char *path;
-  const char *home = os_home_dir();
-  if (!home || !buf->fullname)
+  char *home;
+
+  if (!buf->fullname)
     return NULL;
   full = (char *)utf8ToString(buf->fullname);
   if (!full)
     return NULL;
+  home = os_home_dir();
+  if (!home) {
+    gfree(full);
+    return NULL;
+  }
   for (p = full; *p; p++)
     if (*p == '/' || *p == '\\' || *p == ':')
       *p = '!';
   path = utilFormat("%s/.beluga/autosave/%s", home, full);
   gfree(full);
+  gfree(home);
   return path;
 }
 
@@ -66,12 +73,16 @@ void autosaveWrite(struct buffer_t *buf) {
   FILE *f;
   int i;
   int ok;
-  const char *home = os_home_dir();
+  char *home;
 
-  if (!autosaveApplies(buf) || !home)
+  if (!autosaveApplies(buf))
+    return;
+  home = os_home_dir();
+  if (!home)
     return;
 
   dir = utilFormat("%s/.beluga/autosave", home);
+  gfree(home);
   if (dir) {
     os_mkdirs(dir, err, sizeof(err));
     gfree(dir);

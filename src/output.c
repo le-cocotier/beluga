@@ -190,6 +190,114 @@ static char *applySelectionHighlight(const char *rendered, int rendered_len,
 }
 
 /**
+ * @brief The inlay hints of `file_row` that land in the drawn part of it:
+ * for each, the rendered-character index it goes before (counted like
+ * applySelectionHighlight() does: from the first character drawn, lead
+ * padding included) and its label. Hints aren't drawn on a sticky row nor
+ * on a row with a selection (whose reverse video they'd break up).
+ * @return how many, at most `max`.
+ */
+static int rowInlayHints(const struct buffer_t *buf, const int file_row, const Utf8Span *span,
+                         int *at, const char **labels, const int max) {
+  const Row *row = &buf->row[file_row];
+  const int visible = span->end - span->start + span->lead_pad;
+  int n = 0;
+  int i;
+  int col;
+  if (!E.constantes.INLAY_HINTS || !buf->lsp_hints)
+    return 0;
+  for (i = 0; i < buf->lsp_hints_count && n < max; i++) {
+    if (buf->lsp_hints[i].line < file_row)
+      continue;
+    if (buf->lsp_hints[i].line > file_row)
+      break; // sorted by line
+    col = buf->lsp_hints[i].col > row->size ? row->size : buf->lsp_hints[i].col;
+    if (col < span->start || col - span->start + span->lead_pad > visible)
+      continue;
+    at[n] = col - span->start + span->lead_pad;
+    labels[n] = buf->lsp_hints[i].label;
+    n++;
+  }
+  return n;
+}
+
+/**
+ * @brief Copies a rendered row, drawing each label before the character
+ * its `at` names (in the comment color, italic), and stops once the row
+ * takes `max_cols` columns.
+ * @param out_cols Out-param: the columns the result takes
+ * @return The new row (galloc'd), *out_len bytes long
+ */
+static char *spliceInlayHints(const char *rendered, const int rendered_len, const int *at,
+                              const char **labels, const int n, const int max_cols,
+                              int *out_len, int *out_cols) {
+  struct abuf ab = ABUF_INIT;
+  const char *last_sgr = NULL; // to restore after each hint
+  int last_sgr_len = 0;
+  int index = 0;
+  int cols = 0;
+  int next = 0;
+  int i = 0;
+  int start;
+  int bytes;
+  int w;
+  char *out;
+  Utf8Char c;
+
+  while (cols < max_cols) {
+    // Hints anchored here, before this character (or at the row's end).
+    while (next < n && at[next] == index && cols < max_cols) {
+      bytes = lspUiClipToColumns(labels[next], (int) strlen(labels[next]), max_cols - cols, &w);
+      abAppend(&ab, E.theme.COLOR_COMMENT, (int) strlen(E.theme.COLOR_COMMENT));
+      abAppend(&ab, "\x1b[3m", 4);
+      abAppend(&ab, labels[next], bytes);
+      abAppend(&ab, "\x1b[23m", 5);
+      if (last_sgr)
+        abAppend(&ab, last_sgr, last_sgr_len);
+      else
+        abAppend(&ab, E.theme.COLOR_DEFAULT, (int) strlen(E.theme.COLOR_DEFAULT));
+      cols += w;
+      next++;
+    }
+    if (i >= rendered_len || cols >= max_cols)
+      break;
+
+    if ((unsigned char) rendered[i] == 0x1b) {
+      start = i++;
+      if (i < rendered_len && rendered[i] == '[') {
+        i++;
+        while (i < rendered_len && !(rendered[i] >= '@' && rendered[i] <= '~'))
+          i++;
+        if (i < rendered_len)
+          i++;
+      }
+      abAppend(&ab, rendered + start, i - start);
+      last_sgr = rendered + start;
+      last_sgr_len = i - start;
+      continue;
+    }
+
+    utf8CreateChar((const unsigned char *) rendered + i, &c);
+    bytes = c.length <= rendered_len - i ? c.length : 1;
+    w = utf8CharWidth(&c);
+    if (cols + w > max_cols)
+      break; // a wide character that no longer fits
+    abAppend(&ab, rendered + i, bytes);
+    i += bytes;
+    cols += w;
+    index++;
+  }
+
+  out = galloc((size_t) ab.len + 1);
+  memcpy(out, ab.b, (size_t) ab.len);
+  out[ab.len] = '\0';
+  *out_len = ab.len;
+  *out_cols = cols;
+  abFree(&ab);
+  return out;
+}
+
+/**
  * @brief Renders a single pane with its buffer content
  */
 /**
@@ -221,6 +329,34 @@ static void paneFitShownBuffer(EditorPane *pane, const struct buffer_t *buf) {
   // cursor if it's off-screen.
   pane->x_offset = 0;
   pane->cursor_x = 0;
+}
+
+// At most this many enclosing definitions pinned atop a pane.
+#define STICKY_MAX 3
+
+/**
+ * @brief The rows sticky scroll pins atop `pane`: the first line of each
+ * function / struct / ... the pane's top row is inside of but whose own
+ * first line has scrolled out of sight, outermost first. Never so many
+ * that they'd cover the cursor, or a third of the pane.
+ * @return how many (0 without LSP symbols for the buffer)
+ */
+static int paneStickyRows(const EditorPane *pane, const struct buffer_t *buf, int *rows) {
+  const LspSymbol *chain[STICKY_MAX];
+  int n;
+  int count = 0;
+  int i;
+  if (!E.constantes.STICKY_SCROLL || buf->type != FILE_BUFF || pane->y_offset <= 0)
+    return 0;
+  n = lspUiEnclosingSymbols(buf, pane->y_offset, chain, STICKY_MAX);
+  for (i = 0; i < n; i++)
+    if (chain[i]->line < pane->y_offset && chain[i]->line < buf->numrows)
+      rows[count++] = chain[i]->line;
+  if (pane->is_active && count > buf->y - pane->y_offset)
+    count = buf->y - pane->y_offset;
+  if (count > pane->height / 3)
+    count = pane->height / 3;
+  return count < 0 ? 0 : count;
 }
 
 static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
@@ -255,6 +391,16 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   int filled;
   Utf8Span span;
   const Row *row;
+  int sticky_rows[STICKY_MAX];
+  int sticky_n;
+  int is_sticky;
+  int hint_at[64];
+  const char *hint_labels[64];
+  int hint_n;
+  int hinted_len;
+  int hinted_cols;
+  char *hinted;
+  const Diagnostic *diag;
 
   if (pane == NULL || pane->buffer_id < 0)
     return;
@@ -282,11 +428,18 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   // previous scroll position — see the comment_state fields on
   // struct buffer_t and commentStateAtRowStart()'s own doc comment.
   syntaxHighlighterSeed(commentStateAtRowStart((struct buffer_t *) buf, pane->y_offset));
+  sticky_n = paneStickyRows(pane, buf, sticky_rows);
 
   // Draw all pane
   for (y = 0; y < pane->height; y++) {
-    file_row = y + pane->y_offset;
-    is_cursor_line = (pane->is_active && file_row == buf->y);
+    // Sticky rows stand in for the first rows of the view; each is drawn
+    // from its own place in the file, so the block-comment state is
+    // re-seeded for it, and again where the ordinary rows resume.
+    is_sticky = y < sticky_n;
+    file_row = is_sticky ? sticky_rows[y] : y + pane->y_offset;
+    if (is_sticky || (sticky_n > 0 && y == sticky_n))
+      syntaxHighlighterSeed(commentStateAtRowStart((struct buffer_t *) buf, file_row));
+    is_cursor_line = (!is_sticky && pane->is_active && file_row == buf->y);
 
     // Set cursor at start of pane row
     pos_len = snprintf(pos_buf, sizeof(pos_buf), "\x1b[%d;%dH",
@@ -364,7 +517,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
       utf8VisibleSpan(row->characters, row->size, pane->x_offset, content_width, &span);
 
       sel_from = 0; sel_to = 0; sel_extends = 0;
-      has_selection = buf->type != TERMINAL_BUFF &&
+      has_selection = buf->type != TERMINAL_BUFF && !is_sticky &&
                           rowSelectionRange(buf, file_row, &sel_from, &sel_to, &sel_extends);
       // applySelectionHighlight() counts rendered characters, so these are
       // relative to the first character drawn (after any lead padding).
@@ -387,7 +540,12 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         abAppend(ab, highlighted, byte_len_to_print);
         gfree(highlighted);
       } else {
-        if (is_cursor_line)
+        hint_n = (has_selection || is_sticky)
+                     ? 0
+                     : rowInlayHints(buf, file_row, &span, hint_at, hint_labels, 64);
+        // A sticky row gets the cursor line's background: it's not where
+        // it is in the file, and should look apart from the rows below.
+        if (is_cursor_line || is_sticky)
             abAppend(ab, E.theme.LINE_CURSOR_BACKGROUND, (int) strlen(E.theme.LINE_CURSOR_BACKGROUND));
         else
             abAppend(ab, E.theme.BACKGROUND_COLOR, (int) strlen(E.theme.BACKGROUND_COLOR));
@@ -415,6 +573,15 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
             byte_len_to_print = wrapped_len;
           }
 
+          if (hint_n > 0) {
+            hinted = spliceInlayHints(highlighted, byte_len_to_print, hint_at, hint_labels,
+                                      hint_n, content_width, &hinted_len, &hinted_cols);
+            gfree(highlighted);
+            highlighted = hinted;
+            byte_len_to_print = hinted_len;
+            span.columns = hinted_cols;
+          }
+
           // Print only up to pane width
           abAppend(ab, highlighted, byte_len_to_print);
           gfree(highlighted);
@@ -438,6 +605,14 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
             line = wrapped;
             line_len = wrapped_len;
           }
+          if (hint_n > 0) {
+            hinted = spliceInlayHints(line, line_len, hint_at, hint_labels, hint_n,
+                                      content_width, &hinted_len, &hinted_cols);
+            gfree(line);
+            line = hinted;
+            line_len = hinted_len;
+            span.columns = hinted_cols;
+          }
           abAppend(ab, line, line_len);
           gfree(line);
           line = NULL;
@@ -451,6 +626,15 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         abAppend(ab, "\x1b[7m", 4);
       // Start from how many columns the content actually filled.
       filled = span.columns;
+
+      // The line's diagnostic after its text, when the end of the line is
+      // in view (and not under a selection running past it).
+      if (E.constantes.INLINE_DIAGNOSTICS && buf->type == FILE_BUFF && !is_sticky &&
+          !(has_selection && sel_extends) && span.end >= row->size) {
+        diag = lspUiWorstDiagnostic(&E.lsp_diagnostics, pane->buffer_id, file_row);
+        if (diag)
+          filled += lspUiDrawInlineDiagnostic(ab, diag, content_width - filled);
+      }
       for (i = filled; i < content_width; i++) {
         abAppend(ab, " ", 1);
       }
@@ -643,6 +827,9 @@ void editorDrawStatusBar(struct abuf *ab) {
   int bar_pos_len = snprintf(bar_pos, sizeof(bar_pos), "\x1b[%d;1H", E.screenrows + 1);
   char git_status[80] = "";
   int first_buffer_id;
+  char crumbs[256];
+  int crumbs_len;
+  int crumbs_cols;
   abAppend(ab, bar_pos, bar_pos_len);
 
   abAppend(ab, "\x1b[7m", 4); // inverting colors
@@ -683,10 +870,25 @@ void editorDrawStatusBar(struct abuf *ab) {
     len = E.screencols;
   }
 
+  // Where the cursor is, right-aligned: "point › main". The buffer list
+  // gives way to it when the bar is too narrow for both.
+  crumbs_len = 0;
+  crumbs_cols = 0;
+  if (E.constantes.BREADCRUMBS && buf && buf->type == FILE_BUFF) {
+    crumbs_len = lspUiBreadcrumbs(buf, buf->y, crumbs, sizeof(crumbs));
+    crumbs_len = lspUiClipToColumns(crumbs, crumbs_len, E.screencols / 2, &crumbs_cols);
+  }
+  if (crumbs_cols > 0 && len > E.screencols - crumbs_cols - 2)
+    len = E.screencols - crumbs_cols - 2 > 0 ? E.screencols - crumbs_cols - 2 : 0;
+
   abAppend(ab, status, len);
-  while (len < E.screencols) {
+  while (len < E.screencols - (crumbs_cols ? crumbs_cols + 1 : 0)) {
     abAppend(ab, " ", 1);
     ++len;
+  }
+  if (crumbs_cols) {
+    abAppend(ab, crumbs, crumbs_len);
+    abAppend(ab, " ", 1);
   }
 
   abAppend(ab, "\x1b[m", 3); // normal text mode
@@ -781,6 +983,43 @@ void editorFreeScreenCache(void) {
   g_prev_frame_cap = 0;
 }
 
+/**
+ * @brief Columns the inlay hints drawn before the cursor push it right by,
+ * on the cursor's row of the active pane — the same hints editorDrawPane()
+ * draws there.
+ */
+static int cursorInlayHintShift(const EditorPane *pane, const struct buffer_t *buf) {
+  int at[64];
+  const char *labels[64];
+  Utf8Span span;
+  int sel_from;
+  int sel_to;
+  int sel_extends;
+  int n;
+  int i;
+  int w;
+  int shift = 0;
+  const int cursor_at = buf->x;
+  int content_width;
+  if (!buf->lsp_hints || buf->type != FILE_BUFF || buf->y >= buf->numrows)
+    return 0;
+  if (rowSelectionRange(buf, buf->y, &sel_from, &sel_to, &sel_extends))
+    return 0;
+  content_width = pane->width - editorGutterWidth(buf);
+  utf8VisibleSpan(buf->row[buf->y].characters, buf->row[buf->y].size, pane->x_offset,
+                  content_width, &span);
+  n = rowInlayHints(buf, buf->y, &span, at, labels, 64);
+  for (i = 0; i < n; i++) {
+    // A hint goes before its character: the cursor on that character
+    // sits after it.
+    if (at[i] > cursor_at - span.start + span.lead_pad)
+      break;
+    lspUiClipToColumns(labels[i], (int) strlen(labels[i]), content_width, &w);
+    shift += w;
+  }
+  return shift;
+}
+
 void editorRefreshScreen() {
   struct abuf ab = ABUF_INIT;
   char buf[32];
@@ -789,6 +1028,7 @@ void editorRefreshScreen() {
   const char *diag;
   char single_line[512];
   int i;
+  int cursor_x;
 
   abAppend(&ab, HIDE_CURSOR, 6);
   abAppend(&ab, CURSOR_TOP_LEFT, 3);
@@ -849,10 +1089,16 @@ void editorRefreshScreen() {
   fileFinderDraw(&ab);
   whichKeyDraw(&ab);
 
-  // ── Position cursor (account for gutter width) ────────────────────────────
+  // ── Position cursor (account for gutter width and inlay hints) ──────────────
+  cursor_x = active->cursor_x;
+  if (buffer && E.constantes.INLAY_HINTS) {
+    cursor_x += cursorInlayHintShift(active, buffer);
+    if (cursor_x > active->width - editorGutterWidth(buffer) - 1)
+      cursor_x = active->width - editorGutterWidth(buffer) - 1;
+  }
   snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
            active->cursor_y + active->origin_y + 1,
-           active->cursor_x + active->origin_x + 1 + editorGutterWidth(buffer));
+           cursor_x + active->origin_x + 1 + editorGutterWidth(buffer));
   abAppend(&ab, buf, (int)strlen(buf));
   abAppend(&ab, SHOW_CURSOR, 6);
 

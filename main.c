@@ -35,11 +35,24 @@ static void reportMemoryAtExit(void) {
   char path[OS_PATH_MAX];
   FILE *out;
   int left;
+  long long heap_blocks;
+  long long heap_bytes;
   snprintf(path, sizeof(path), "%s/memory-at-exit.log", utilBelugaDir());
+  appDebugClose();
   out = fopen(path, "w");
   if (!out)
     return;
   left = gReportMemory(out);
+  // galloc only sees its own blocks. The allocator's view covers the rest:
+  // libc's (locale, stdio, this report's FILE), libraries', raw mallocs.
+  if (os_heap_in_use(&heap_blocks, &heap_bytes) == 0) {
+    if (heap_blocks >= 0)
+      fprintf(out, "\nprocess heap: %lld blocks, %lld bytes in use", heap_blocks,
+              heap_bytes);
+    else
+      fprintf(out, "\nprocess heap: %lld bytes in use", heap_bytes);
+    fprintf(out, " (galloc's above included; the rest isn't beluga's own)\n");
+  }
   fclose(out);
   if (left > 0)
     printf("beluga (debug): %d blocks still allocated at exit, see %s\n", left,

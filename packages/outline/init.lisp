@@ -21,9 +21,10 @@
 ;;                  int b)
 ;;   {
 ;;
-;; Good enough as a first pass — a language server integration could build the
-;; exact same (label . line) list from LSP's textDocument/documentSymbol
-;; instead and hand it to this same (editor-list-popup ...) call.
+;; That scan is only the fallback. When the buffer has a language server
+;; (clangd for C), (lsp-document-symbols) answers with the real list —
+;; functions, structs with their fields, enums, macros — already as
+;; (label . row) pairs, and the popup shows that instead.
 
 (define (outline--blank-or-space? c)
   (or (char=? c #\space) (char=? c #\tab) (char=? c #\return)))
@@ -70,7 +71,7 @@
               (else row)))))
 
 (define (outline--entry-at row)
-  (cons (string-append (number->string row) ": " (outline--rtrim (line-text row))) row))
+  (cons (string-append (number->string (+ row 1)) ": " (outline--rtrim (line-text row))) row))
 
 ;; Walks every row of the current buffer, collecting one (label . row) pair
 ;; per definition found, in file order.
@@ -86,12 +87,19 @@
                ((outline--definition? text) (cons (outline--entry-at row) acc))
                (else acc))))))
 
+;; The server's symbols when it has any, else the heuristic scan.
+(define (outline--current-entries)
+  (let ((symbols (lsp-document-symbols)))
+    (if (null? symbols)
+        (outline--entries 0 '())
+        symbols)))
+
 ;; #t at the end asks for a live-filtering popup — type to narrow the list
 ;; by substring, same as CTRL-P's file finder. See Builtins.md /
 ;; editor-list-popup for what the 5th argument does.
 (define (editor-outline)
   (editor-list-popup "Outline"
-                      (outline--entries 0 '())
+                      (outline--current-entries)
                       ;; Jump, then scroll so the definition lands mid-pane
                       ;; with context around it (not on the bottom row).
                       (lambda (row)

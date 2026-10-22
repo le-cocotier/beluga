@@ -1946,6 +1946,87 @@ Lisp lspReferences(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function to list the symbols of the current buffer
+ * @details (lsp-document-symbols) — asks the server (blocking up to 2s)
+ * and returns one (label . row) pair per symbol, in file order, a struct's
+ * fields indented under it: the shape (editor-list-popup ...) takes, so
+ * the outline package can show them as they are. '() when there's no
+ * server for this buffer or it didn't answer, so callers can fall back.
+ * @return The list, or lisp_null()
+ */
+Lisp lspDocumentSymbols(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = active ? bufferFindById(active->buffer_id) : NULL;
+  LspClient *lsp = buf ? lspClientForBuffer(buf) : NULL;
+  LspSymbol *symbols;
+  Lisp head;
+  Lisp tail;
+  Lisp cell;
+  char label[512];
+  int n;
+  int i;
+  (void)args;
+  (void)e;
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY ||
+      buf->type != FILE_BUFF)
+    return lisp_null();
+
+  n = lspRequestDocumentSymbols(lsp, buf, &symbols);
+  head = lisp_null();
+  tail = lisp_null();
+  for (i = 0; i < n; i++) {
+    snprintf(label, sizeof(label), "%d: %*s%s %s", symbols[i].line + 1,
+             symbols[i].depth * 2, "", lspSymbolKindName(symbols[i].kind),
+             symbols[i].name);
+    cell = lisp_cons(lisp_cons(lisp_make_string2(label, ctx),
+                               lisp_make_int(symbols[i].line), ctx),
+                     lisp_null(), ctx);
+    if (lisp_is_null(head))
+      head = cell;
+    else
+      lisp_set_cdr(tail, cell);
+    tail = cell;
+  }
+  if (n > 0)
+    lspFreeSymbols(symbols, n);
+  return head;
+}
+
+/**
+ * @brief Lisp function to search the project's symbols by name
+ * @details (lsp-workspace-symbols [query]) — prompts for the name when no
+ * query is given, then asks the server (async); the matches are listed in
+ * the "*search*" buffer, ENTER jumps to one.
+ * @return lisp_null()
+ */
+Lisp lspWorkspaceSymbols(Lisp args, LispError *e, LispContext ctx) {
+  LspClient *lsp = lspActiveClient();
+  Utf8Char *input;
+  char *query;
+  (void)e;
+  (void)ctx;
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY) {
+    editorSetStatusMessage("LSP not ready");
+    return lisp_null();
+  }
+
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING) {
+    lspRequestWorkspaceSymbols(lsp, lisp_string(lisp_car(args)));
+    return lisp_null();
+  }
+
+  input = editorPrompt("Symbol: %s (ESC to cancel)", NULL, 0);
+  if (!input)
+    return lisp_null();
+  query = (char *)utf8ToString(input);
+  gfree(input);
+  if (query && query[0] != '\0')
+    lspRequestWorkspaceSymbols(lsp, query);
+  gfree(query);
+  return lisp_null();
+}
+
+/**
  * @brief Lisp function to list every diagnostic of the open buffers
  * @details (lsp-diagnostics) — in the "*search*" buffer, ENTER jumps to one.
  * @return lisp_null()
@@ -2367,7 +2448,7 @@ static void normalizePath(const char *in, char *out, const size_t out_size) {
 Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
   const char *path;
   const char *base = NULL;
-  const char *home;
+  char *home;
   char *cwd = NULL;
   char joined[PATH_MAX * 2];
   char out[PATH_MAX];
@@ -2381,8 +2462,8 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
   if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING)
     base = lisp_string(lisp_car(args));
 
-  home = os_home_dir();
-  if (path[0] == '~' && (path[1] == '/' || path[1] == '\0')) {
+  home = (path[0] == '~' && (path[1] == '/' || path[1] == '\0')) ? os_home_dir() : NULL;
+  if (home) {
     snprintf(joined, sizeof(joined), "%s/%s", home, path + 1);
   } else if (os_path_is_absolute(path)) {
     snprintf(joined, sizeof(joined), "%s", path);
@@ -2394,6 +2475,7 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
     snprintf(joined, sizeof(joined), "%s/%s", base, path);
   }
   gfree(cwd);
+  gfree(home);
 
   os_path_to_slashes(joined); // "C:\\dir\\file" typed the Windows way
   normalizePath(joined, out, sizeof(out));
