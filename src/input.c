@@ -248,6 +248,7 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
       gfree(c);
       fileCompletionFree(&fc);
       showMatches(NULL, -1);
+      gfree(buf);
       E.prompt_input = NULL;
       return NULL;
     } else if (*c->character == '\r') {
