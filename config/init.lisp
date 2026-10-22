@@ -415,6 +415,11 @@
 (map-key "a" lsp-code-action "project")
 (map-key "r" lsp-rename "project")
 (map-key "z" lsp-format-buffer "project")
+;; The project itself: switch to a remembered one (opens find-file in
+;; it), trust it so its .beluga/init.lisp loads, or open that file.
+(map-key "p" project-switch "project")
+(map-key "t" project-trust "project")
+(map-key "c" project-open-config "project")
 
 ;; term
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "term")

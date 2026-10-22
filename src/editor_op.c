@@ -15,6 +15,7 @@
 #include "../include/data.h"
 #include "../include/input.h"
 #include "../include/output.h"
+#include "../include/project.h"
 #include "../include/pty_session.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
@@ -162,6 +163,9 @@ void editorRunLoop(void) {
       // spawned with for the rest of the session.
       splitScreenSyncTerminalSizes();
     }
+
+    // The active pane may have moved to another project's buffer.
+    projectSyncActive();
 
     // Everything there is to wait for: keys first (index 0), then each
     // terminal pane's shell, the language server, background processes.

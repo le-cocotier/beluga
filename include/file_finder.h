@@ -6,10 +6,13 @@
 
 // Opens the fuzzy file picker: snapshots every file in the project (git
 // ls-files inside a repo, a pruned find(1) otherwise), rooted at the
-// editor's working directory, and shows them in a modal popup that
+// current project (the working directory without one), and shows them in a modal popup that
 // narrows as you type. Does nothing (just a status message) if no files
 // are found. Bound to whatever the config maps to `find-file`.
 void fileFinderOpen(void);
+
+// The same, rooted at `dir` instead (project-switch).
+void fileFinderOpenAt(const char *dir);
 
 // Frees the path snapshot and hides the popup. Safe to call when already
 // closed; called from deInitEditor() too.

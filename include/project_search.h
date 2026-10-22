@@ -14,7 +14,8 @@
 void projectSearchPrompt(void);
 
 // Runs a search without prompting (same result buffer and display).
-// `root` may be NULL, meaning the process's working directory.
+// `root` may be NULL, meaning the current project (the working directory
+// without one).
 // Returns the number of matches, or -1 if the search itself failed.
 int projectSearchRun(const char *pattern, const char *root);
 

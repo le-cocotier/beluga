@@ -26,6 +26,7 @@
 
 #include "../include/utf8.h"
 #include "../include/builtins.h"
+#include "../include/project.h"
 
 /***********************************************************************************************************************
  *
@@ -182,6 +183,8 @@ static void editorLoadRows(struct buffer_t* buffer, const Utf8Char* path);
 static int askYesNo(const char* question, const struct buffer_t* buffer);
 
 void editorOpen(struct buffer_t* buffer) {
+  // The file's project first: its TAB-LENGTH expands tabs.
+  projectActivateForBuffer(buffer);
   editorLoadRows(buffer, buffer->fullname);
   fileRememberDiskState(buffer);
 }
@@ -211,7 +214,7 @@ void editorReloadFrom(struct buffer_t* buffer, const Utf8Char* path) {
  * @brief Appends the lines of the file at `path` to `buffer`'s rows
  */
 static void editorLoadRows(struct buffer_t* buffer, const Utf8Char* path) {
-  Utf8Char* file_content = utf8ReadFile(path);
+  Utf8Char* file_content;
   Utf8Char* pFileContent;
   Utf8Char* pEndLine;
   int line_length;
@@ -219,6 +222,7 @@ static void editorLoadRows(struct buffer_t* buffer, const Utf8Char* path) {
   Utf8Char* expanded;
   int first_line;
   int ends_with_cr;
+  file_content = utf8ReadFile(path);
   buffer->crlf = 0;
   if (file_content == NULL)
   {

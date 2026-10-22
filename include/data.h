@@ -147,6 +147,21 @@ struct const_t
     int INLAY_HINTS;        // (define INLAY-HINTS #t) — parameter names / types inside the line
 };
 
+/**
+ * @brief One project beluga knows about, found by its markers or read
+ * back from ~/.beluga/projects. See project.h.
+ */
+typedef struct
+{
+    char* root;          // absolute, '/' separators, no trailing slash
+    int trusted;         // its .beluga/init.lisp may run (project-trust)
+    int opened;          // made current at least once this session
+    int has_config_env;  // config_env holds its evaluated .beluga/init.lisp
+    Lisp config_env;     // the global env extended with the project's own table
+    long last_used;      // larger is more recent; orders ~/.beluga/projects
+    struct const_t constantes; // the settings while it's the current project
+} Project;
+
 struct prefix_t
 {
     char prefix_name[64];
@@ -416,6 +431,7 @@ typedef struct
     char query[256];    // what's been typed so far
     int query_len;      // bytes in query (never splits a UTF-8 char)
     int selected;       // index into match[] (0-based)
+    char *root;         // the directory paths[] are relative to, owned
 } FileFinder;
 
 // Numbered to match LSP's own DiagnosticSeverity (1=Error..4=Hint) exactly,
@@ -718,6 +734,9 @@ typedef struct buffer_t
     // buffer-local-set / buffer-local (builtins_edit.c): an alist of
     // (symbol . value). lisp_null() — all zero — when empty.
     Lisp locals;
+    // The buffer's project: index + 1 into E.projects, 0 while not looked
+    // up yet, -1 for none. Resolved once, by projectActivateForBuffer().
+    int project;
 
     struct buffer_t* next;
     struct buffer_t* prev;
@@ -763,6 +782,15 @@ typedef struct editor_config_t
 
     struct const_t constantes;
     int quit_times_buffer;
+
+    // ── Projects (project.c) ────────────────────────────────────────────
+    // constantes is the current project's copy of the settings;
+    // global_constantes is what init.lisp alone set, for projects
+    // without a config of their own.
+    struct const_t global_constantes;
+    Project* projects;
+    int number_of_projects;
+    int current_project; // index into projects, -1 for none
 
     char* init_file_path;
     FILE* fd_init_file;

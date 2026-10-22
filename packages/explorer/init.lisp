@@ -116,7 +116,7 @@
     (let ((restored-row (explorer--row-of selected-path explorer-paths 0)))
       (editor-goto-line (if (>= restored-row 0) restored-row 0)))))
 
-;; Roots the tree at the enclosing git project (project-root) — so opening
+;; Roots the tree at the current project (project-root) — so opening
 ;; the sidebar from a subdirectory still shows the whole project, not just
 ;; wherever the editor happened to be started from. Outside any project,
 ;; it asks for a directory instead of silently defaulting to the working
