@@ -25,7 +25,7 @@
 #include "../include/screen_diff.h"
 #include "../include/append_buffer.h"
 #include "../include/galloc.h"
-#include "../include/os.h"
+#include "../include/terminal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -73,6 +73,13 @@ typedef struct {
 static Screen s_shown;    // what the terminal shows, when s_valid
 static int s_valid = 0;
 static Screen s_next;     // the frame being replayed
+
+// A daemon window's s_shown, s_valid and s_next while another is drawn.
+typedef struct {
+  Screen shown;
+  int valid;
+  Screen next;
+} SavedScreen;
 
 static int sgrEqual(const Sgr *a, const Sgr *b) {
   return a->fg == b->fg && a->bg == b->bg && a->attrs == b->attrs;
@@ -470,7 +477,7 @@ void screenDiffWrite(const char *frame, int len, int rows, int cols) {
   int n;
 
   if (rows <= 0 || cols <= 0 || !screenAlloc(&s_next, rows, cols)) {
-    os_term_write(frame, (size_t)len);
+    screenWrite(frame, (size_t)len);
     s_valid = 0;
     return;
   }
@@ -492,7 +499,7 @@ void screenDiffWrite(const char *frame, int len, int rows, int cols) {
   }
 
   if (!replay(&s_next, (const unsigned char *)frame, len)) {
-    os_term_write(frame, (size_t)len);
+    screenWrite(frame, (size_t)len);
     s_valid = 0;
     return;
   }
@@ -522,7 +529,7 @@ void screenDiffWrite(const char *frame, int len, int rows, int cols) {
     abAppend(&ab, seq, n);
     if (s_next.cursor_visible)
       abAppend(&ab, "\x1b[?25h", 6);
-    os_term_write(ab.b, (size_t)ab.len);
+    screenWrite(ab.b, (size_t)ab.len);
     abFree(&ab);
   }
 
@@ -544,4 +551,34 @@ void screenDiffFree(void) {
   memset(&s_shown, 0, sizeof(s_shown));
   memset(&s_next, 0, sizeof(s_next));
   s_valid = 0;
+}
+
+void screenDiffSwap(void **other) {
+  SavedScreen *saved = *other;
+  SavedScreen mine;
+  if (!saved) {
+    saved = gcalloc(1, sizeof(*saved));
+    if (!saved) {
+      // Keep drawing with this state; the window just repaints in full.
+      s_valid = 0;
+      return;
+    }
+  }
+  mine.shown = s_shown;
+  mine.valid = s_valid;
+  mine.next = s_next;
+  s_shown = saved->shown;
+  s_valid = saved->valid;
+  s_next = saved->next;
+  *saved = mine;
+  *other = saved;
+}
+
+void screenDiffFreeSaved(void *saved) {
+  SavedScreen *s = saved;
+  if (!s)
+    return;
+  gfree(s->shown.cells);
+  gfree(s->next.cells);
+  gfree(s);
 }

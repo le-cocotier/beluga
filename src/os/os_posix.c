@@ -27,8 +27,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <time.h>
@@ -638,6 +640,244 @@ void os_pty_close(OsPty *p) {
   }
   streamClose(&p->out);
   gfree(p);
+}
+
+/***********************************************************************************************************************
+ *
+ *                                                 Local connections (daemon mode)
+ *
+ **********************************************************************************************************************/
+
+struct OsServer {
+  OsStream listen; // ready when a client is waiting
+  char path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+};
+
+struct OsConn {
+  OsStream in;
+};
+
+static void setError(char *err, const size_t err_size, const char *what,
+                     const char *path) {
+  if (err && err_size > 0)
+    snprintf(err, err_size, "%s %s: %s", what, path, strerror(errno));
+}
+
+/**
+ * @brief The private directory the sockets live in, created if needed:
+ * $XDG_RUNTIME_DIR/beluga, else $TMPDIR (or /tmp) /beluga-<uid> — the same
+ * scheme emacs uses. Refused unless it is a real directory that belongs to
+ * us and nobody else can enter, since anyone who can reach the socket can
+ * drive the editor.
+ */
+static int socketDir(char *dir, const size_t size, char *err,
+                     const size_t err_size) {
+  const char *xdg = getenv("XDG_RUNTIME_DIR");
+  const char *tmp = getenv("TMPDIR");
+  struct stat st;
+  size_t len;
+
+  if (xdg && xdg[0] == '/')
+    snprintf(dir, size, "%s/beluga", xdg);
+  else
+    snprintf(dir, size, "%s/beluga-%ld", (tmp && tmp[0] == '/') ? tmp : "/tmp",
+             (long)getuid());
+  // $TMPDIR on macOS ends with a '/'.
+  len = strlen(dir);
+  while (len > 1 && dir[len - 1] == '/' && dir[len - 2] == '/')
+    dir[--len] = '\0';
+
+  if (mkdir(dir, 0700) == -1 && errno != EEXIST) {
+    setError(err, err_size, "can't create", dir);
+    return -1;
+  }
+  if (lstat(dir, &st) == -1) {
+    setError(err, err_size, "can't use", dir);
+    return -1;
+  }
+  if (!S_ISDIR(st.st_mode) || st.st_uid != getuid() ||
+      (st.st_mode & 077) != 0) {
+    if (err && err_size > 0)
+      snprintf(err, err_size,
+               "%s must be a directory of yours that only you can open "
+               "(chmod 700)",
+               dir);
+    return -1;
+  }
+  return 0;
+}
+
+static int socketAddress(const char *name, struct sockaddr_un *addr,
+                         char *err, const size_t err_size) {
+  char dir[sizeof(addr->sun_path)];
+  int n;
+
+  if (!name || !name[0] || strchr(name, '/')) {
+    if (err && err_size > 0)
+      snprintf(err, err_size, "invalid daemon name \"%s\"", name ? name : "");
+    return -1;
+  }
+  if (socketDir(dir, sizeof(dir), err, err_size) == -1)
+    return -1;
+  memset(addr, 0, sizeof(*addr));
+  addr->sun_family = AF_UNIX;
+  n = snprintf(addr->sun_path, sizeof(addr->sun_path), "%s/%s", dir, name);
+  if (n < 0 || (size_t)n >= sizeof(addr->sun_path)) {
+    if (err && err_size > 0)
+      snprintf(err, err_size, "socket path too long: %s/%s", dir, name);
+    return -1;
+  }
+  return 0;
+}
+
+static int connectTo(const struct sockaddr_un *addr) {
+  const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd == -1)
+    return -1;
+  if (connect(fd, (const struct sockaddr *)addr, sizeof(*addr)) == -1) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+
+OsServer *os_server_listen(const char *name, char *err, const size_t err_size) {
+  struct sockaddr_un addr;
+  OsServer *s;
+  int fd;
+  int other;
+
+  if (socketAddress(name, &addr, err, err_size) == -1)
+    return NULL;
+  fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd == -1) {
+    setError(err, err_size, "can't create a socket for", addr.sun_path);
+    return NULL;
+  }
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+    if (errno != EADDRINUSE) {
+      setError(err, err_size, "can't listen on", addr.sun_path);
+      close(fd);
+      return NULL;
+    }
+    // Someone answering there is a running daemon; nobody answering is
+    // the socket of one that crashed.
+    other = connectTo(&addr);
+    if (other != -1) {
+      close(other);
+      close(fd);
+      if (err && err_size > 0)
+        snprintf(err, err_size, "a beluga daemon called \"%s\" is already running",
+                 name);
+      return NULL;
+    }
+    unlink(addr.sun_path);
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+      setError(err, err_size, "can't listen on", addr.sun_path);
+      close(fd);
+      return NULL;
+    }
+  }
+  if (listen(fd, 16) == -1) {
+    setError(err, err_size, "can't listen on", addr.sun_path);
+    close(fd);
+    unlink(addr.sun_path);
+    return NULL;
+  }
+  setCloexec(fd);
+
+  s = gcalloc(1, sizeof(*s));
+  streamInit(&s->listen, fd, 0);
+  memcpy(s->path, addr.sun_path, sizeof(s->path));
+  return s;
+}
+
+OsStream *os_server_stream(OsServer *s) { return s ? &s->listen : NULL; }
+
+static OsConn *connFromFd(const int fd) {
+  OsConn *c = gcalloc(1, sizeof(*c));
+  setCloexec(fd);
+  streamInit(&c->in, fd, 0);
+  return c;
+}
+
+OsConn *os_server_accept(OsServer *s) {
+  int fd;
+  if (!s || s->listen.fd < 0)
+    return NULL;
+  do
+    fd = accept(s->listen.fd, NULL, NULL);
+  while (fd == -1 && errno == EINTR);
+  return fd == -1 ? NULL : connFromFd(fd);
+}
+
+void os_server_close(OsServer *s) {
+  if (!s)
+    return;
+  streamClose(&s->listen);
+  unlink(s->path);
+  gfree(s);
+}
+
+OsConn *os_conn_connect(const char *name, char *err, const size_t err_size) {
+  struct sockaddr_un addr;
+  int fd;
+
+  if (socketAddress(name, &addr, err, err_size) == -1)
+    return NULL;
+  fd = connectTo(&addr);
+  if (fd == -1) {
+    if (err && err_size > 0)
+      snprintf(err, err_size, "no beluga daemon called \"%s\" is running (%s)",
+               name, addr.sun_path);
+    return NULL;
+  }
+  return connFromFd(fd);
+}
+
+OsStream *os_conn_input(OsConn *c) { return c ? &c->in : NULL; }
+
+long os_conn_write(OsConn *c, const void *buf, const size_t n) {
+  const char *p = buf;
+  size_t left = n;
+  struct pollfd pfd;
+  ssize_t w;
+  int pr;
+
+  if (!c || c->in.fd < 0)
+    return -1;
+  while (left > 0) {
+    w = write(c->in.fd, p, left);
+    if (w > 0) {
+      p += w;
+      left -= (size_t)w;
+      continue;
+    }
+    if (w < 0 && errno == EINTR)
+      continue;
+    if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      // The socket is non-blocking (it shares the fd with the reading
+      // side). A client that stops reading for 5 s is given up on rather
+      // than freezing every other window.
+      pfd.fd = c->in.fd;
+      pfd.events = POLLOUT;
+      pfd.revents = 0;
+      do
+        pr = poll(&pfd, 1, 5000);
+      while (pr < 0 && errno == EINTR);
+      if (pr > 0 && !(pfd.revents & (POLLERR | POLLHUP)))
+        continue;
+    }
+    return -1;
+  }
+  return (long)n;
+}
+
+void os_conn_close(OsConn *c) {
+  if (!c)
+    return;
+  streamClose(&c->in);
+  gfree(c);
 }
 
 /***********************************************************************************************************************

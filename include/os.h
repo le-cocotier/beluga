@@ -220,6 +220,51 @@ void os_pty_close(OsPty *p);
 
 /***********************************************************************************************************************
  *
+ *                                                 Local connections (daemon mode)
+ *
+ **********************************************************************************************************************/
+
+// A byte stream between the beluga daemon and one of its clients, on this
+// machine and for this user only: a Unix domain socket in a private
+// directory on Unix, a named pipe that only the current user may open on
+// Windows. `name` picks one of several daemons ("server" by default).
+typedef struct OsServer OsServer;
+typedef struct OsConn OsConn;
+
+/**
+ * @brief Starts listening for clients under `name`.
+ * @return NULL, with a one-line reason in `err`, if it can't — including
+ * when a daemon of that name is already running. (A socket left behind by
+ * one that crashed is noticed and replaced.)
+ */
+OsServer *os_server_listen(const char *name, char *err, size_t err_size);
+
+// Ready (for os_wait()) when a client is waiting to be accepted.
+OsStream *os_server_stream(OsServer *s);
+
+// The next waiting client, or NULL if none is.
+OsConn *os_server_accept(OsServer *s);
+
+// Stops listening; on Unix, also removes the socket.
+void os_server_close(OsServer *s);
+
+/**
+ * @brief Connects to the daemon called `name`.
+ * @return NULL, with a one-line reason in `err`, if none is running.
+ */
+OsConn *os_conn_connect(const char *name, char *err, size_t err_size);
+
+// What the other end sends; ends when it disconnects.
+OsStream *os_conn_input(OsConn *c);
+
+// Writes all of `buf`, or -1 (the other end is gone, or has stopped
+// reading for several seconds).
+long os_conn_write(OsConn *c, const void *buf, size_t n);
+
+void os_conn_close(OsConn *c);
+
+/***********************************************************************************************************************
+ *
  *                                                 Files and directories
  *
  **********************************************************************************************************************/

@@ -12,6 +12,18 @@ void editorRefreshScreen();
 // Frees the last-frame cache editorRefreshScreen() keeps (teardown only).
 void editorFreeScreenCache(void);
 
+// The last frame written, so an identical one isn't written again.
+typedef struct
+{
+    char *frame;
+    int len;
+    int cap;
+    void *diff; // screen_diff.c's copy of what this window shows
+} ScreenCache;
+
+// Trades the current cache for `other` (daemon.c keeps one per client).
+void editorSwapScreenCache(ScreenCache *other);
+
 // Gutter geometry — the single source of truth for how many columns sit to
 // the left of a pane's text (line numbers + diagnostic/git marker). Used by
 // drawing, scrolling and cursor placement alike, plus the LSP completion

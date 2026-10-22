@@ -158,3 +158,18 @@ Here is some few command that you will need :
 | Ctrl-x Ctrl-c | leave the editor |
 | Ctrl-x Ctrl-s | Save a file      |
 | Ctrl-x f      | open file        |
+
+### Daemon mode: several windows on one editor
+
+```
+beluga --daemon          # start the daemon (in its own terminal, or in the background)
+beluga -c [file]         # open a window on it, from any terminal
+beluga --kill            # stop it (refused while a buffer is unsaved; --force to insist)
+```
+
+Every window shares the daemon's buffers, Lisp config, language servers and terminal panes,
+and has its own splits, popups and status line. Ctrl-x Ctrl-c in a window closes only that
+window. Several daemons can run side by side: `--daemon=work`, then `beluga -c --name=work`
+and `beluga --kill=work`. On Unix the windows reach the daemon through a socket in a private
+directory (`$XDG_RUNTIME_DIR/beluga/`, else `/tmp/beluga-<uid>/`); on Windows through a named
+pipe only the current user can open.

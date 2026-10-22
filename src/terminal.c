@@ -30,6 +30,29 @@ extern EditorConfig E;
  **********************************************************************************************************************/
 
 
+static long termReadKeys(void *buf, const size_t n, const int timeout_ms)
+{
+    return os_stream_read(os_term_input(), buf, n, timeout_ms);
+}
+
+static const ScreenDriver s_terminal_driver = {os_term_write, termReadKeys, os_term_size};
+static const ScreenDriver *s_screen = &s_terminal_driver;
+
+void screenSetDriver(const ScreenDriver *driver)
+{
+    s_screen = driver ? driver : &s_terminal_driver;
+}
+
+void screenWrite(const void *buf, const size_t n)
+{
+    s_screen->write(buf, n);
+}
+
+long screenReadKeys(void *buf, const size_t n, const int timeout_ms)
+{
+    return s_screen->read_keys(buf, n, timeout_ms);
+}
+
 void die(const char* s)
 {
     os_term_write("\x1b[2J", 4);
@@ -159,7 +182,7 @@ Utf8Char * editorReadKey()
 
 int getWindowSize(int* rows, int* cols)
 {
-    return os_term_size(rows, cols);
+    return s_screen->size(rows, cols);
 }
 
 #ifdef APP_DEBUG

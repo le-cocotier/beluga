@@ -287,6 +287,95 @@ void splitScreenSyncTerminalSizes(void) {
 
 
 /**
+ * @brief Where an edge at `v` of a `from`-cell span lands in a `to`-cell
+ * span, rounded to the nearest cell.
+ */
+static int scaleEdge(const int v, const int from, const int to) {
+    if (from <= 0)
+        return v;
+    return (v * to + from / 2) / from;
+}
+
+/**
+ * @brief Is `x` where some pane in the given axis ends (x == origin + size)?
+ * Panes either touch (the sidebar) or leave a one-cell divider between
+ * them (splits), and that decides how a pane's origin is rescaled.
+ */
+static int edgeEndsAPane(const int x, const int vertical_axis) {
+    int i;
+    const EditorPane *p;
+    for (i = 0; i < E.layout.num_panes; i++) {
+        p = &E.layout.panes[i];
+        if ((vertical_axis ? p->origin_y + p->height : p->origin_x + p->width) == x)
+            return 1;
+    }
+    return 0;
+}
+
+/**
+ * @brief One pane's span on one axis, rescaled: start and end edges are
+ * mapped the same way for every pane, so neighbours stay adjacent and a
+ * divider stays one cell wide.
+ */
+static void scaleSpan(int *origin, int *size, const int old_total, const int new_total,
+                      const int vertical_axis) {
+    const int start = *origin;
+    const int end = start + *size;
+    int new_start;
+    int new_end;
+
+    if (start == 0)
+        new_start = 0;
+    else if (edgeEndsAPane(start, vertical_axis))
+        new_start = scaleEdge(start, old_total, new_total); // touching panes
+    else
+        new_start = scaleEdge(start - 1, old_total, new_total) + 1; // after a divider
+    new_end = end >= old_total ? new_total : scaleEdge(end, old_total, new_total);
+    if (new_end <= new_start)
+        new_end = new_start + 1;
+    *origin = new_start;
+    *size = new_end - new_start;
+}
+
+/**
+ * @brief Fits the layout to a new screen size (E.screenrows/screencols,
+ * already updated), keeping each pane's share of it.
+ * @details Panes used to keep the size they were made with, so a bigger
+ * window left a dead margin and a smaller one drew past its edge. Each
+ * pane's edges are rescaled from the old size to the new one.
+ */
+void splitScreenResize(const int old_rows, const int old_cols) {
+    int i;
+    int origin_x[64];
+    int origin_y[64];
+    int width[64];
+    int height[64];
+    EditorPane *p;
+    const int n = E.layout.num_panes < 64 ? E.layout.num_panes : 64;
+
+    if (old_rows == E.screenrows && old_cols == E.screencols)
+        return;
+    // Computed from the old geometry first, then applied, since
+    // edgeEndsAPane() looks at the other panes.
+    for (i = 0; i < n; i++) {
+        p = &E.layout.panes[i];
+        origin_x[i] = p->origin_x;
+        width[i] = p->width;
+        origin_y[i] = p->origin_y;
+        height[i] = p->height;
+        scaleSpan(&origin_x[i], &width[i], old_cols, E.screencols, 0);
+        scaleSpan(&origin_y[i], &height[i], old_rows, E.screenrows, 1);
+    }
+    for (i = 0; i < n; i++) {
+        p = &E.layout.panes[i];
+        p->origin_x = origin_x[i];
+        p->width = width[i];
+        p->origin_y = origin_y[i];
+        p->height = height[i];
+    }
+}
+
+/**
  * @brief Splits the screen vertically with a fixed-width left pane
  * (e.g. an explorer sidebar) and the rest of the screen on the right.
  */

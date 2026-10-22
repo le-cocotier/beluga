@@ -12,6 +12,7 @@
 #include "include/buffer.h"
 #include "include/builtins.h"
 #include "include/config_load.h"
+#include "include/daemon.h"
 #include "include/data.h"
 #include "include/define.h"
 #include "include/editor_op.h"
@@ -61,6 +62,33 @@ static void reportMemoryAtExit(void) {
 #endif
 
 /**
+ * @brief "--opt" gives "", "--opt=value" gives "value", anything else NULL.
+ */
+static const char *optionValue(const char *arg, const char *option) {
+  const size_t n = strlen(option);
+  if (strncmp(arg, option, n) != 0)
+    return NULL;
+  if (arg[n] == '\0')
+    return "";
+  return arg[n] == '=' ? arg + n + 1 : NULL;
+}
+
+/**
+ * @brief Tears the editor down once no Lisp evaluation is on the stack.
+ */
+static void editorTeardown(void) {
+  // Only reached once the run loop has actually returned — no Lisp
+  // evaluation is on the stack at this point, so it's safe to tear down
+  // the interpreter here (editorQuit() used to do this while still
+  // inside a live lisp_apply call, which was a use-after-free).
+  deInitEditor();
+  bFree_structs();
+#ifdef APP_DEBUG
+  reportMemoryAtExit();
+#endif
+}
+
+/**
  * @brief beluga --sync-packages: install what the config declares, without
  * opening the editor.
  * @details Loads the config as a normal start would, but with no screen
@@ -91,11 +119,7 @@ static int syncPackages(void) {
     if (error != LISP_ERROR_NONE)
       printf("beluga: package-sync failed: %s\n", lisp_error_string(error));
   }
-  deInitEditor();
-  bFree_structs();
-#ifdef APP_DEBUG
-  reportMemoryAtExit();
-#endif
+  editorTeardown();
   return ok ? 0 : 1;
 }
 
@@ -104,6 +128,16 @@ int main(const int argc, char *argv[]) {
   EditorPane *active;
   Utf8Char *filename;
   Utf8Char *config_msg;
+  char **files;
+  const char *value;
+  const char *name = DAEMON_DEFAULT_NAME;
+  int n_files = 0;
+  int daemon = 0;
+  int client = 0;
+  int kill = 0;
+  int force = 0;
+  int i;
+  int rc;
   if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
     printf("Beluga %s\n", BELUGA_VERSION);
     return 0;
@@ -111,9 +145,49 @@ int main(const int argc, char *argv[]) {
   if (argc >= 2 && !strcmp(argv[1], "--sync-packages"))
     return syncPackages();
 
+  //   beluga [file]                       standalone, as always
+  //   beluga --daemon[=NAME]              the daemon (daemon.c)
+  //   beluga -c | --client[=NAME] [file...]   a window on it
+  //   beluga --kill[=NAME] [--force]      stops it
+  //   --name=NAME                         which daemon, for any of these
+  files = argc > 1 ? (char **)argv + 1 : NULL;
+  for (i = 1; i < argc; i++) {
+    if ((value = optionValue(argv[i], "--daemon")) != NULL) {
+      daemon = 1;
+      if (value[0])
+        name = value;
+    } else if (!strcmp(argv[i], "-c") ||
+               (value = optionValue(argv[i], "--client")) != NULL) {
+      client = 1;
+      if (argv[i][1] == '-' && value[0])
+        name = value;
+    } else if ((value = optionValue(argv[i], "--kill")) != NULL) {
+      kill = 1;
+      if (value[0])
+        name = value;
+    } else if (!strcmp(argv[i], "--force")) {
+      force = 1;
+    } else if ((value = optionValue(argv[i], "--name")) != NULL && value[0]) {
+      name = value;
+    } else {
+      files[n_files++] = argv[i];
+    }
+  }
+
   // SIGPIPE ignored on Unix (a write to a dead shell or language server
   // must not kill the editor); binary stdio and a UTF-8 console on Windows.
   os_init();
+
+  if (kill)
+    return clientKill(name, force);
+  if (client)
+    return clientMain(name, files, n_files);
+  if (daemon) {
+    rc = daemonMain(name);
+    if (rc == 0)
+      editorTeardown();
+    return rc;
+  }
 
   splash_screen = gcalloc(PATH_MAX, sizeof(Utf8Char));
   active = NULL;
@@ -132,8 +206,8 @@ int main(const int argc, char *argv[]) {
   active = splitScreenGetActivePane();
   active->buffer_id = bufferCreate(splash_screen, READ_ONLY, FILE_BUFF);
 
-  if (argc >= 2) {
-    filename = stringToUtf8((unsigned char *)argv[1]);
+  if (n_files >= 1) {
+    filename = stringToUtf8((unsigned char *)files[0]);
     active->buffer_id = bufferCreate(filename, READ_AND_WRITE, FILE_BUFF);
     gfree(filename);
   }
@@ -158,14 +232,6 @@ int main(const int argc, char *argv[]) {
     editorRunLoop();
   }
 
-  // Only reached once editorRunLoop() has actually returned — no Lisp
-  // evaluation is on the stack at this point, so it's safe to tear down
-  // the interpreter here (editorQuit() used to do this while still
-  // inside a live lisp_apply call, which was a use-after-free).
-  deInitEditor();
-  bFree_structs();
-#ifdef APP_DEBUG
-  reportMemoryAtExit();
-#endif
+  editorTeardown();
   return 0;
 }

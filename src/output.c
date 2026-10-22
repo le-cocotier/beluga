@@ -6,6 +6,7 @@
  */
 
 #include "../include/output.h"
+#include "../include/terminal.h"
 #include "../include/galloc.h"
 #include "../include/append_buffer.h"
 #include "../include/buffer.h"
@@ -954,33 +955,46 @@ void editorDrawMessageBar(struct abuf *ab) {
 // the write() when the new one is byte-for-byte identical (same content,
 // same cursor position) fixes it without touching the redraw cadence itself.
 // Lives for the whole session; editorFreeScreenCache() releases it at exit.
-static char *g_prev_frame = NULL;
-static int g_prev_frame_len = 0;
-static int g_prev_frame_cap = 0;
+// In daemon mode each client window has its own: editorSwapScreenCache()
+// trades this one for the one a client kept while another was drawn.
+static ScreenCache g_prev = {NULL, 0, 0, NULL};
 
 static int screenFrameChanged(const char *buf, int len) {
-  if (len != g_prev_frame_len) return 1;
-  return len > 0 && memcmp(buf, g_prev_frame, (size_t) len) != 0;
+  if (len != g_prev.len) return 1;
+  return len > 0 && memcmp(buf, g_prev.frame, (size_t) len) != 0;
 }
 
 static void screenFrameCache(const char *buf, int len) {
   char *grown;
-  if (len > g_prev_frame_cap) {
-    grown = grealloc(g_prev_frame, (size_t) len);
+  if (len > g_prev.cap) {
+    grown = grealloc(g_prev.frame, (size_t) len);
     if (!grown) return; // best-effort: next frame just always looks "changed"
-    g_prev_frame = grown;
-    g_prev_frame_cap = len;
+    g_prev.frame = grown;
+    g_prev.cap = len;
   }
-  memcpy(g_prev_frame, buf, (size_t) len);
-  g_prev_frame_len = len;
+  memcpy(g_prev.frame, buf, (size_t) len);
+  g_prev.len = len;
 }
 
 void editorFreeScreenCache(void) {
   screenDiffFree();
-  gfree(g_prev_frame);
-  g_prev_frame = NULL;
-  g_prev_frame_len = 0;
-  g_prev_frame_cap = 0;
+  gfree(g_prev.frame);
+  g_prev.frame = NULL;
+  g_prev.len = 0;
+  g_prev.cap = 0;
+}
+
+void editorSwapScreenCache(ScreenCache *other) {
+  char *frame = g_prev.frame;
+  const int len = g_prev.len;
+  const int cap = g_prev.cap;
+  g_prev.frame = other->frame;
+  g_prev.len = other->len;
+  g_prev.cap = other->cap;
+  other->frame = frame;
+  other->len = len;
+  other->cap = cap;
+  screenDiffSwap(&other->diff);
 }
 
 /**

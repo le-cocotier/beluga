@@ -49,6 +49,10 @@ int splitScreenWithSidebar(int sidebar_buffer_id, int main_buffer_id, int sideba
 // wrapping its output to whatever size it was spawned with.
 void splitScreenSyncTerminalSizes(void);
 
+// Fits the panes to the new E.screenrows x E.screencols, given the old
+// size (both without the two status rows).
+void splitScreenResize(int old_rows, int old_cols);
+
 /**
  * @brief Collapses a sidebar split back to fullscreen, keeping whichever
  * pane ISN'T an EXPLORER_BUFF visible (rather than always keeping pane 0,

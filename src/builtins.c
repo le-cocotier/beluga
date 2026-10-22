@@ -12,6 +12,7 @@
 #include "../include/append_buffer.h"
 #include "../include/os.h"
 #include "../include/buffer.h"
+#include "../include/daemon.h"
 #include "../include/data.h"
 #include "../include/define.h"
 #include "../include/editor_op.h"
@@ -293,6 +294,12 @@ void bFree_structs(void) {
  * @see main()
  */
 Lisp editorQuit(Lisp args, LispError *e, LispContext ctx) {
+  // In the daemon this closes the window it was typed in, and the buffers
+  // stay open in the daemon: nothing unsaved is lost, so no warning.
+  if (daemonIsRunning()) {
+    E.exit_requested = 1;
+    return lisp_null();
+  }
   if (E.dirty && E.quit_times_buffer > 0) {
     editorSetStatusMessage("WARNING! Changes hasn't been saved. Press Ctrl-Q "
                            "another time to quit.");
@@ -2933,7 +2940,7 @@ Lisp l_editorRedisplay(Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
   }
   editorDrawMessageBar(&ab);
-  os_term_write(ab.b, (size_t)ab.len);
+  screenWrite(ab.b, (size_t)ab.len);
   abFree(&ab);
   return lisp_null();
 }

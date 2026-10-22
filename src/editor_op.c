@@ -116,12 +116,113 @@ void editorSetClipboard(const char *text, const int len) {
     os_clipboard_set(text, (size_t)len);
 }
 
-/**
- * @brief Upper bound on the streams editorRunLoop() waits on: the keyboard,
- * one per terminal pane, the language server, background processes.
- */
-#define RUN_LOOP_MAX_STREAMS 64
-#define RUN_LOOP_MAX_TERMINALS 32
+void editorWatchStreams(RunLoopWatch *w, OsStream **streams, int *n_streams,
+                        const int max) {
+  int first_buffer_id;
+  struct buffer_t *b;
+  int i;
+
+  w->n_terminals = 0;
+  w->first_terminal = *n_streams;
+  if (E.buffers != NULL) {
+    first_buffer_id = E.buffers->buffer_id;
+    b = E.buffers;
+    do {
+      if (b->type == TERMINAL_BUFF && b->pty &&
+          w->n_terminals < RUN_LOOP_MAX_TERMINALS && *n_streams < max) {
+        w->terminals[w->n_terminals++] = b;
+        streams[(*n_streams)++] = ptySessionOutput(b);
+      }
+      b = b->next;
+    } while (b->buffer_id != first_buffer_id);
+  }
+
+  for (i = 0; i < E.number_of_lsp_clients; i++) {
+    w->lsp_index[i] = -1;
+    if (E.constantes.LSP && E.lsp_clients[i]->proc && *n_streams < max) {
+      w->lsp_index[i] = *n_streams;
+      streams[(*n_streams)++] = os_proc_output(E.lsp_clients[i]->proc);
+    }
+  }
+
+  *n_streams += asyncProcessStreams(streams + *n_streams, max - *n_streams);
+}
+
+void editorHandleStreams(const RunLoopWatch *w, const int *ready) {
+  struct buffer_t *b;
+  unsigned char chunk[4096];
+  long n;
+  int i;
+
+  for (i = 0; i < w->n_terminals; i++) {
+    if (!ready[w->first_terminal + i])
+      continue;
+    b = w->terminals[i];
+    while ((n = os_stream_read(ptySessionOutput(b), chunk, sizeof(chunk), 0)) > 0) {
+      ansiParserFeed(b, chunk, (size_t)n);
+      b->x = ansiParserCursorIndex(b);
+      b->y = b->term_state.cursor_y;
+    }
+    // The shell has exited: release it. The buffer keeps showing what
+    // it last drew.
+    if (n < 0)
+      ptySessionClose(b);
+  }
+
+  // number_of_lsp_clients can't have changed since the streams were
+  // collected: clients are only added from key handling, after this.
+  for (i = 0; i < E.number_of_lsp_clients; i++)
+    if (w->lsp_index[i] >= 0 && ready[w->lsp_index[i]])
+      lspPoll(E.lsp_clients[i]);
+
+  // Before keys: a finished process's callback (e.g. a refresh after
+  // a push) should land before the next keystroke acts on its buffer.
+  asyncProcessPoll();
+}
+
+void editorTick(void) {
+  // Runs every ~50ms tick regardless of what woke the wait up, so a
+  // scheduled completion request fires shortly after its debounce
+  // deadline passes even if the user has stopped typing entirely.
+  if (E.constantes.LSP) {
+    lspCompletionDebounceTick();
+    lspSyncDebounceTick();
+    lspDecorationsTick();
+  }
+  autosaveTick();
+  fileCheckDiskChanges();
+}
+
+void editorCloseTerminals(void) {
+  int first_buffer_id;
+  struct buffer_t *b;
+  if (E.buffers == NULL)
+    return;
+  first_buffer_id = E.buffers->buffer_id;
+  b = E.buffers;
+  do {
+    if (b->type == TERMINAL_BUFF)
+      ptySessionClose(b);
+    b = b->next;
+  } while (b->buffer_id != first_buffer_id);
+}
+
+void editorApplyScreenSize(const int rows, const int cols) {
+  const int old_rows = E.screenrows;
+  const int old_cols = E.screencols;
+  E.screenrows = rows - 2;
+  E.screencols = cols;
+  if (E.screenrows < 1)
+    E.screenrows = 1;
+  if (E.screencols < 1)
+    E.screencols = 1;
+  splitScreenResize(old_rows, old_cols);
+  // Every pane's terminal, not just the active one: a terminal sitting in
+  // the other half of a split is just as affected by the window changing
+  // size, and used to keep the size it was spawned with for the rest of
+  // the session.
+  splitScreenSyncTerminalSizes();
+}
 
 void editorRunLoop(void) {
   // Polled every tick instead of driven by SIGWINCH: nothing ever actually
@@ -137,16 +238,8 @@ void editorRunLoop(void) {
   int cols;
   OsStream *streams[RUN_LOOP_MAX_STREAMS];
   int ready[RUN_LOOP_MAX_STREAMS];
-  struct buffer_t *terminals[RUN_LOOP_MAX_TERMINALS];
+  RunLoopWatch watch;
   int n_streams;
-  int n_terminals;
-  // streams[] index of each LSP client's output, -1 when it has none.
-  int lsp_index[LSP_MAX_CLIENTS];
-  int first_buffer_id;
-  struct buffer_t *b;
-  int i;
-  unsigned char chunk[4096];
-  long n;
   getWindowSize(&last_rows, &last_cols);
 
   while (!E.exit_requested) {
@@ -154,83 +247,22 @@ void editorRunLoop(void) {
         (rows != last_rows || cols != last_cols)) {
       last_rows = rows;
       last_cols = cols;
-      E.screenrows = rows - 2;
-      E.screencols = cols;
-      // Every pane's terminal, not just the active one: a terminal
-      // sitting in the other half of a split is just as affected by
-      // the window changing size, and used to keep the size it was
-      // spawned with for the rest of the session.
-      splitScreenSyncTerminalSizes();
+      editorApplyScreenSize(rows, cols);
     }
 
     // Everything there is to wait for: keys first (index 0), then each
     // terminal pane's shell, the language server, background processes.
     n_streams = 0;
     streams[n_streams++] = os_term_input();
-
-    n_terminals = 0;
-    if (E.buffers != NULL) {
-      first_buffer_id = E.buffers->buffer_id;
-      b = E.buffers;
-      do {
-        if (b->type == TERMINAL_BUFF && b->pty && n_terminals < RUN_LOOP_MAX_TERMINALS) {
-          terminals[n_terminals++] = b;
-          streams[n_streams++] = ptySessionOutput(b);
-        }
-        b = b->next;
-      } while (b->buffer_id != first_buffer_id);
-    }
-
-    for (i = 0; i < E.number_of_lsp_clients; i++) {
-      lsp_index[i] = -1;
-      if (E.constantes.LSP && E.lsp_clients[i]->proc) {
-        lsp_index[i] = n_streams;
-        streams[n_streams++] = os_proc_output(E.lsp_clients[i]->proc);
-      }
-    }
-
-    n_streams += asyncProcessStreams(streams + n_streams, RUN_LOOP_MAX_STREAMS - n_streams);
+    editorWatchStreams(&watch, streams, &n_streams, RUN_LOOP_MAX_STREAMS);
 
     if (os_wait(streams, n_streams, 50, ready) > 0) { // 50ms tick
-      for (i = 0; i < n_terminals; i++) {
-        if (!ready[1 + i])
-          continue;
-        b = terminals[i];
-        while ((n = os_stream_read(ptySessionOutput(b), chunk, sizeof(chunk), 0)) > 0) {
-          ansiParserFeed(b, chunk, (size_t)n);
-          b->x = ansiParserCursorIndex(b);
-          b->y = b->term_state.cursor_y;
-        }
-        // The shell has exited: release it. The buffer keeps showing what
-        // it last drew.
-        if (n < 0)
-          ptySessionClose(b);
-      }
-
-      // number_of_lsp_clients can't have changed since the streams were
-      // collected: clients are only added from key handling, below.
-      for (i = 0; i < E.number_of_lsp_clients; i++)
-        if (lsp_index[i] >= 0 && ready[lsp_index[i]])
-          lspPoll(E.lsp_clients[i]);
-
-      // Before keys: a finished process's callback (e.g. a refresh after
-      // a push) should land before the next keystroke acts on its buffer.
-      asyncProcessPoll();
-
+      editorHandleStreams(&watch, ready);
       if (ready[0])
         editorProcessKeypress();
     }
 
-    // Runs every ~50ms tick regardless of what woke the wait up, so a
-    // scheduled completion request fires shortly after its debounce
-    // deadline passes even if the user has stopped typing entirely.
-    if (E.constantes.LSP) {
-      lspCompletionDebounceTick();
-      lspSyncDebounceTick();
-      lspDecorationsTick();
-    }
-    autosaveTick();
-    fileCheckDiskChanges();
+    editorTick();
 
     // A keypress handled above may have requested the exit; drawing one
     // more frame here would just repaint the UI we're about to leave.
@@ -241,14 +273,6 @@ void editorRunLoop(void) {
   }
 
   // Clean shutdown: close any live shells before exiting
-  if (E.buffers != NULL) {
-    first_buffer_id = E.buffers->buffer_id;
-    b = E.buffers;
-    do {
-      if (b->type == TERMINAL_BUFF)
-        ptySessionClose(b);
-      b = b->next;
-    } while (b->buffer_id != first_buffer_id);
-  }
+  editorCloseTerminals();
   terminalRestore();
 }

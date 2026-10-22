@@ -253,7 +253,10 @@ static int fuzzyScore(const char *query, const char *path) {
   return score;
 }
 
-static int *s_score_scratch = NULL; // score per path, indexed like paths[]
+// Score per path, indexed like paths[]: set for the length of one
+// rebuildMatches() call, for compareByScore(). Not kept between calls,
+// since each daemon client has its own finder with its own path count.
+static int *s_score_scratch = NULL;
 
 static int compareByScore(const void *a, const void *b) {
   const int ia = *(const int *)a, ib = *(const int *)b;
@@ -275,11 +278,12 @@ static void rebuildMatches(void) {
   if (!ff->match)
     ff->match =
         galloc((size_t)(ff->path_count > 0 ? ff->path_count : 1) * sizeof(int));
-  if (!s_score_scratch)
-    s_score_scratch =
-        galloc((size_t)(ff->path_count > 0 ? ff->path_count : 1) * sizeof(int));
+  s_score_scratch =
+      galloc((size_t)(ff->path_count > 0 ? ff->path_count : 1) * sizeof(int));
   if (!ff->match || !s_score_scratch) {
     ff->match_count = 0;
+    gfree(s_score_scratch);
+    s_score_scratch = NULL;
     return;
   }
 
@@ -296,6 +300,8 @@ static void rebuildMatches(void) {
 
   if (ff->query_len > 0)
     qsort(ff->match, (size_t)ff->match_count, sizeof(int), compareByScore);
+  gfree(s_score_scratch);
+  s_score_scratch = NULL;
 
   if (ff->selected >= ff->match_count)
     ff->selected = ff->match_count > 0 ? ff->match_count - 1 : 0;
@@ -312,10 +318,8 @@ void fileFinderClose(void) {
     gfree(ff->paths[i]);
   gfree(ff->paths);
   gfree(ff->match);
-  gfree(s_score_scratch);
   ff->paths = NULL;
   ff->match = NULL;
-  s_score_scratch = NULL;
   ff->path_count = ff->match_count = 0;
   ff->query_len = 0;
   ff->query[0] = '\0';

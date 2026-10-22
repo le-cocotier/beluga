@@ -53,6 +53,33 @@ Nothing open right now.
 
 ---
 
+## Daemon mode
+
+`beluga --daemon` / `beluga -c` (src/daemon.c, src/daemon_client.c). What's
+left after the first step:
+
+- [ ] **[feature]** A cursor per pane instead of per buffer
+  (`struct buffer_t` x/y): two windows, or two split panes, on the same file
+  share one cursor today.
+- [ ] **[feature]** `beluga -c` starts a daemon when none is running, and
+  `--daemon` detaches from its terminal (fork on Unix, a detached process on
+  Windows). Today the daemon stays in the foreground.
+- [ ] **[debt]** Prompts block: while one window has an `editorPrompt()`
+  open (open-file, M-x, search, kill-buffer confirmation), the other windows
+  don't redraw or take keys until it closes. Make the prompt a per-window
+  state driven by the run loop instead of a nested key loop.
+- [ ] **[debt]** A per-window working directory. The client sends its own
+  in the hello (used for the files on its command line), but the open-file
+  prompt, find-file, project search and new terminal panes still use the
+  daemon's (`os_getcwd()`).
+- [ ] **[debt]** Ctrl-C (or a closed terminal) on the daemon kills it
+  without asking about unsaved buffers; only `beluga --kill` checks. The
+  stale socket left on Unix is replaced at the next start.
+- [ ] **[debt]** which-key's pending-prefix timer (`whichKeyDraw()`'s
+  statics) is shared between windows.
+
+---
+
 ## Tooling and housekeeping
 
 Nothing open right now.

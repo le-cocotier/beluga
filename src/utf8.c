@@ -27,7 +27,7 @@ static int readKeyBytes(void *buf, const int n)
     long r;
     while (got < n)
     {
-        r = os_stream_read(os_term_input(), (char *) buf + got, (size_t) (n - got), 100);
+        r = screenReadKeys((char *) buf + got, (size_t) (n - got), 100);
         if (r <= 0)
             break;
         got += (int) r;

@@ -15,5 +15,11 @@ void screenDiffWrite(const char *frame, int len, int rows, int cols);
 void screenDiffInvalidate(void);
 // Frees the saved screen (at exit).
 void screenDiffFree(void);
+// Trades what the terminal shows for `*other`, the copy a daemon window
+// kept while another was drawn (NULL: a window never drawn yet, which is
+// repainted in full). The current one is left in `*other`.
+void screenDiffSwap(void **other);
+// Frees a copy screenDiffSwap() left in `*other` (a window closing).
+void screenDiffFreeSaved(void *saved);
 
 #endif // SCREEN_DIFF_H_

@@ -5,9 +5,29 @@
 /* includes */
 
 #include <errno.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "utf8.h"
+
+/**
+ * @brief Where the editor's screen is. Standalone, that is the terminal
+ * beluga runs in. In daemon mode (daemon.c) it is the client window being
+ * served at the moment: drawing, key reads and the window size all go
+ * through these three, never to os_term_*() directly.
+ */
+typedef struct
+{
+    void (*write)(const void *buf, size_t n);
+    // os_stream_read() semantics: >0 bytes, 0 nothing in time, -1 never.
+    long (*read_keys)(void *buf, size_t n, int timeout_ms);
+    int (*size)(int *rows, int *cols);
+} ScreenDriver;
+
+// NULL: back to the real terminal.
+void screenSetDriver(const ScreenDriver *driver);
+void screenWrite(const void *buf, size_t n);
+long screenReadKeys(void *buf, size_t n, int timeout_ms);
 
 /**
  * \fn void die(const char *s)

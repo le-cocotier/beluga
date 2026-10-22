@@ -37,8 +37,9 @@ if is_windows
   os_lib = static_library('beluga-os-win32',
     'src/os/os_win32.c',
     c_args : ['-D_WIN32_WINNT=0x0A00'],
-    dependencies : [cc.find_library('user32'),   # clipboard
-                    cc.find_library('shell32')]) # file operations
+    dependencies : [cc.find_library('user32'),    # clipboard
+                    cc.find_library('shell32'),   # file operations
+                    cc.find_library('advapi32')]) # the daemon pipe's permissions
 else
   os_lib = static_library('beluga-os-posix',
     'src/os/os_posix.c',
@@ -116,7 +117,10 @@ src_files = files(
   'src/macro.c',
   'src/screen_diff.c',
   'src/describe.c',
-  'src/settings.c'
+  'src/settings.c',
+  'src/daemon.c',
+  'src/daemon_client.c',
+  'src/daemon_frame.c'
 )
 
 # Everything but main(), so the unit tests link the same code.

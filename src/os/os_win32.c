@@ -35,6 +35,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <sddl.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -463,7 +464,7 @@ static wchar_t *environmentWith(const wchar_t *extra)
  *
  **********************************************************************************************************************/
 
-typedef enum { STREAM_CONSOLE, STREAM_PIPE, STREAM_EMPTY } StreamKind;
+typedef enum { STREAM_CONSOLE, STREAM_PIPE, STREAM_EMPTY, STREAM_LISTENER } StreamKind;
 
 struct OsStream {
     StreamKind kind;
@@ -471,6 +472,7 @@ struct OsStream {
     HANDLE writer;      // process whose exit ends the stream (a pane's shell:
                         // a pseudoconsole's pipe stays open after it exits)
     int eof;
+    int connected;      // STREAM_LISTENER: a client is waiting on h
 };
 
 static HANDLE consoleIn(void) { return GetStdHandle(STD_INPUT_HANDLE); }
@@ -529,6 +531,7 @@ static long pipeAvailable(OsStream *s)
 
 static int consoleHasInput(void);
 static long consoleRead(void *buf, size_t n, int timeout_ms);
+static int listenerReady(OsStream *s);
 
 /**
  * @brief Would os_stream_read() return without waiting? (Data, or end.)
@@ -539,6 +542,7 @@ static int streamReady(OsStream *s)
     {
     case STREAM_CONSOLE: return consoleHasInput();
     case STREAM_PIPE:    return pipeAvailable(s) != 0;
+    case STREAM_LISTENER: return listenerReady(s);
     default:             return 1;
     }
 }
@@ -559,7 +563,7 @@ int os_wait(OsStream *const *streams, const int n, const int timeout_ms, int *re
             continue;
         if (streams[i]->kind == STREAM_CONSOLE)
             watch_console = 1;
-        else if (streams[i]->kind == STREAM_PIPE)
+        else if (streams[i]->kind == STREAM_PIPE || streams[i]->kind == STREAM_LISTENER)
             has_pipes = 1;
     }
 
@@ -599,7 +603,7 @@ long os_stream_read(OsStream *s, void *buf, const size_t n, const int timeout_ms
         return s ? 0 : -1;
     if (s->kind == STREAM_CONSOLE)
         return consoleRead(buf, n, timeout_ms);
-    if (s->kind == STREAM_EMPTY || s->eof)
+    if (s->kind == STREAM_EMPTY || s->kind == STREAM_LISTENER || s->eof)
         return -1;
 
     one[0] = s;
@@ -1469,6 +1473,312 @@ void os_pty_close(OsPty *p)
     if (p->job)
         CloseHandle(p->job);
     gfree(p);
+}
+
+/***********************************************************************************************************************
+ *
+ *                                                 Local connections (daemon mode)
+ *
+ **********************************************************************************************************************/
+
+// Named pipes, byte mode, in PIPE_NOWAIT mode on the daemon's side:
+// ConnectNamedPipe() then answers at once whether a client has come (so the
+// listener can be polled like the other pipes in os_wait()), and a write to
+// a client that has stopped reading returns instead of blocking the daemon.
+
+static void win32ErrorMessage(DWORD code, char *err, size_t err_size);
+
+struct OsServer {
+    OsStream listen;  // STREAM_LISTENER: h is the instance waiting for a client
+    wchar_t *pipe_name;
+    SECURITY_ATTRIBUTES sa;
+    PSECURITY_DESCRIPTOR sd;
+};
+
+struct OsConn {
+    OsStream in;      // STREAM_PIPE over the pipe handle, read and written
+    int nowait;       // the daemon's end: writes may be partial
+};
+
+static void ipcError(char *err, const size_t err_size, const char *what)
+{
+    char reason[256];
+    win32ErrorMessage(GetLastError(), reason, sizeof(reason));
+    if (err && err_size > 0)
+        snprintf(err, err_size, "%s: %s", what, reason);
+}
+
+/**
+ * @brief \\.\pipe\beluga-<user>-<name>, galloc'd. The user name keeps two
+ * users' daemons on one machine apart.
+ */
+static wchar_t *pipeName(const char *name, char *err, const size_t err_size)
+{
+    wchar_t user[257];
+    DWORD user_len = 257;
+    wchar_t *wname;
+    wchar_t *full;
+    size_t len;
+
+    if (!name || !name[0] || strpbrk(name, "\\/"))
+    {
+        if (err && err_size > 0)
+            snprintf(err, err_size, "invalid daemon name \"%s\"", name ? name : "");
+        return NULL;
+    }
+    if (!GetUserNameW(user, &user_len))
+        wcscpy(user, L"user");
+    wname = toWide(name);
+    if (!wname)
+        return NULL;
+    len = wcslen(L"\\\\.\\pipe\\beluga--") + wcslen(user) + wcslen(wname) + 1;
+    full = galloc(len * sizeof(wchar_t));
+    if (full)
+        _snwprintf(full, len, L"\\\\.\\pipe\\beluga-%ls-%ls", user, wname);
+    gfree(wname);
+    return full;
+}
+
+/**
+ * @brief A security descriptor whose DACL lets only the current user (and
+ * SYSTEM) open the pipe — the default one also gives Everyone read access.
+ */
+static PSECURITY_DESCRIPTOR ownerOnlyDescriptor(void)
+{
+    HANDLE token = NULL;
+    BYTE info[256];
+    DWORD info_len = 0;
+    wchar_t *sid = NULL;
+    wchar_t sddl[256];
+    PSECURITY_DESCRIPTOR sd = NULL;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return NULL;
+    if (GetTokenInformation(token, TokenUser, info, sizeof(info), &info_len) &&
+        ConvertSidToStringSidW(((TOKEN_USER *) info)->User.Sid, &sid))
+    {
+        _snwprintf(sddl, 256, L"D:P(A;;GA;;;SY)(A;;GA;;;%ls)", sid);
+        sddl[255] = L'\0';
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &sd, NULL))
+            sd = NULL;
+        LocalFree(sid);
+    }
+    CloseHandle(token);
+    return sd;
+}
+
+static HANDLE newPipeInstance(OsServer *s, const int first)
+{
+    return CreateNamedPipeW(s->pipe_name,
+                            PIPE_ACCESS_DUPLEX | (first ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
+                            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT |
+                                PIPE_REJECT_REMOTE_CLIENTS,
+                            PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, &s->sa);
+}
+
+/**
+ * @brief Has a client connected to the waiting instance? Remembered until
+ * os_server_accept() takes it.
+ */
+static int listenerReady(OsStream *s)
+{
+    DWORD error;
+    if (s->connected)
+        return 1;
+    if (!s->h)
+        return 0;
+    if (ConnectNamedPipe(s->h, NULL))
+        s->connected = 1;
+    else
+    {
+        error = GetLastError();
+        // NO_DATA: it connected and already left; accepting it gives a
+        // connection that ends at once, which the daemon handles anyway.
+        if (error == ERROR_PIPE_CONNECTED || error == ERROR_NO_DATA)
+            s->connected = 1;
+    }
+    return s->connected;
+}
+
+OsServer *os_server_listen(const char *name, char *err, const size_t err_size)
+{
+    OsServer *s = gcalloc(1, sizeof(*s));
+    HANDLE h;
+
+    if (!s)
+        return NULL;
+    s->pipe_name = pipeName(name, err, err_size);
+    s->sd = ownerOnlyDescriptor();
+    if (!s->pipe_name || !s->sd)
+    {
+        if (s->pipe_name && err && err_size > 0)
+            snprintf(err, err_size, "can't build the daemon's pipe permissions");
+        gfree(s->pipe_name);
+        if (s->sd)
+            LocalFree(s->sd);
+        gfree(s);
+        return NULL;
+    }
+    s->sa.nLength = sizeof(s->sa);
+    s->sa.lpSecurityDescriptor = s->sd;
+    s->sa.bInheritHandle = FALSE;
+
+    // A daemon of that name answering (or busy) is a running one. Checked
+    // by opening it too, not only by FILE_FLAG_FIRST_PIPE_INSTANCE below,
+    // which Wine doesn't enforce. The daemon sees a client come and go.
+    h = CreateFileW(s->pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                    SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
+    if (h != INVALID_HANDLE_VALUE || GetLastError() == ERROR_PIPE_BUSY)
+    {
+        if (h != INVALID_HANDLE_VALUE)
+            CloseHandle(h);
+        if (err && err_size > 0)
+            snprintf(err, err_size, "a beluga daemon called \"%s\" is already running", name);
+        gfree(s->pipe_name);
+        LocalFree(s->sd);
+        gfree(s);
+        return NULL;
+    }
+
+    h = newPipeInstance(s, 1);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        if (GetLastError() == ERROR_ACCESS_DENIED || GetLastError() == ERROR_PIPE_BUSY)
+        {
+            if (err && err_size > 0)
+                snprintf(err, err_size, "a beluga daemon called \"%s\" is already running", name);
+        }
+        else
+            ipcError(err, err_size, "can't create the daemon's pipe");
+        gfree(s->pipe_name);
+        LocalFree(s->sd);
+        gfree(s);
+        return NULL;
+    }
+    s->listen.kind = STREAM_LISTENER;
+    s->listen.h = h;
+    return s;
+}
+
+OsStream *os_server_stream(OsServer *s)
+{
+    return s ? &s->listen : NULL;
+}
+
+OsConn *os_server_accept(OsServer *s)
+{
+    OsConn *c;
+    HANDLE next;
+
+    if (!s || !listenerReady(&s->listen))
+        return NULL;
+    c = gcalloc(1, sizeof(*c));
+    if (!c)
+        return NULL;
+    streamInitPipe(&c->in, s->listen.h, NULL);
+    c->nowait = 1;
+
+    // A fresh instance for the next client. If that fails, the listener
+    // stays idle (never ready) rather than handing out a dead handle.
+    next = newPipeInstance(s, 0);
+    s->listen.h = next == INVALID_HANDLE_VALUE ? NULL : next;
+    s->listen.connected = 0;
+    return c;
+}
+
+void os_server_close(OsServer *s)
+{
+    if (!s)
+        return;
+    if (s->listen.h)
+        CloseHandle(s->listen.h);
+    gfree(s->pipe_name);
+    LocalFree(s->sd);
+    gfree(s);
+}
+
+OsConn *os_conn_connect(const char *name, char *err, const size_t err_size)
+{
+    wchar_t *pipe = pipeName(name, err, err_size);
+    OsConn *c;
+    HANDLE h = INVALID_HANDLE_VALUE;
+    int attempt;
+
+    if (!pipe)
+        return NULL;
+    for (attempt = 0; attempt < 3; attempt++)
+    {
+        h = CreateFileW(pipe, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                        SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
+        // BUSY: the daemon is between two clients and has no free
+        // instance waiting yet.
+        if (h != INVALID_HANDLE_VALUE || GetLastError() != ERROR_PIPE_BUSY)
+            break;
+        WaitNamedPipeW(pipe, 2000);
+    }
+    gfree(pipe);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        if (err && err_size > 0)
+            snprintf(err, err_size, "no beluga daemon called \"%s\" is running", name);
+        return NULL;
+    }
+    c = gcalloc(1, sizeof(*c));
+    if (!c)
+    {
+        CloseHandle(h);
+        return NULL;
+    }
+    streamInitPipe(&c->in, h, NULL);
+    return c;
+}
+
+OsStream *os_conn_input(OsConn *c)
+{
+    return c ? &c->in : NULL;
+}
+
+long os_conn_write(OsConn *c, const void *buf, const size_t n)
+{
+    const char *p = buf;
+    size_t left = n;
+    DWORD written;
+    ULONGLONG stalled_since = 0;
+
+    if (!c || !c->in.h || c->in.eof)
+        return -1;
+    while (left > 0)
+    {
+        if (!WriteFile(c->in.h, p, (DWORD) (left > 65536 ? 65536 : left), &written, NULL))
+            return -1;
+        if (written > 0)
+        {
+            p += written;
+            left -= written;
+            stalled_since = 0;
+            continue;
+        }
+        // Non-blocking end, pipe full: the client isn't reading. Give it
+        // 5 s, then give up on it rather than freeze every other window.
+        if (!c->nowait)
+            return -1;
+        if (!stalled_since)
+            stalled_since = GetTickCount64();
+        else if (GetTickCount64() - stalled_since > 5000)
+            return -1;
+        Sleep(5);
+    }
+    return (long) n;
+}
+
+void os_conn_close(OsConn *c)
+{
+    if (!c)
+        return;
+    // Just closed, not DisconnectNamedPipe()d: that would throw away what
+    // the client hasn't read yet, like the exit frame sent just before.
+    streamClose(&c->in);
+    gfree(c);
 }
 
 /***********************************************************************************************************************
