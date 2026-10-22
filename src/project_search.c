@@ -25,6 +25,7 @@
 #include "../include/data.h"
 #include "../include/editor_op.h"
 #include "../include/input.h"
+#include "../include/project.h"
 #include "../include/project_files.h"
 #include "../include/split_screen.h"
 #include "../include/subprocess.h"
@@ -481,7 +482,7 @@ int projectSearchRun(const char *pattern, const char *root) {
   if (root && *root)
     snprintf(resolved, sizeof(resolved), "%s", root);
   else {
-    cwd = os_getcwd();
+    cwd = projectRootOrCwd();
     if (!cwd)
       return -1;
     snprintf(resolved, sizeof(resolved), "%s", cwd);
@@ -678,7 +679,7 @@ void projectSearchGotoCursor(void) {
 /**
  * @brief Shows `n` locations in the results buffer, under `title`, with the
  * same grouping by file and ENTER-to-jump as a project search.
- * @details Paths are shown relative to the working directory when they're
+ * @details Paths are shown relative to the project root when they're
  * under it. Replaces whatever results were shown before.
  */
 void projectSearchShowLocations(const char *title, const SearchLocation *locs,
@@ -695,7 +696,7 @@ void projectSearchShowLocations(const char *title, const SearchLocation *locs,
 
   clearHits();
   s_truncated = 0;
-  cwd = os_getcwd();
+  cwd = projectRootOrCwd();
   cwd_len = cwd ? strlen(cwd) : 0;
   snprintf(s_root, sizeof(s_root), "%s", cwd ? cwd : "");
 
@@ -767,7 +768,7 @@ int projectSearchFiles(const char *pattern, const char *root,
   if (root && *root)
     snprintf(resolved, sizeof(resolved), "%s", root);
   else {
-    cwd = os_getcwd();
+    cwd = projectRootOrCwd();
     if (!cwd)
       return -1;
     snprintf(resolved, sizeof(resolved), "%s", cwd);

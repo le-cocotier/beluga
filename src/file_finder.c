@@ -21,6 +21,7 @@
 #include "../include/define.h"
 #include "../include/editor_op.h"
 #include "../include/popup_ui.h"
+#include "../include/project.h"
 #include "../include/split_screen.h"
 #include "../include/project_files.h"
 #include "../include/subprocess.h"
@@ -318,6 +319,8 @@ void fileFinderClose(void) {
     gfree(ff->paths[i]);
   gfree(ff->paths);
   gfree(ff->match);
+  gfree(ff->root);
+  ff->root = NULL;
   ff->paths = NULL;
   ff->match = NULL;
   ff->path_count = ff->match_count = 0;
@@ -327,12 +330,14 @@ void fileFinderClose(void) {
   ff->visible = 0;
 }
 
-void fileFinderOpen(void) {
+void fileFinderOpen(void) { fileFinderOpenAt(NULL); }
+
+void fileFinderOpenAt(const char *dir) {
   char *root;
   char *output;
   fileFinderClose(); // drop any stale snapshot first
 
-  root = os_getcwd();
+  root = dir ? utilStrdup(dir) : projectRootOrCwd();
   if (!root) {
     editorSetStatusMessage("find-file: can't determine the working directory");
     return;
@@ -353,7 +358,7 @@ void fileFinderOpen(void) {
     fileFinderClose();
     return;
   }
-  gfree(root);
+  E.file_finder.root = root; // fileFinderClose() frees it
 
   rebuildMatches();
   E.file_finder.visible = 1;
@@ -363,12 +368,11 @@ void fileFinderOpen(void) {
 
 /**
  * @brief buffer_id of an already-open FILE_BUFF for `rel_path` (resolved
- * against the editor's cwd), or -1. Keeps picking the same file from
+ * against the finder's root), or -1. Keeps picking the same file from
  * stacking up duplicate buffers.
  */
 static int findOpenBuffer(const char *rel_path) {
   char want[PATH_MAX];
-  char *cwd;
   int first;
   Buffer *b;
   char *full;
@@ -379,11 +383,9 @@ static int findOpenBuffer(const char *rel_path) {
   if (os_path_is_absolute(rel_path)) {
     snprintf(want, sizeof(want), "%s", rel_path);
   } else {
-    cwd = os_getcwd();
-    if (!cwd)
+    if (!E.file_finder.root)
       return -1;
-    snprintf(want, sizeof(want), "%s/%s", cwd, rel_path);
-    gfree(cwd);
+    snprintf(want, sizeof(want), "%s/%s", E.file_finder.root, rel_path);
   }
 
   first = E.buffers->buffer_id;
@@ -409,6 +411,7 @@ static void openSelected(void) {
   const char *rel;
   EditorPane *active;
   int existing;
+  char full[PATH_MAX];
   Utf8Char *path;
   int id;
   if (ff->selected < 0 || ff->selected >= ff->match_count)
@@ -421,7 +424,13 @@ static void openSelected(void) {
   if (existing != -1) {
     active->buffer_id = existing;
   } else {
-    path = stringToUtf8((unsigned char *)rel);
+    // Relative to the finder's root, which is the project's and not
+    // necessarily the working directory.
+    if (ff->root && !os_path_is_absolute(rel))
+      snprintf(full, sizeof(full), "%s/%s", ff->root, rel);
+    else
+      snprintf(full, sizeof(full), "%s", rel);
+    path = stringToUtf8((unsigned char *)full);
     if (!path)
       return;
     id = bufferCreate(path, READ_AND_WRITE, FILE_BUFF);

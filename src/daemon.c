@@ -43,6 +43,7 @@
 #include "../include/input.h"
 #include "../include/os.h"
 #include "../include/output.h"
+#include "../include/project.h"
 #include "../include/screen_diff.h"
 #include "../include/settings.h"
 #include "../include/split_screen.h"
@@ -79,6 +80,11 @@ typedef struct
     Utf8Char *prompt_input;
     int prompt_is_command;
     int quit_times_buffer;
+    // The window's current project: from its active pane's buffer, or
+    // picked with project-switch (project.c).
+    int current_project;
+    struct const_t constantes;
+    int project_last_buffer;
     ScreenCache cache;
 } ClientView;
 
@@ -135,6 +141,9 @@ static void viewSave(ClientView *v) {
   v->prompt_input = E.prompt_input;
   v->prompt_is_command = E.prompt_is_command;
   v->quit_times_buffer = E.quit_times_buffer;
+  v->current_project = E.current_project;
+  v->constantes = E.constantes;
+  projectSwapLastBuffer(&v->project_last_buffer);
   editorSwapScreenCache(&v->cache);
 }
 
@@ -155,6 +164,9 @@ static void viewLoad(ClientView *v) {
   E.prompt_input = v->prompt_input;
   E.prompt_is_command = v->prompt_is_command;
   E.quit_times_buffer = v->quit_times_buffer;
+  E.current_project = v->current_project;
+  E.constantes = v->constantes;
+  projectSwapLastBuffer(&v->project_last_buffer);
   editorSwapScreenCache(&v->cache);
 }
 
@@ -167,6 +179,7 @@ static void viewFree(ClientView *v) {
     gfree(v->file_finder.paths[i]);
   gfree(v->file_finder.paths);
   gfree(v->file_finder.match);
+  gfree(v->file_finder.root);
   gfree(v->cache.frame);
   screenDiffFreeSaved(v->cache.diff);
   memset(v, 0, sizeof(*v));
@@ -210,8 +223,14 @@ static void clientSwitchTo(DaemonClient *c) {
   int start_buffer;
   if (c == s_current)
     return;
-  // A new window starts on whatever the previous view was showing.
+  // A new window starts on whatever the previous view was showing, in its
+  // project until projectSyncActive() looks at its own buffer.
   start_buffer = splitScreenGetActivePane() ? splitScreenGetActivePane()->buffer_id : -1;
+  if (c && c->view.fresh) {
+    c->view.current_project = E.current_project;
+    c->view.constantes = E.constantes;
+    c->view.project_last_buffer = -1;
+  }
   viewSave(s_current ? &s_current->view : &s_idle);
   viewLoad(c ? &c->view : &s_idle);
   s_current = c;
@@ -599,6 +618,8 @@ static void daemonRunLoop(void) {
         clientClose(c, "");
       else if (c->greeted) {
         clientSwitchTo(c);
+        // The active pane may have moved to another project's buffer.
+        projectSyncActive();
         editorRefreshScreen();
       }
     }

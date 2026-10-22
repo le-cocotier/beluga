@@ -64,30 +64,37 @@ static void formatValue(const Setting *s, int value, char *out, size_t size) {
     snprintf(out, size, "%d", value);
 }
 
-void settingsLoad(void) {
+void settingsRead(Lisp env, struct const_t *out, char *invalid, size_t invalid_size) {
   int i;
   int present;
   Lisp val;
   Setting *s;
+  int *target;
   size_t len;
 
-  s_invalid[0] = '\0';
   for (i = 0; i < SETTING_COUNT; i++) {
     s = &s_settings[i];
-    *s->target = s->fallback;
-    val = lisp_env_lookup(lisp_env(E.ctx), lisp_make_symbol(s->name, E.ctx), &present);
+    // The table points into E.constantes; the same field of `out`.
+    target = (int *)((char *)out + ((char *)s->target - (char *)&E.constantes));
+    *target = s->fallback;
+    val = lisp_env_lookup(env, lisp_make_symbol(s->name, E.ctx), &present);
     if (!present)
       continue;
     if (s->type == SETTING_BOOL) {
       // Anything but #f counts as on, as in Lisp itself.
-      *s->target = lisp_is_true(val);
+      *target = lisp_is_true(val);
     } else if (lisp_type(val) == LISP_INT && lisp_int(val) >= s->min) {
-      *s->target = (int)lisp_int(val);
-    } else {
-      len = strlen(s_invalid);
-      snprintf(s_invalid + len, sizeof(s_invalid) - len, "%s%s", len ? ", " : "", s->name);
+      *target = (int)lisp_int(val);
+    } else if (invalid) {
+      len = strlen(invalid);
+      snprintf(invalid + len, invalid_size - len, "%s%s", len ? ", " : "", s->name);
     }
   }
+}
+
+void settingsLoad(void) {
+  s_invalid[0] = '\0';
+  settingsRead(lisp_env(E.ctx), &E.constantes, s_invalid, sizeof(s_invalid));
 }
 
 void settingsReportProblems(void) {

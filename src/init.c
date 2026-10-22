@@ -11,11 +11,12 @@
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
 #include "../include/macro.h"
+#include "../include/packages.h"
+#include "../include/project.h"
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
 #include "../include/utils.h"
-#include "../include/packages.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -156,7 +157,6 @@ void initBuiltins(void) {
   registerBuiltin("editor-switch-to-buffer", editorSwitchToBuffer);
   registerBuiltin("editor-kill-buffer", editorKillBuffer);
   registerBuiltin("editor-pwd", editorPwd);
-  registerBuiltin("project-root", l_projectRoot);
   registerBuiltin("editor-prompt", editorPromptLisp);
   registerBuiltin("list-directory", listDirectory);
   registerBuiltin("editor-scratch-open", editorScratchOpen);
@@ -168,6 +168,8 @@ void initBuiltins(void) {
   registerBuiltin("query-replace", l_queryReplace);
   registerBuiltin("project-query-replace", l_projectQueryReplace);
   registerBuiltin("find-file", l_findFile);
+  // project-root, project-list, project-trust, ... (project.c)
+  projectRegisterBuiltins();
   registerBuiltin("syntax-define-language", l_syntaxDefineLanguage);
   registerBuiltin("syntax-add-keyword", l_syntaxAddKeyword);
   registerBuiltin("syntax-add-type", l_syntaxAddType);
@@ -325,6 +327,7 @@ static void initConfig(void) {
 static void initStartupConstants(void) {
   settingsLoad();
   appDebug("LSP ON : %d", E.constantes.LSP);
+  E.global_constantes = E.constantes;
 }
 
 /**
@@ -489,10 +492,17 @@ void initEditor() {
   E.theme.COLOR_ADDED = themeColor(ANSI_FG_RGB(152, 195, 121));
   E.theme.COLOR_REMOVED = themeColor(ANSI_FG_RGB(224, 108, 117));
 
+  E.projects = NULL;
+  E.number_of_projects = 0;
+  E.current_project = -1;
+
   E.initialized = 0;
   initConfig();
   E.initialized = 1;
   initStartupConstants();
+  // After init.lisp (which may add project markers) and its settings,
+  // which projects without a config of their own keep.
+  projectInit();
   // Clients are created per server, the first time a matching file is
   // opened (bufferMaybeStartLsp()).
   E.number_of_lsp_clients = 0;
@@ -519,6 +529,9 @@ void deInitEditor() {
 
   // free the project-search result list
   projectSearchFree();
+
+  // write back ~/.beluga/projects, then free the list
+  projectFree();
 
   // free the fuzzy file finder's path snapshot
   fileFinderClose();

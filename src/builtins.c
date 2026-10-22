@@ -733,45 +733,6 @@ Lisp editorPwd(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
- * @brief Lisp function to find the enclosing git repo's root
- * @details (project-root) — runs `git rev-parse --show-toplevel` from the
- * working directory and returns its (trimmed) output, or "" if the
- * working directory isn't inside a git work tree at all (or getcwd()
- * fails). Same "ask git directly" check project-search and find-file
- * already each make their own way (rootIsGitRepo() in project_search.c /
- * file_finder.c) — this is the one that also wants the actual path, for
- * packages like explorer that need to know *where* the project is, not
- * just whether there is one.
- * @param args Lisp arguments (unused)
- * @return Lisp string: the repo root, or ""
- */
-Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx) {
-  char *cwd = os_getcwd();
-  char *argv[6];
-  char *out;
-  Lisp result;
-  (void)args;
-  (void)e;
-  if (!cwd)
-    return lisp_make_string2("", ctx);
-
-  argv[0] = "git";
-  argv[1] = "-C";
-  argv[2] = cwd;
-  argv[3] = "rev-parse";
-  argv[4] = "--show-toplevel";
-  argv[5] = NULL;
-  out = runArgvCaptureQuiet(argv, 1000, PATH_MAX, NULL);
-  gfree(cwd);
-  if (!out)
-    return lisp_make_string2("", ctx);
-
-  result = lisp_make_string2(out, ctx);
-  gfree(out);
-  return result;
-}
-
-/**
  * @brief Lisp function to list a directory's entries
  * @details (list-directory path) — returns a list of (name . is-dir)
  * pairs, one per entry, excluding "." and "..". Order is whatever
@@ -2274,20 +2235,23 @@ Lisp l_projectSearchGoto(Lisp args, LispError *e, LispContext ctx) {
 
 /**
  * @brief Lisp function to open the fuzzy project-file picker
- * @details (find-file) — pops up a modal list of every file in the
+ * @details (find-file [dir]) — pops up a modal list of every file in the
  * project (git ls-files inside a repo, a pruned find(1) otherwise, rooted
- * at the working directory), narrows it as you type, and opens the
- * highlighted file into the active pane on ENTER (reusing an already-open
- * buffer for that path rather than stacking a duplicate). ESC cancels.
- * See file_finder.c.
- * @param args Lisp arguments (unused)
+ * at `dir`, or else the current project, or else the working directory),
+ * narrows it as you type, and opens the highlighted file into the active
+ * pane on ENTER (reusing an already-open buffer for that path rather than
+ * stacking a duplicate). ESC cancels. See file_finder.c.
+ * @param args Lisp list of 0 or 1 arguments: ([dir])
  * @return lisp_null()
  */
 Lisp l_findFile(Lisp args, LispError *e, LispContext ctx) {
-  (void)args;
   (void)e;
   (void)ctx;
-  fileFinderOpen();
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING &&
+      lisp_string(lisp_car(args))[0] != '\0')
+    fileFinderOpenAt(lisp_string(lisp_car(args)));
+  else
+    fileFinderOpen();
   return lisp_null();
 }
 

@@ -109,6 +109,7 @@ src_files = files(
   'src/popup_ui.c',
   'src/subprocess.c',
   'src/async_process.c',
+  'src/project.c',
   'src/project_files.c',
   'src/project_search.c',
   'src/file_finder.c',

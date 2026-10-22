@@ -10,7 +10,6 @@ Lisp l_queryReplace(Lisp args, LispError *e, LispContext ctx);
 Lisp l_projectQueryReplace(Lisp args, LispError *e, LispContext ctx);
 Lisp l_projectSearchGoto(Lisp args, LispError *e, LispContext ctx);
 Lisp l_findFile(Lisp args, LispError *e, LispContext ctx);
-Lisp l_projectRoot(Lisp args, LispError *e, LispContext ctx);
 Lisp editorPromptLisp(Lisp args, LispError *e, LispContext ctx);
 
 Lisp l_syntaxDefineLanguage(Lisp args, LispError *e, LispContext ctx);
@@ -139,6 +138,9 @@ void bFree_structs(void);
 //   "lsp-ready"     ()                    — LSP handshake completed
 //   "buffer-killed" (name, buffer-id)     — a buffer was just killed
 //                                            (see bufferClose() in buffer.c)
+//   "project-open"  (root)                — a project became current for the
+//                                            first time this session, after
+//                                            its .beluga/init.lisp loaded
 Lisp addHook(Lisp args, LispError *e, LispContext ctx);
 void runHooks(const char *event_name, Lisp args);
 
