@@ -537,6 +537,9 @@ void editorProcessKeypress() {
   }
 
   if (executeKeyBind(keyToString(c))) {
+    // The binding may have killed `buf` (q in *packages*) or switched the
+    // pane to another buffer: look the active one up again.
+    buf = bufferFindById(splitScreenGetActivePane()->buffer_id);
     // "(" is usually bound (smart_delimiters inserts the pair), so it
     // never reaches the plain-insert path below.
     maybeRequestSignatureHelp(buf, c);
