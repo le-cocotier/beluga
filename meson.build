@@ -98,6 +98,7 @@ src_files = files(
   'src/completion.c',
   'src/jsonrpc_stream.c',
   'src/breakpoints.c',
+  'src/dap.c',
   'src/debug_ui.c',
   'src/lsp_ui.c',
   'src/buffer_switcher.c',

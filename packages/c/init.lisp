@@ -2,9 +2,16 @@
 ;; (add-package "c") — registers clangd for .c/.h files, plus a CTRL-d
 ;; line-comment toggle so the package demonstrates more than just LSP
 ;; wiring. Fork/extend with whatever else your C workflow needs.
+;;
+;; The debugger (F5): gdb 14 or later speaks the Debug Adapter Protocol
+;; itself (gdb -i dap); on macOS, where gdb is a pain, lldb-dap (Xcode's
+;; command line tools: xcrun -f lldb-dap, or Homebrew's llvm).
 
 (lsp-server "c" "c" "clangd")
 (lsp-server "h" "c" "clangd")
+(if (string=? (system-type) "darwin")
+    (begin (dap-adapter "c" "lldb-dap") (dap-adapter "h" "lldb-dap"))
+    (begin (dap-adapter "c" "gdb" "-q" "-i" "dap") (dap-adapter "h" "gdb" "-q" "-i" "dap")))
 
 (define (c--line-starts-with? s prefix)
   (let ((s-len (string-length s)) (p-len (string-length prefix)))

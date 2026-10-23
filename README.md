@@ -173,3 +173,39 @@ window. Several daemons can run side by side: `--daemon=work`, then `beluga -c -
 and `beluga --kill=work`. On Unix the windows reach the daemon through a socket in a private
 directory (`$XDG_RUNTIME_DIR/beluga/`, else `/tmp/beluga-<uid>/`); on Windows through a named
 pipe only the current user can open.
+
+### Debugging
+
+Beluga talks the Debug Adapter Protocol, so it debugs with whatever adapter a language has:
+`gdb` 14 or later for C (`gdb -i dap`), `lldb-dap` on macOS, `debugpy` for Python. Each
+language package names its adapter, like it names its language server:
+
+```lisp
+(dap-adapter "c" "gdb" "-q" "-i" "dap")   ; packages/c does this (lldb-dap on macOS)
+```
+
+| keybind      | command                                                  |
+|--------------|----------------------------------------------------------|
+| F9           | toggle a breakpoint on the cursor's line (Ctrl-x D c: with a condition) |
+| F5           | start (asks for the program and its arguments), or continue |
+| F10 / F11    | next line / step into                                    |
+| Shift-F11    | step out                                                 |
+| Shift-F5     | stop                                                     |
+| Ctrl-x D e   | evaluate an expression in the selected frame             |
+| Ctrl-x D g   | a command for the debugger itself (gdb's `info registers`) |
+| Ctrl-x D o   | everything the program printed                           |
+
+While the program is paused, the `*debug*` panel shows the call stack, the variables (ENTER
+selects a frame or opens a struct) and the end of the output; the gutter shows `▶` on the
+current line and `●` on breakpoints, which follow the code as you edit. For anything F5's
+prompt doesn't cover, hand the adapter its own launch arguments, e.g. in a project's
+`.beluga/init.lisp`:
+
+```lisp
+(define (debug-tests)
+  (debug-start '(("program" . "build/test_buffer") ("args" "-v")
+                 ("stopAtBeginningOfMainSubprogram" . #t))))
+```
+
+The hooks `debug-stopped` (path line reason) and `debug-exited` (exit-code) let a config react,
+and `debug-frames`, `debug-breakpoints` and `debug-state` read the session from Lisp.

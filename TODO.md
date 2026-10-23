@@ -80,6 +80,38 @@ left after the first step:
 
 ---
 
+## Debugger
+
+The Debug Adapter Protocol client (src/dap.c, src/debug_ui.c,
+src/breakpoints.c). What's left after the first step:
+
+- [ ] **[feature]** `runInTerminal`: run the program in a terminal pane,
+  for programs that read stdin or draw with curses. Today the adapter's
+  request is refused and the program's output arrives as output events
+  (`refuseRequest()` in `src/dap.c`).
+- [ ] **[feature]** Adapters reached over TCP (delve's `dlv dap`, codelldb,
+  js-debug) need a TCP connect in `os.h`; only stdio adapters work.
+- [ ] **[feature]** Attach to a running process (`attach` with a pid
+  picked from a list), exception breakpoints, watch expressions, values
+  inline after the code while paused (the inlay hint drawing could carry
+  them), logpoints and hit counts (gdb supports both).
+- [ ] **[feature]** Keep breakpoints across restarts, per project. Today
+  they last until beluga exits.
+- [ ] **[debt]** Daemon mode: one session for the whole daemon, and the
+  stopped line moves whichever window last typed. Give each project its
+  own session.
+- [ ] **[debt]** gdb sets the breakpoints before `launch` has loaded the
+  program (it runs the program as soon as `launch` arrives, see the comment
+  at the top of `src/dap.c`), so every session's output starts with "No
+  source file named …" and a pending breakpoint, which then resolves.
+- [ ] **[debt]** A breakpoint stays on its row when ENTER is pressed at
+  the very start of that row, so it ends up on the new empty line above
+  the code (`breakpointsLinesInserted()` callers in `src/buffer.c`).
+- [ ] **[debt]** Not tried yet with lldb-dap (macOS, Windows) or debugpy;
+  only gdb 15 on Linux is covered by `tools/pty_tests.py`.
+
+---
+
 ## Tooling and housekeeping
 
 Nothing open right now.

@@ -51,6 +51,7 @@
 (add-prefix "config")
 (add-prefix "help")
 (add-prefix "debug")
+(add-prefix "debug-view" #t) ; keys inside the *debug* panel
 (add-prefix "help-view" #t) ; keys inside *help* and *bindings*
 (add-prefix "settings-view" #t) ; keys inside *settings*
 
@@ -382,12 +383,44 @@
 (map-key "D" '(editor-set-prefix "debug") "user")
 (if (app-debug?) (map-key "m" memory-inspector "user"))
 
-;; debug (CTRL-x D): breakpoints (F9 toggles one too)
+;; debug — the usual IDE function keys, and the rest under CTRL-x D. The
+;; adapter for each language comes from its package (dap-adapter), e.g.
+;; gdb -i dap for C. F5 asks for the program to run; for anything more,
+;; (debug-start '(("program" . "build/app") ("args" "-v"))) passes the
+;; adapter's own launch arguments.
+(map-key "F5" debug-continue "no-prefix")       ; start, or continue
+(map-key "SHIFT-F5" debug-stop "no-prefix")
 (map-key "F9" debug-toggle-breakpoint "no-prefix")
+(map-key "F10" debug-next "no-prefix")
+(map-key "F11" debug-step-in "no-prefix")
+(map-key "SHIFT-F11" debug-step-out "no-prefix")
+(map-key "s" debug-start "debug")
+(map-key "q" debug-stop "debug")
+(map-key "p" debug-pause "debug")
 (map-key "b" debug-toggle-breakpoint "debug")
 (map-key "c" debug-breakpoint-condition "debug") ; stop only when an expression is true
 (map-key "l" debug-breakpoints "debug")          ; listed in *search*, ENTER jumps
 (map-key "x" debug-clear-breakpoints "debug")
+(map-key "e" debug-evaluate "debug")            ; an expression, in the selected frame
+(map-key "g" debug-command "debug")             ; a command for the debugger (gdb's own)
+(map-key "d" debug-panel "debug")
+(map-key "o" debug-output "debug")
+;; debug-view (inside *debug* and *debug-output*)
+(map-key "ENTER" debug-panel-select "debug-view") ; select a frame, open a variable
+(map-key "ARROW-UP" '(move-cursor "up") "debug-view")
+(map-key "ARROW-DOWN" '(move-cursor "down") "debug-view")
+(map-key "PAGE-UP" move-cursor-page-up "debug-view")
+(map-key "PAGE-DOWN" move-cursor-page-down "debug-view")
+(map-key "F5" debug-continue "debug-view")
+(map-key "SHIFT-F5" debug-stop "debug-view")
+(map-key "F10" debug-next "debug-view")
+(map-key "F11" debug-step-in "debug-view")
+(map-key "SHIFT-F11" debug-step-out "debug-view")
+(map-key "e" debug-evaluate "debug-view")
+(map-key "g" debug-command "debug-view")
+(map-key "o" debug-output "debug-view")
+(map-key "CTRL-x" '(editor-set-prefix "user") "debug-view")
+(map-key "ALT-x" execute-command "debug-view")
 
 ;; help
 (map-key "k" describe-key "help")

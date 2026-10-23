@@ -9,7 +9,9 @@ POSIX only. Exits 77 (meson's "skipped") when pyte isn't installed
 machine doesn't have (less, vim) is skipped on its own.
 """
 import os
+import re
 import shutil
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -17,6 +19,22 @@ import pty_harness  # noqa: E402
 from pty_harness import Beluga, run_tests  # noqa: E402
 
 CTRL_X = '\x18'
+DOWN = '\x1b[B'
+F5, SHIFT_F5, F9, F10 = '\x1b[15~', '\x1b[15;2~', '\x1b[20~', '\x1b[21~'
+
+DEBUGGEE = """#include <stdio.h>
+static int square(int v) {
+  int r = v * v;
+  return r;
+}
+int main(void) {
+  int i, total = 0;
+  for (i = 0; i < 3; i++)
+    total += square(i + 3);
+  printf("total %d\\n", total);
+  return total % 7;
+}
+"""
 
 
 class Skip(Exception):
@@ -183,7 +201,77 @@ def terminal_fast_typing(binary, repo):
         ed.quit()
 
 
+def breakpoint_gutter(binary, repo):
+    """F9 puts a breakpoint in the gutter; it moves down with a line
+    inserted above it, and F9 again takes it away."""
+    with Beluga(binary, repo) as ed:
+        with open(ed.path('t.c'), 'w') as f:
+            f.write(DEBUGGEE)
+        ed.start('t.c')
+        ed.wait_for('square')
+        ed.keys(DOWN, DOWN, F9)
+        ed.wait_for('Added breakpoint at line 3')
+        assert re.match(r'\s*3 ●', ed.text()[2]), ed.text()[2]
+        ed.keys('\x1b[A', '\x1b[A', '\r', delay=0.2)  # a line above it
+        ed.pump(0.3)
+        assert re.match(r'\s*4 ●', ed.text()[3]), ed.text()[:5]
+        ed.keys(DOWN, DOWN, F9)
+        ed.wait_for('Removed breakpoint at line 4')
+        assert '●' not in ''.join(ed.text())
+        ed.keys(CTRL_X, 'u', delay=0.3)  # undo the new line, quit unsaved
+        ed.quit()
+
+
+def gdb_with_dap():
+    """gdb 14 or later (it speaks the Debug Adapter Protocol), or None."""
+    gdb = shutil.which('gdb')
+    if not gdb or not shutil.which('cc'):
+        return None
+    out = subprocess.run([gdb, '--version'], capture_output=True, text=True).stdout
+    m = re.search(r'(\d+)\.\d+', out.splitlines()[0] if out else '')
+    return gdb if m and int(m.group(1)) >= 14 else None
+
+
+def debugger_gdb(binary, repo):
+    """A debug session against gdb -i dap: stop at a breakpoint, see the
+    stack and the variables, step, evaluate, run to the end."""
+    if not gdb_with_dap():
+        raise Skip('needs gdb 14 or later and cc')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        with open(ed.path('t.c'), 'w') as f:
+            f.write(DEBUGGEE)
+        subprocess.run(['cc', '-g', '-O0', '-o', ed.path('t'), ed.path('t.c')],
+                       check=True)
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "c" "gdb" "-q" "-i" "dap")\n')
+        ed.start('t.c')
+        ed.wait_for('square')
+        ed.keys(DOWN, DOWN, F9, F5)
+        ed.wait_for('Debug program:')
+        ed.write(ed.path('t') + '\r')
+        ed.wait_for('Arguments:')
+        ed.write('\r')
+        ed.wait_for('stopped (breakpoint)')
+        ed.wait_for('v = 3  (int)')
+        assert re.match(r'\s*3 ▶', ed.text()[2]), ed.text()[2]
+        assert any('#1 main  t.c:9' in line for line in ed.text()), ed.text()
+        ed.keys(F10)
+        ed.wait_for('r = 9  (int)')
+        assert re.match(r'\s*4 ▶', ed.text()[3]), ed.text()[3]
+        ed.keys(CTRL_X, 'D', 'e', delay=0.3)
+        ed.write('v * 10\r')
+        ed.wait_for('v * 10 = 30')
+        # The cursor followed the program to line 4: back up to the
+        # breakpoint and take it away, so the program runs to its end.
+        ed.keys('\x1b[A', F9, F5)
+        ed.wait_for('the program exited with code 1')
+        assert any('total 50' in line for line in ed.text()), ed.text()
+        ed.quit()
+
+
 TESTS = [
+    ('breakpoint-gutter', breakpoint_gutter),
+    ('debugger-gdb', debugger_gdb),
     ('tab-completion-list', tab_completion_list),
     ('terminal-alternate-screen', terminal_alternate_screen),
     ('terminal-vim', terminal_vim),

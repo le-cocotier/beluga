@@ -121,6 +121,7 @@ typedef struct theme
     char* COLOR_DEFAULT;
     char* COLOR_ADDED;   // diff "+" lines
     char* COLOR_REMOVED; // diff "-" lines
+    char* DEBUG_LINE_BACKGROUND; // the line the debugger stopped on
 } Theme;
 
 // Theme is nothing but these char* fields, freed in a loop (deInitEditor).

@@ -551,7 +551,10 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
                      : rowInlayHints(buf, file_row, &span, hint_at, hint_labels, 64);
         // A sticky row gets the cursor line's background: it's not where
         // it is in the file, and should look apart from the rows below.
-        if (is_cursor_line || is_sticky)
+        // The line the debugger stopped on outranks both.
+        if (!is_sticky && debug_path && debugUiIsCurrentLine(debug_path, file_row))
+            abAppend(ab, E.theme.DEBUG_LINE_BACKGROUND, (int) strlen(E.theme.DEBUG_LINE_BACKGROUND));
+        else if (is_cursor_line || is_sticky)
             abAppend(ab, E.theme.LINE_CURSOR_BACKGROUND, (int) strlen(E.theme.LINE_CURSOR_BACKGROUND));
         else
             abAppend(ab, E.theme.BACKGROUND_COLOR, (int) strlen(E.theme.BACKGROUND_COLOR));

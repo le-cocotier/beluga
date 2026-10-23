@@ -1,6 +1,7 @@
 #include "../include/init.h"
 #include "../include/breakpoints.h"
 #include "../include/builtins.h"
+#include "../include/dap.h"
 #include "../include/color.h"
 #include "../include/cJSON.h"
 #include "../include/completion.h"
@@ -202,6 +203,21 @@ void initBuiltins(void) {
   registerBuiltin("debug-breakpoint-condition", l_debugBreakpointCondition);
   registerBuiltin("debug-clear-breakpoints", l_debugClearBreakpoints);
   registerBuiltin("debug-breakpoints", l_debugBreakpoints);
+  registerBuiltin("dap-adapter", l_dapAdapter);
+  registerBuiltin("debug-start", l_debugStart);
+  registerBuiltin("debug-continue", l_debugContinue);
+  registerBuiltin("debug-stop", l_debugStop);
+  registerBuiltin("debug-next", l_debugNext);
+  registerBuiltin("debug-step-in", l_debugStepIn);
+  registerBuiltin("debug-step-out", l_debugStepOut);
+  registerBuiltin("debug-pause", l_debugPause);
+  registerBuiltin("debug-panel", l_debugPanel);
+  registerBuiltin("debug-panel-select", l_debugPanelSelect);
+  registerBuiltin("debug-output", l_debugOutput);
+  registerBuiltin("debug-evaluate", l_debugEvaluate);
+  registerBuiltin("debug-command", l_debugCommand);
+  registerBuiltin("debug-state", l_debugState);
+  registerBuiltin("debug-frames", l_debugFrames);
 #ifdef APP_DEBUG
   registerBuiltin("memory-inspector", l_memoryInspectorOpen);
   registerBuiltin("memory-inspector-refresh", l_memoryInspectorRefresh);
@@ -496,6 +512,7 @@ void initEditor() {
   E.theme.COLOR_DEFAULT = themeColor(ANSI_FG_RGB(171, 178, 191));
   E.theme.COLOR_ADDED = themeColor(ANSI_FG_RGB(152, 195, 121));
   E.theme.COLOR_REMOVED = themeColor(ANSI_FG_RGB(224, 108, 117));
+  E.theme.DEBUG_LINE_BACKGROUND = themeColor(ANSI_BG_RGB(77, 68, 38));
 
   E.projects = NULL;
   E.number_of_projects = 0;
@@ -535,6 +552,9 @@ void deInitEditor() {
   // free the project-search result list
   projectSearchFree();
 
+  // The debug session ends before the Lisp interpreter does.
+  dapFree();
+  debugBuiltinsFree();
   breakpointsFree();
 
   // write back ~/.beluga/projects, then free the list

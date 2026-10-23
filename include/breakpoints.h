@@ -19,6 +19,7 @@ typedef struct
     // What the debug adapter answered for it: 1 once it found code at that
     // line, 0 before a session has seen it (drawn hollow).
     int verified;
+    int id; // the adapter's id for it, 0 for none yet
 } Breakpoint;
 
 // Adds a breakpoint at `line` of `path`, or removes the one already there.

@@ -6,6 +6,10 @@
 ;; Needs pyright-langserver on PATH: `npm install -g pyright`.
 
 (lsp-server "py" "python" "pyright-langserver" "--stdio")
+;; The debugger (F5, with the script's path as the program): debugpy,
+;; `pip install debugpy`.
+(dap-adapter "py" (if (string=? (system-type) "windows") "python" "python3")
+             "-m" "debugpy.adapter")
 
 (define (python--line-starts-with? s prefix)
   (let ((s-len (string-length s)) (p-len (string-length prefix)))
