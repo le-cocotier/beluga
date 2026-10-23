@@ -95,6 +95,7 @@ src_files = files(
   'src/split_screen.c',
   'src/utf8.c',
   'src/completion.c',
+  'src/jsonrpc_stream.c',
   'src/lsp_ui.c',
   'src/buffer_switcher.c',
   'src/list_popup.c',

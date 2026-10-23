@@ -8,6 +8,7 @@
 #include "define.h"
 #include "lisp.h"
 #include "os.h"
+#include "jsonrpc_stream.h"
 
 typedef struct lsp_client_t LspClient;
 
@@ -281,9 +282,7 @@ struct lsp_client_t
     // The server, talking JSON-RPC over its stdin/stdout. NULL when none
     // is running.
     OsProc *proc;
-    char* recv_buf;
-    size_t recv_len;
-    size_t recv_cap;
+    JsonRpcStream recv; // what it sent that isn't a whole message yet
     int completion_just_arrived;
     int completion_requested;
     char language_id[32]; // set from the matching lspServerConfig_t at start
