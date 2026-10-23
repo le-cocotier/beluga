@@ -380,25 +380,26 @@
 (map-key ")" macro-end "user")
 (map-key "x" macro-run "user")
 (map-key "h" '(editor-set-prefix "help") "user")
-(map-key "D" '(editor-set-prefix "debug") "user")
+(map-key "B" '(editor-set-prefix "debug") "user")  ; B for bug
 (if (app-debug?) (map-key "m" memory-inspector "user"))
 
-;; debug — the usual IDE function keys, and the rest under CTRL-x D. The
-;; adapter for each language comes from its package (dap-adapter), e.g.
-;; gdb -i dap for C. F5 asks for the program to run; for anything more,
-;; (debug-start '(("program" . "build/app") ("args" "-v"))) passes the
-;; adapter's own launch arguments.
-(map-key "F5" debug-continue "no-prefix")       ; start, or continue
-(map-key "SHIFT-F5" debug-stop "no-prefix")
-(map-key "F9" debug-toggle-breakpoint "no-prefix")
-(map-key "F10" debug-next "no-prefix")
-(map-key "F11" debug-step-in "no-prefix")
-(map-key "SHIFT-F11" debug-step-out "no-prefix")
-(map-key "s" debug-start "debug")
+;; debug — everything under CTRL-x B, and one letter each inside the
+;; *debug* panel. No function keys: on a Mac the F-row is media keys
+;; unless fn is held, and F11 is Show Desktop even then (bind them in
+;; personal-config if your keyboard has them: (map-key "F5" debug-continue
+;; "no-prefix")). The adapter for each language comes from its package
+;; (dap-adapter), e.g. gdb -i dap for C. CTRL-x B c asks for the program to
+;; run; for anything more, (debug-start '(("program" . "build/app") ("args"
+;; "-v"))) passes the adapter's own launch arguments.
+(map-key "c" debug-continue "debug")            ; start (asks for the program), or continue
+(map-key "n" debug-next "debug")
+(map-key "i" debug-step-in "debug")
+(map-key "u" debug-step-out "debug")
 (map-key "q" debug-stop "debug")
 (map-key "p" debug-pause "debug")
+(map-key "s" debug-start "debug")
 (map-key "b" debug-toggle-breakpoint "debug")
-(map-key "c" debug-breakpoint-condition "debug") ; stop only when an expression is true
+(map-key "k" debug-breakpoint-condition "debug") ; stop only when an expression is true
 (map-key "l" debug-breakpoints "debug")          ; listed in *search*, ENTER jumps
 (map-key "x" debug-clear-breakpoints "debug")
 (map-key "e" debug-evaluate "debug")            ; an expression, in the selected frame
@@ -411,11 +412,12 @@
 (map-key "ARROW-DOWN" '(move-cursor "down") "debug-view")
 (map-key "PAGE-UP" move-cursor-page-up "debug-view")
 (map-key "PAGE-DOWN" move-cursor-page-down "debug-view")
-(map-key "F5" debug-continue "debug-view")
-(map-key "SHIFT-F5" debug-stop "debug-view")
-(map-key "F10" debug-next "debug-view")
-(map-key "F11" debug-step-in "debug-view")
-(map-key "SHIFT-F11" debug-step-out "debug-view")
+(map-key "c" debug-continue "debug-view")
+(map-key "n" debug-next "debug-view")
+(map-key "i" debug-step-in "debug-view")
+(map-key "u" debug-step-out "debug-view")
+(map-key "q" debug-stop "debug-view")
+(map-key "p" debug-pause "debug-view")
 (map-key "e" debug-evaluate "debug-view")
 (map-key "g" debug-command "debug-view")
 (map-key "o" debug-output "debug-view")

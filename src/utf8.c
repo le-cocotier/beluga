@@ -48,6 +48,18 @@ static int functionKeyFromTilde(const int number)
 }
 
 /**
+ * @brief Shift+F5-F12 as Terminal.app sends them: the VT220's F13-F20
+ * codes (25, 26, 28, 29, 31-34), with no modifier. -1 for any other.
+ */
+static int shiftedFunctionKeyFromTilde(const int number)
+{
+    if (number == 25 || number == 26) return number - 25 + 4;  // S-F5, S-F6
+    if (number == 28 || number == 29) return number - 28 + 6;  // S-F7, S-F8
+    if (number >= 31 && number <= 34) return number - 31 + 8;  // S-F9-S-F12
+    return -1;
+}
+
+/**
  * @fn readUtf8Char
  * @brief get an utf8 char in keyboard input.
  *
@@ -193,8 +205,11 @@ Utf8Char* readUtf8Char(void) {
                         case 6: new_char->character[0] = PAGE_DOWN;         break;
                         default:
                             // F1-F12: 11-15, 17-21, 23, 24 (the gaps are
-                            // history); Insert (2) and the rest are unbound.
+                            // history); Shift+F5-F12 on Terminal.app: 25-34;
+                            // Insert (2) and the rest are unbound.
                             fkey = functionKeyFromTilde(number);
+                            if (fkey < 0 && (fkey = shiftedFunctionKeyFromTilde(number)) >= 0)
+                                is_shift = 1;
                             if (fkey >= 0)
                                 new_char->character[0] = (unsigned char)
                                     ((is_shift ? SHIFT_FUNCTION_KEY : FUNCTION_KEY) + fkey);

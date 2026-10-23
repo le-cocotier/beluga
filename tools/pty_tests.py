@@ -20,7 +20,7 @@ from pty_harness import Beluga, run_tests  # noqa: E402
 
 CTRL_X = '\x18'
 DOWN = '\x1b[B'
-F5, SHIFT_F5, F9, F10 = '\x1b[15~', '\x1b[15;2~', '\x1b[20~', '\x1b[21~'
+DEBUG = (CTRL_X, 'B')  # the debugger's prefix: DEBUG + ('b',) toggles a breakpoint
 
 DEBUGGEE = """#include <stdio.h>
 static int square(int v) {
@@ -202,20 +202,20 @@ def terminal_fast_typing(binary, repo):
 
 
 def breakpoint_gutter(binary, repo):
-    """F9 puts a breakpoint in the gutter; it moves down with a line
-    inserted above it, and F9 again takes it away."""
+    """CTRL-x B b puts a breakpoint in the gutter; it moves down with a
+    line inserted above it, and CTRL-x B b again takes it away."""
     with Beluga(binary, repo) as ed:
         with open(ed.path('t.c'), 'w') as f:
             f.write(DEBUGGEE)
         ed.start('t.c')
         ed.wait_for('square')
-        ed.keys(DOWN, DOWN, F9)
+        ed.keys(DOWN, DOWN, *DEBUG, 'b')
         ed.wait_for('Added breakpoint at line 3')
         assert re.match(r'\s*3 ●', ed.text()[2]), ed.text()[2]
         ed.keys('\x1b[A', '\x1b[A', '\r', delay=0.2)  # a line above it
         ed.pump(0.3)
         assert re.match(r'\s*4 ●', ed.text()[3]), ed.text()[:5]
-        ed.keys(DOWN, DOWN, F9)
+        ed.keys(DOWN, DOWN, *DEBUG, 'b')
         ed.wait_for('Removed breakpoint at line 4')
         assert '●' not in ''.join(ed.text())
         ed.keys(CTRL_X, 'u', delay=0.3)  # undo the new line, quit unsaved
@@ -232,46 +232,85 @@ def gdb_with_dap():
     return gdb if m and int(m.group(1)) >= 14 else None
 
 
-def debugger_gdb(binary, repo):
-    """A debug session against gdb -i dap: stop at a breakpoint, see the
-    stack and the variables, step, evaluate, run to the end."""
-    if not gdb_with_dap():
-        raise Skip('needs gdb 14 or later and cc')
+def debug_session(binary, repo, config):
+    """A debug session with the adapter `config` (Lisp for personal-config)
+    sets up: stop at a breakpoint, see the stack and the variables, step,
+    evaluate, run to the end. The files are reached through HOME, which on
+    macOS is under /var, a link to /private/var."""
     with Beluga(binary, repo, rows=30, cols=120) as ed:
         with open(ed.path('t.c'), 'w') as f:
             f.write(DEBUGGEE)
         subprocess.run(['cc', '-g', '-O0', '-o', ed.path('t'), ed.path('t.c')],
                        check=True)
         with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
-            f.write('\n(dap-adapter "c" "gdb" "-q" "-i" "dap")\n')
+            f.write('\n' + config + '\n')
         ed.start('t.c')
         ed.wait_for('square')
-        ed.keys(DOWN, DOWN, F9, F5)
+        ed.keys(DOWN, DOWN, *DEBUG, 'b')
+        ed.keys(*DEBUG, 'c')
         ed.wait_for('Debug program:')
         ed.write(ed.path('t') + '\r')
         ed.wait_for('Arguments:')
         ed.write('\r')
-        ed.wait_for('stopped (breakpoint)')
+        ed.wait_for('stopped (breakpoint)', 20)
         ed.wait_for('v = 3  (int)')
         assert re.match(r'\s*3 ▶', ed.text()[2]), ed.text()[2]
         assert any('#1 main  t.c:9' in line for line in ed.text()), ed.text()
-        ed.keys(F10)
+        ed.keys(*DEBUG, 'n')
         ed.wait_for('r = 9  (int)')
         assert re.match(r'\s*4 ▶', ed.text()[3]), ed.text()[3]
-        ed.keys(CTRL_X, 'D', 'e', delay=0.3)
+        ed.keys(*DEBUG, 'e', delay=0.3)
         ed.write('v * 10\r')
         ed.wait_for('v * 10 = 30')
         # The cursor followed the program to line 4: back up to the
         # breakpoint and take it away, so the program runs to its end.
-        ed.keys('\x1b[A', F9, F5)
+        ed.keys('\x1b[A', *DEBUG, 'b')
+        ed.keys(*DEBUG, 'c')
         ed.wait_for('the program exited with code 1')
         assert any('total 50' in line for line in ed.text()), ed.text()
+        ed.quit()
+
+
+def debugger_gdb(binary, repo):
+    """The session against gdb -i dap."""
+    if sys.platform == 'darwin':
+        raise Skip('gdb on macOS needs code signing to run programs')
+    if not gdb_with_dap():
+        raise Skip('needs gdb 14 or later and cc')
+    debug_session(binary, repo, '(dap-adapter "c" "gdb" "-q" "-i" "dap")')
+
+
+def debugger_lldb(binary, repo):
+    """The session against lldb-dap, as packages/c sets it up on macOS."""
+    if sys.platform != 'darwin' or not shutil.which('cc'):
+        raise Skip('macOS only')
+    if subprocess.run(['xcrun', '-f', 'lldb-dap'], capture_output=True).returncode != 0:
+        raise Skip('no lldb-dap (Xcode command line tools)')
+    debug_session(binary, repo, '(define LSP #f)\n(add-package "c")')
+
+
+def terminal_app_shift_function_keys(binary, repo):
+    """Terminal.app sends Shift+F5-F12 as the VT220's F13-F20 codes
+    (ESC [25~ ... ESC [34~); xterm and iTerm2 send ESC [15;2~."""
+    with Beluga(binary, repo) as ed:
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(map-key "SHIFT-F5" \'(editor-insert-char "A") "no-prefix")'
+                    '\n(map-key "SHIFT-F11" \'(editor-insert-char "B") "no-prefix")'
+                    '\n(map-key "SHIFT-F12" \'(editor-insert-char "C") "no-prefix")\n')
+        with open(ed.path('k.txt'), 'w') as f:
+            f.write('\n')
+        ed.start('k.txt')
+        ed.keys('\x1b[25~', '\x1b[33~', '\x1b[34~', '\x1b[15;2~', delay=0.3)
+        ed.wait_for('ABCA')
+        ed.keys(CTRL_X, 'u', CTRL_X, 'u', CTRL_X, 'u', CTRL_X, 'u', delay=0.2)
         ed.quit()
 
 
 TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
     ('debugger-gdb', debugger_gdb),
+    ('debugger-lldb', debugger_lldb),
+    ('terminal-app-shift-function-keys', terminal_app_shift_function_keys),
     ('tab-completion-list', tab_completion_list),
     ('terminal-alternate-screen', terminal_alternate_screen),
     ('terminal-vim', terminal_vim),

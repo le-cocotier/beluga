@@ -53,8 +53,10 @@ typedef struct dap_var_t
 // ── Adapters ────────────────────────────────────────────────────────────────
 // Registers the adapter command for files with extension `ext` (the first
 // registration for an extension wins, like lsp-server). argv is copied.
+// launch_defaults (a JSON object, or NULL) fills in the launch arguments
+// a session doesn't give itself.
 // @return 0, or -1 when the table is full.
-int dapRegisterAdapter(const char *ext, const char *const *argv);
+int dapRegisterAdapter(const char *ext, const char *const *argv, const char *launch_defaults);
 
 // ── Session ─────────────────────────────────────────────────────────────────
 // Starts the adapter registered for `ext` (NULL or "": the active buffer's

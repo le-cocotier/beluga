@@ -177,12 +177,17 @@ Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx) {
 
 // ─── Adapters and the session ───────────────────────────────────────────────
 
+static int isAlist(Lisp l);
+static cJSON *lispToJson(Lisp v);
+
 /**
  * @brief Lisp function: register a debug adapter
- * @details (dap-adapter "ext" "program" "arg" ...) — the command that
- * debugs programs written in files with extension "ext", e.g.
+ * @details (dap-adapter "ext" "program" "arg" ... [launch-defaults]) — the
+ * command that debugs programs written in files with extension "ext", e.g.
  * (dap-adapter "c" "gdb" "-i" "dap"). The first registration for an
- * extension wins, like lsp-server.
+ * extension wins, like lsp-server. An association list at the end gives
+ * launch arguments for every session that doesn't set them itself:
+ *   (dap-adapter "c" "xcrun" "lldb-dap" '(("sourceMap" ("/tmp" . "/private/tmp"))))
  * @return lisp_null()
  */
 Lisp l_dapAdapter(Lisp args, LispError *e, LispContext ctx) {
@@ -190,22 +195,43 @@ Lisp l_dapAdapter(Lisp args, LispError *e, LispContext ctx) {
   const char *ext;
   int argc = 0;
   Lisp it;
+  Lisp defaults = lisp_null();
+  cJSON *json;
+  char *text = NULL;
   (void)ctx;
   if (!lisp_is_pair(args) || !lisp_is_pair(lisp_cdr(args))) {
     *e = LISP_ERROR_TOO_FEW_ARGS;
     return lisp_null();
   }
-  for (it = args; lisp_is_pair(it); it = lisp_cdr(it))
-    if (lisp_type(lisp_car(it)) != LISP_STRING) {
+  if (lisp_type(lisp_car(args)) != LISP_STRING) {
+    *e = LISP_ERROR_ARG_TYPE;
+    return lisp_null();
+  }
+  for (it = lisp_cdr(args); lisp_is_pair(it); it = lisp_cdr(it)) {
+    if (!lisp_is_pair(lisp_cdr(it)) && isAlist(lisp_car(it)))
+      defaults = lisp_car(it);
+    else if (lisp_type(lisp_car(it)) != LISP_STRING) {
       *e = LISP_ERROR_ARG_TYPE;
       return lisp_null();
     }
+  }
   ext = lisp_string(lisp_car(args));
   for (it = lisp_cdr(args); lisp_is_pair(it) && argc < 8; it = lisp_cdr(it))
-    argv[argc++] = lisp_string(lisp_car(it));
+    if (lisp_type(lisp_car(it)) == LISP_STRING)
+      argv[argc++] = lisp_string(lisp_car(it));
   argv[argc] = NULL;
-  if (dapRegisterAdapter(ext, argv) != 0)
+  if (argc == 0) {
+    *e = LISP_ERROR_TOO_FEW_ARGS;
+    return lisp_null();
+  }
+  if (lisp_is_pair(defaults)) {
+    json = lispToJson(defaults);
+    text = json ? cJSON_PrintUnformatted(json) : NULL;
+    cJSON_Delete(json);
+  }
+  if (dapRegisterAdapter(ext, argv, text) != 0)
     editorSetStatusMessage("dap-adapter: too many adapters, ignoring .%s", ext);
+  gfree(text);
   return lisp_null();
 }
 
@@ -396,7 +422,7 @@ Lisp l_debugStart(Lisp args, LispError *e, LispContext ctx) {
 
 /**
  * @brief Lisp function: continue the paused program, or start one
- * @details (debug-continue) — what F5 does: without a session, it's
+ * @details (debug-continue) — what CTRL-x B c does: without a session, it's
  * (debug-start).
  * @return lisp_null()
  */

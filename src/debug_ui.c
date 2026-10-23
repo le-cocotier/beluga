@@ -250,7 +250,7 @@ static void renderPanel(struct buffer_t *buf) {
     if (dapExitCode() >= 0)
       snprintf(line, sizeof(line), "Not debugging: the program exited with code %d", dapExitCode());
     else
-      snprintf(line, sizeof(line), "Not debugging. F5 starts (asks for the program to run)");
+      snprintf(line, sizeof(line), "Not debugging. c starts (asks for the program to run)");
     break;
   case DAP_STARTING:
     snprintf(line, sizeof(line), "%s · starting", dapAdapterName());
@@ -263,7 +263,7 @@ static void renderPanel(struct buffer_t *buf) {
     break;
   }
   addText(buf, line);
-  addText(buf, "F5 go  F10 next  F11 in  S-F11 out  S-F5 stop");
+  addText(buf, "c go  n next  i in  u out  q stop  p pause");
   addText(buf, "ENTER select/open  e evaluate  o output");
 
   if (state == DAP_STOPPED) {

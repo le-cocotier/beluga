@@ -64,6 +64,7 @@ typedef struct
 {
     char ext[16];
     char *argv[DAP_MAX_ARGS + 1];
+    char *launch_defaults; // JSON object, or NULL
 } DapAdapter;
 
 // What a request filling the variables tree needs to find its node again.
@@ -654,7 +655,12 @@ static void onStackTrace(cJSON *response, void *ctx) {
     s.frames[i].id = (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(item, "id"));
     s.frames[i].name = jsonString(item, "name");
     source = cJSON_GetObjectItemCaseSensitive(item, "source");
-    s.frames[i].path = jsonString(source, "path");
+    // A source with a sourceReference only exists inside the adapter
+    // (lldb-dap's disassembly, "/usr/lib/dyld`start"): no file to open.
+    if (cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(source, "sourceReference")) > 0)
+      s.frames[i].path = NULL;
+    else
+      s.frames[i].path = jsonString(source, "path");
     s.frames[i].line =
         (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(item, "line")) - 1;
     if (s.frames[i].line < 0)
@@ -712,6 +718,8 @@ static void onEvaluate(cJSON *response, void *ctx) {
   const char *expression = ctx;
   const char *result;
   char *line;
+  char first[256];
+  size_t len;
   if (responseOk(response)) {
     result = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(
         cJSON_GetObjectItemCaseSensitive(response, "body"), "result"));
@@ -725,7 +733,15 @@ static void onEvaluate(cJSON *response, void *ctx) {
     outputAppend(line);
     gfree(line);
   }
-  editorSetStatusMessage("%s = %s", expression, result);
+  // The status bar has one line: lldb's errors come after a warning and
+  // are followed by the expression, so the "error:" line if there is one.
+  if (strstr(result, "error:"))
+    result = strstr(result, "error:");
+  len = strcspn(result, "\r\n");
+  // (editorSetStatusMessage's own printf has no "%.*s".)
+  snprintf(first, sizeof(first), "%.*s", (int)len, result);
+  editorSetStatusMessage("%s = %s%s", expression, first,
+                         result[len + strspn(result + len, "\r\n")] ? " (o: all of it)" : "");
   debugUiRefresh();
 }
 
@@ -759,10 +775,17 @@ static void refuseRequest(cJSON *request) {
 static void onStopped(cJSON *body) {
   cJSON *thread = cJSON_GetObjectItemCaseSensitive(body, "threadId");
   const char *reason = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(body, "reason"));
+  const char *description =
+      cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(body, "description"));
   cJSON *args;
   int *gen;
   if (cJSON_IsNumber(thread))
     s.thread_id = thread->valueint;
+  // An "exception" says more in its description: lldb's crashes
+  // ("EXC_BAD_ACCESS (code=1, address=0x0)"), and its pauses, which are a
+  // "signal SIGSTOP".
+  if (reason && !strcmp(reason, "exception") && description && *description)
+    reason = description;
   snprintf(s.stop_reason, sizeof(s.stop_reason), "%s", reason ? reason : "paused");
   s.state = DAP_STOPPED;
   outputFlushPartial();
@@ -895,8 +918,8 @@ void dapPoll(void) {
 static int requireStopped(void) {
   if (s.state == DAP_STOPPED)
     return 1;
-  editorSetStatusMessage(s.state == DAP_OFF ? "No debug session (F5 starts one)"
-                                            : "The program is running (CTRL-x d p pauses it)");
+  editorSetStatusMessage(s.state == DAP_OFF ? "No debug session (CTRL-x B c starts one)"
+                                            : "The program is running (CTRL-x B p pauses it)");
   return 0;
 }
 
@@ -926,7 +949,7 @@ void dapPause(void) {
 void dapEvaluate(const char *expression, const int repl) {
   cJSON *args;
   if (s.state == DAP_OFF) {
-    editorSetStatusMessage("No debug session (F5 starts one)");
+    editorSetStatusMessage("No debug session (CTRL-x B c starts one)");
     return;
   }
   args = cJSON_CreateObject();
@@ -943,7 +966,7 @@ void dapEvaluate(const char *expression, const int repl) {
  *
  **********************************************************************************************************************/
 
-int dapRegisterAdapter(const char *ext, const char *const *argv) {
+int dapRegisterAdapter(const char *ext, const char *const *argv, const char *launch_defaults) {
   DapAdapter *a;
   int i;
   for (i = 0; i < s_adapter_count; i++)
@@ -956,7 +979,30 @@ int dapRegisterAdapter(const char *ext, const char *const *argv) {
   snprintf(a->ext, sizeof(a->ext), "%s", ext);
   for (i = 0; i < DAP_MAX_ARGS && argv[i]; i++)
     a->argv[i] = utilStrdup(argv[i]);
+  a->launch_defaults = launch_defaults ? utilStrdup(launch_defaults) : NULL;
   return 0;
+}
+
+// The adapter's own launch defaults, for what `launch` doesn't set.
+static void addLaunchDefaults(cJSON *launch, const DapAdapter *adapter) {
+  cJSON *defaults = adapter->launch_defaults ? cJSON_Parse(adapter->launch_defaults) : NULL;
+  cJSON *item;
+  cJSON_ArrayForEach(item, defaults) {
+    if (item->string && !cJSON_GetObjectItemCaseSensitive(launch, item->string))
+      cJSON_AddItemToObject(launch, item->string, cJSON_Duplicate(item, 1));
+  }
+  cJSON_Delete(defaults);
+}
+
+// What the panel calls the adapter: its program, or the one a launcher
+// such as xcrun or env runs.
+static const char *adapterName(const DapAdapter *adapter) {
+  const char *name = adapter->argv[0];
+  const char *slash = strrchr(name, '/');
+  name = slash ? slash + 1 : name;
+  if ((!strcmp(name, "xcrun") || !strcmp(name, "env")) && adapter->argv[1])
+    return adapter->argv[1];
+  return name;
 }
 
 /**
@@ -996,7 +1042,7 @@ int dapStart(const char *ext, const char *launch_json) {
   int count;
   int i;
   if (s.state != DAP_OFF) {
-    editorSetStatusMessage("A debug session is already running (SHIFT-F5 stops it)");
+    editorSetStatusMessage("A debug session is already running (CTRL-x B q stops it)");
     return -1;
   }
   adapter = findAdapter(ext);
@@ -1013,6 +1059,7 @@ int dapStart(const char *ext, const char *launch_json) {
   root = projectRootOrCwd();
   if (root && !cJSON_GetObjectItemCaseSensitive(launch, "cwd"))
     cJSON_AddStringToObject(launch, "cwd", root);
+  addLaunchDefaults(launch, adapter);
 
   // stdin/stdout carry the protocol; the adapter's stderr goes where the
   // language servers' does (discarded, or the debug log).
@@ -1043,7 +1090,7 @@ int dapStart(const char *ext, const char *launch_json) {
   s.launch = launch;
   s.launch_at = 0;
   s.state = DAP_STARTING;
-  snprintf(s.adapter, sizeof(s.adapter), "%s", adapter->argv[0]);
+  snprintf(s.adapter, sizeof(s.adapter), "%s", adapterName(adapter));
   outputClear();
   all = breakpointsAll(&count);
   for (i = 0; i < count; i++)
@@ -1075,8 +1122,10 @@ void dapFree(void) {
   outputClear();
   jsonRpcStreamFree(&s.recv);
   breakpointsSetListener(NULL);
-  for (i = 0; i < s_adapter_count; i++)
+  for (i = 0; i < s_adapter_count; i++) {
     for (j = 0; j < DAP_MAX_ARGS && s_adapters[i].argv[j]; j++)
       gfree(s_adapters[i].argv[j]);
+    gfree(s_adapters[i].launch_defaults);
+  }
   s_adapter_count = 0;
 }

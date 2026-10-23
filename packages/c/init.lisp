@@ -3,14 +3,22 @@
 ;; line-comment toggle so the package demonstrates more than just LSP
 ;; wiring. Fork/extend with whatever else your C workflow needs.
 ;;
-;; The debugger (F5): gdb 14 or later speaks the Debug Adapter Protocol
-;; itself (gdb -i dap); on macOS, where gdb is a pain, lldb-dap (Xcode's
-;; command line tools: xcrun -f lldb-dap, or Homebrew's llvm).
+;; The debugger (CTRL-x B): gdb 14 or later speaks the Debug Adapter Protocol
+;; itself (gdb -i dap); on macOS, where gdb is a pain, lldb-dap from
+;; Xcode's command line tools. It isn't on PATH there, so it goes through
+;; xcrun; for Homebrew's llvm instead, (dap-adapter "c" "lldb-dap") in
+;; personal-config.
 
 (lsp-server "c" "c" "clangd")
 (lsp-server "h" "c" "clangd")
+;; /tmp and /var are links into /private on macOS: the debug info has the
+;; path a file was compiled by, beluga the real one, and lldb only places a
+;; breakpoint where they match. The source map makes them the same.
+(define c--lldb-launch
+  '(("sourceMap" ("/tmp" . "/private/tmp") ("/var" . "/private/var") ("/etc" . "/private/etc"))))
 (if (string=? (system-type) "darwin")
-    (begin (dap-adapter "c" "lldb-dap") (dap-adapter "h" "lldb-dap"))
+    (begin (dap-adapter "c" "xcrun" "lldb-dap" c--lldb-launch)
+           (dap-adapter "h" "xcrun" "lldb-dap" c--lldb-launch))
     (begin (dap-adapter "c" "gdb" "-q" "-i" "dap") (dap-adapter "h" "gdb" "-q" "-i" "dap")))
 
 (define (c--line-starts-with? s prefix)
