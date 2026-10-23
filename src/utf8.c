@@ -36,6 +36,18 @@ static int readKeyBytes(void *buf, const int n)
 }
 
 /**
+ * @brief Which function key (0 for F1 ... 11 for F12) sends CSI <number> ~,
+ * or -1 for none.
+ */
+static int functionKeyFromTilde(const int number)
+{
+    if (number >= 11 && number <= 15) return number - 11;      // F1-F5
+    if (number >= 17 && number <= 21) return number - 17 + 5;  // F6-F10
+    if (number == 23 || number == 24) return number - 23 + 10; // F11, F12
+    return -1;
+}
+
+/**
  * @fn readUtf8Char
  * @brief get an utf8 char in keyboard input.
  *
@@ -52,6 +64,8 @@ Utf8Char* readUtf8Char(void) {
     char final;
     int is_alt;
     int is_ctrl;
+    int is_shift;
+    int fkey;
     int number;
     int modifier;
     int in_modifier;
@@ -166,6 +180,7 @@ Utf8Char* readUtf8Char(void) {
                 }
                 is_alt = (modifier == 3 || modifier == 9);
                 is_ctrl = (modifier == 5);
+                is_shift = (modifier == 2);
 
                 if (final == '~')
                 {
@@ -176,7 +191,16 @@ Utf8Char* readUtf8Char(void) {
                         case 4: case 8: new_char->character[0] = END_LINE;  break;
                         case 5: new_char->character[0] = PAGE_UP;           break;
                         case 6: new_char->character[0] = PAGE_DOWN;         break;
-                        default: new_char->character[0] = UNKNOWN_KEY;      break; // F-keys, Insert, ...
+                        default:
+                            // F1-F12: 11-15, 17-21, 23, 24 (the gaps are
+                            // history); Insert (2) and the rest are unbound.
+                            fkey = functionKeyFromTilde(number);
+                            if (fkey >= 0)
+                                new_char->character[0] = (unsigned char)
+                                    ((is_shift ? SHIFT_FUNCTION_KEY : FUNCTION_KEY) + fkey);
+                            else
+                                new_char->character[0] = UNKNOWN_KEY;
+                            break;
                     }
                 }
                 else
@@ -191,6 +215,11 @@ Utf8Char* readUtf8Char(void) {
                         case 'B': new_char->character[0] = ARROW_DOWN; break;
                         case 'H': new_char->character[0] = BEG_LINE;   break;
                         case 'F': new_char->character[0] = END_LINE;   break;
+                        // \x1b[1;2P: xterm's Shift+F1-F4.
+                        case 'P': case 'Q': case 'R': case 'S':
+                            new_char->character[0] = (unsigned char)
+                                ((is_shift ? SHIFT_FUNCTION_KEY : FUNCTION_KEY) + (final - 'P'));
+                            break;
                         default:  new_char->character[0] = UNKNOWN_KEY; break;
                     }
                 }
@@ -215,6 +244,10 @@ Utf8Char* readUtf8Char(void) {
             {
                 case 'H': new_char->character[0] = BEG_LINE; break;
                 case 'F': new_char->character[0] = END_LINE; break;
+                // \x1bOP-\x1bOS: F1-F4 on xterm and most terminals.
+                case 'P': case 'Q': case 'R': case 'S':
+                    new_char->character[0] = (unsigned char)(FUNCTION_KEY + (seq1 - 'P'));
+                    break;
                 default:  new_char->character[0] = '\x1b';   break;
             }
         }
@@ -729,10 +762,10 @@ int utf8IsPrintable(const Utf8Char* c)
         if (ch < 0x20 || ch == 0x7F)
             return 0;
 
-        // Synthetic sentinel range reserved for ARROW_UP/PAGE_DOWN/etc
-        // (0x80-0x8F) — see define.h. These are never real printable text,
+        // Synthetic sentinel range reserved for ARROW_UP/PAGE_DOWN/F5/etc
+        // (0x80-0xBF) — see define.h. These are never real printable text,
         // even though they're single-byte and >= 0x20.
-        if (ch >= 0x80 && ch <= 0x8F)
+        if (ch >= 0x80 && ch <= 0xBF)
             return 0;
 
         return 1; // plain printable ASCII

@@ -811,6 +811,18 @@ static int vkSequence(const WORD vk, const DWORD state, char *out, const size_t 
     case VK_DELETE: tilde = 3; break;
     case VK_PRIOR:  tilde = 5; break;
     case VK_NEXT:   tilde = 6; break;
+    case VK_F1:  tilde = 11; break;
+    case VK_F2:  tilde = 12; break;
+    case VK_F3:  tilde = 13; break;
+    case VK_F4:  tilde = 14; break;
+    case VK_F5:  tilde = 15; break;
+    case VK_F6:  tilde = 17; break;
+    case VK_F7:  tilde = 18; break;
+    case VK_F8:  tilde = 19; break;
+    case VK_F9:  tilde = 20; break;
+    case VK_F10: tilde = 21; break;
+    case VK_F11: tilde = 23; break;
+    case VK_F12: tilde = 24; break;
     default:        return 0;
     }
     if (state & SHIFT_PRESSED) mod += 1;

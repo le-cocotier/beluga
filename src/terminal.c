@@ -143,7 +143,14 @@ char* keyToString(const Utf8Char* key)
         case ALT_X:       strcpy(key_str, "ALT-x");       break;
         case '\x1b':      strcpy(key_str, "ESCAPE");      break;
         default:
-            if (key->length > 1)
+            if (key->length == 1 && IS_FUNCTION_KEY(c))
+            {
+                if (c >= SHIFT_FUNCTION_KEY)
+                    snprintf(key_str, sizeof(key_str), "SHIFT-F%d", c - SHIFT_FUNCTION_KEY + 1);
+                else
+                    snprintf(key_str, sizeof(key_str), "F%d", c - FUNCTION_KEY + 1);
+            }
+            else if (key->length > 1)
             {
                 /* Genuine multi-byte UTF-8 codepoint: bytes are already
                    stored raw in key->character, no re-encoding needed. */

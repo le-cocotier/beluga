@@ -78,6 +78,13 @@
 #define UNKNOWN_KEY      0x8F   // a recognized-but-unbound sequence (F-keys, Insert, ...):
                                 // not printable, so it does nothing instead of
                                 // being typed or acting as ESC
+// Function keys: F1-F12 are FUNCTION_KEY + 0..11 ("F1".."F12" to map-key),
+// Shift+F1-F12 SHIFT_FUNCTION_KEY + 0..11 ("SHIFT-F1".."SHIFT-F12"). Like
+// the keys above, they sit in 0x80-0xBF, where no UTF-8 character starts.
+#define FUNCTION_KEY        0x90
+#define SHIFT_FUNCTION_KEY  0xA0
+#define IS_FUNCTION_KEY(c)  (((c) >= FUNCTION_KEY && (c) < FUNCTION_KEY + 12) || \
+                             ((c) >= SHIFT_FUNCTION_KEY && (c) < SHIFT_FUNCTION_KEY + 12))
 
 #define BACKSPACE    127    // 0x7F (DEL byte many terminals send for Backspace)
 
