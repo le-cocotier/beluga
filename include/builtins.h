@@ -12,6 +12,12 @@ Lisp l_projectSearchGoto(Lisp args, LispError *e, LispContext ctx);
 Lisp l_findFile(Lisp args, LispError *e, LispContext ctx);
 Lisp editorPromptLisp(Lisp args, LispError *e, LispContext ctx);
 
+// The debugger (builtins_debug.c)
+Lisp l_debugToggleBreakpoint(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugBreakpointCondition(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugClearBreakpoints(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx);
+
 Lisp l_syntaxDefineLanguage(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddKeyword(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx);

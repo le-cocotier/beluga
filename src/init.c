@@ -1,4 +1,5 @@
 #include "../include/init.h"
+#include "../include/breakpoints.h"
 #include "../include/builtins.h"
 #include "../include/color.h"
 #include "../include/cJSON.h"
@@ -197,6 +198,10 @@ void initBuiltins(void) {
   registerBuiltin("current-buffer-id", l_currentBufferId);
   registerBuiltin("editor-message", l_editorMessage);
   registerBuiltin("editor-scratch-set-prefix", l_editorScratchSetPrefix);
+  registerBuiltin("debug-toggle-breakpoint", l_debugToggleBreakpoint);
+  registerBuiltin("debug-breakpoint-condition", l_debugBreakpointCondition);
+  registerBuiltin("debug-clear-breakpoints", l_debugClearBreakpoints);
+  registerBuiltin("debug-breakpoints", l_debugBreakpoints);
 #ifdef APP_DEBUG
   registerBuiltin("memory-inspector", l_memoryInspectorOpen);
   registerBuiltin("memory-inspector-refresh", l_memoryInspectorRefresh);
@@ -529,6 +534,8 @@ void deInitEditor() {
 
   // free the project-search result list
   projectSearchFree();
+
+  breakpointsFree();
 
   // write back ~/.beluga/projects, then free the list
   projectFree();

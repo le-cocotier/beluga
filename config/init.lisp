@@ -50,6 +50,7 @@
 (add-prefix "project")
 (add-prefix "config")
 (add-prefix "help")
+(add-prefix "debug")
 (add-prefix "help-view" #t) ; keys inside *help* and *bindings*
 (add-prefix "settings-view" #t) ; keys inside *settings*
 
@@ -378,7 +379,15 @@
 (map-key ")" macro-end "user")
 (map-key "x" macro-run "user")
 (map-key "h" '(editor-set-prefix "help") "user")
+(map-key "D" '(editor-set-prefix "debug") "user")
 (if (app-debug?) (map-key "m" memory-inspector "user"))
+
+;; debug (CTRL-x D): breakpoints (F9 toggles one too)
+(map-key "F9" debug-toggle-breakpoint "no-prefix")
+(map-key "b" debug-toggle-breakpoint "debug")
+(map-key "c" debug-breakpoint-condition "debug") ; stop only when an expression is true
+(map-key "l" debug-breakpoints "debug")          ; listed in *search*, ENTER jumps
+(map-key "x" debug-clear-breakpoints "debug")
 
 ;; help
 (map-key "k" describe-key "help")

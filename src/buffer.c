@@ -4,6 +4,7 @@
  */
 
 #include "../include/buffer.h"
+#include "../include/breakpoints.h"
 #include "../include/ansi_parser.h"
 #include "../include/autosave.h"
 #include "../include/data.h"
@@ -226,6 +227,7 @@ static void rowJoinNext(struct buffer_t *buf, int row) {
   memmove(&buf->row[row + 1], &buf->row[row + 2],
           sizeof(Row) * (buf->numrows - row - 2));
   buf->numrows--;
+  breakpointsLinesRemoved(buf, row + 1, 1);
   syntaxHighlighterInvalidateAfter(buf, row);
 }
 
@@ -247,6 +249,7 @@ static void rowRemoveAt(struct buffer_t *buf, int at) {
   memmove(&buf->row[at], &buf->row[at + 1],
           sizeof(Row) * (buf->numrows - at - 1));
   buf->numrows--;
+  breakpointsLinesRemoved(buf, at, 1);
   syntaxHighlighterInvalidateAfter(buf, at - 1);
 }
 
@@ -1723,6 +1726,9 @@ void bufferInsertRow(struct buffer_t *buffer, int at, Utf8Char *string,
     buffer->dirty++;
     buffer->edit_seq++;
   }
+  // Rows appended at the end (a file being read) move nothing.
+  if (at < buffer->numrows - 1)
+    breakpointsLinesInserted(buffer, at, 1);
   syntaxHighlighterInvalidateAfter(buffer, at - 1);
 }
 
@@ -1751,6 +1757,8 @@ static int rowsInsertEmpty(struct buffer_t *buf, int at, int count) {
     END_OF_STRING(buf->row[i].characters[0]);
   }
   buf->numrows += count;
+  if (at < buf->numrows - count)
+    breakpointsLinesInserted(buf, at, count);
   return 1;
 }
 
@@ -1910,6 +1918,7 @@ static char *textDeleteRaw(struct buffer_t *buf, int start_row, int start_col,
     memmove(&buf->row[start_row + 1], &buf->row[end_row + 1],
             sizeof(Row) * (size_t)(buf->numrows - end_row - 1));
     buf->numrows -= removed;
+    breakpointsLinesRemoved(buf, start_row + 1, removed);
   }
   syntaxHighlighterInvalidateAfter(buf, start_row);
   return deleted;
