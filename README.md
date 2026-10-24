@@ -173,3 +173,50 @@ window. Several daemons can run side by side: `--daemon=work`, then `beluga -c -
 and `beluga --kill=work`. On Unix the windows reach the daemon through a socket in a private
 directory (`$XDG_RUNTIME_DIR/beluga/`, else `/tmp/beluga-<uid>/`); on Windows through a named
 pipe only the current user can open.
+
+### Debugging
+
+Beluga talks the Debug Adapter Protocol, so it debugs with whatever adapter a language has:
+`gdb` 14 or later for C (`gdb -i dap`), `lldb-dap` on macOS, `debugpy` for Python. Each
+language package names its adapter, like it names its language server:
+
+```lisp
+(dap-adapter "c" "gdb" "-q" "-i" "dap")   ; packages/c does this (xcrun lldb-dap on macOS)
+```
+
+An association list after the command gives launch arguments every session gets unless it sets
+them itself; on macOS packages/c uses it for lldb's `sourceMap`, so breakpoints in files under
+`/tmp` or `/var` (links into `/private`) are found.
+
+Everything is under Ctrl-x B, and inside the `*debug*` panel the same keys work without the
+prefix (c, n, i, u, q, p, e, g, o). There are no function keys by default (on a Mac the F-row
+is media keys, and F11 is Show Desktop); bind them in personal-config if you like,
+`(map-key "F5" debug-continue "no-prefix")`.
+
+| keybind      | command                                                  |
+|--------------|----------------------------------------------------------|
+| Ctrl-x B b   | toggle a breakpoint on the cursor's line (Ctrl-x B k: with a condition) |
+| Ctrl-x B c   | start (asks for the program and its arguments), or continue |
+| Ctrl-x B n / i | next line / step into                                  |
+| Ctrl-x B u   | step out                                                 |
+| Ctrl-x B p   | pause                                                    |
+| Ctrl-x B q   | stop                                                     |
+| Ctrl-x B e   | evaluate an expression in the selected frame             |
+| Ctrl-x B g   | a command for the debugger itself (gdb's `info registers`, lldb's `bt`) |
+| Ctrl-x B o   | everything the program printed                           |
+| Ctrl-x B l / x | list the breakpoints / remove them all                 |
+
+While the program is paused, the `*debug*` panel shows the call stack, the variables (ENTER
+selects a frame or opens a struct) and the end of the output; the gutter shows `▶` on the
+current line and `●` on breakpoints, which follow the code as you edit. For anything the
+Ctrl-x B c prompt doesn't cover, hand the adapter its own launch arguments, e.g. in a project's
+`.beluga/init.lisp`:
+
+```lisp
+(define (debug-tests)
+  (debug-start '(("program" . "build/test_buffer") ("args" "-v")
+                 ("stopAtBeginningOfMainSubprogram" . #t))))
+```
+
+The hooks `debug-stopped` (path line reason) and `debug-exited` (exit-code) let a config react,
+and `debug-frames`, `debug-breakpoints` and `debug-state` read the session from Lisp.

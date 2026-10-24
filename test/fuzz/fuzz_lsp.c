@@ -75,7 +75,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   E.number_of_lsp_clients = 0;
   E.buffers = NULL;
   bufferFree(buf);
-  gfree(lsp->recv_buf);
+  jsonRpcStreamFree(&lsp->recv);
   gfree(lsp);
   return 0;
 }

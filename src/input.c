@@ -292,7 +292,8 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
       else
         buf_len = utf8Printf(buf, PATH_MAX, "%u", path);
       gfree(path_str);
-    } else if (*c->character) {
+    } else if (utf8IsPrintable(c)) {
+      // Not an arrow, F-key or other key with no text of its own.
       (buf + buf_len)->length = c->length;
       memcpy((buf + buf_len)->character, c->character, c->length);
       buf_len++;
@@ -373,6 +374,19 @@ int executeKeyBind(char *key_sequence) {
   return 1;
 }
 
+/**
+ * @brief The xterm sequence for function key `c` (FUNCTION_KEY + n or
+ * SHIFT_FUNCTION_KEY + n). @return its length.
+ */
+static int functionKeySequence(const unsigned char c, char *out, const size_t size) {
+  static const int tilde[12] = {11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 23, 24};
+  const int shift = c >= SHIFT_FUNCTION_KEY;
+  const int n = c - (shift ? SHIFT_FUNCTION_KEY : FUNCTION_KEY);
+  if (n < 4)
+    return snprintf(out, size, shift ? "\x1b[1;2%c" : "\x1bO%c", 'P' + n);
+  return snprintf(out, size, shift ? "\x1b[%d;2~" : "\x1b[%d~", tilde[n]);
+}
+
 static void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
   unsigned char seq[8];
   int len;
@@ -415,6 +429,14 @@ static void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
     len = 3;
     break;
   default:
+    if (key->length == 1 && IS_FUNCTION_KEY(key->character[0])) {
+      // Back to what the terminal sent: xterm's sequences, so the program
+      // in the pane sees F5 as F5.
+      len = functionKeySequence(key->character[0], (char *)seq, sizeof(seq));
+      break;
+    }
+    if (key->length == 1 && key->character[0] == UNKNOWN_KEY)
+      return; // nothing the program could make sense of
     memcpy(seq, key->character, key->length);
     len = (int)key->length;
     break;

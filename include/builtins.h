@@ -12,6 +12,29 @@ Lisp l_projectSearchGoto(Lisp args, LispError *e, LispContext ctx);
 Lisp l_findFile(Lisp args, LispError *e, LispContext ctx);
 Lisp editorPromptLisp(Lisp args, LispError *e, LispContext ctx);
 
+// The debugger (builtins_debug.c)
+Lisp l_debugToggleBreakpoint(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugBreakpointCondition(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugClearBreakpoints(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx);
+Lisp l_dapAdapter(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugStart(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugContinue(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugStop(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugNext(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugStepIn(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugStepOut(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugPause(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugPanel(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugPanelSelect(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugOutput(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugEvaluate(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugCommand(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugState(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugFrames(Lisp args, LispError *e, LispContext ctx);
+// Frees what the debugger builtins remember (the last program asked for).
+void debugBuiltinsFree(void);
+
 Lisp l_syntaxDefineLanguage(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddKeyword(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx);

@@ -642,7 +642,8 @@ Lisp editorOpenConfig(Lisp args, LispError *e, LispContext ctx) {
  * @brief Lisp function to set one theme color
  * @details (editor-set-theme-color role r g b) — role is one of
  * "background", "line-cursor-background", "keyword", "type", "string",
- * "comment", "number", "default", "added", "removed" (diff lines); r/g/b
+ * "comment", "number", "default", "added", "removed" (diff lines),
+ * "debug-line-background" (where the debugger stopped); r/g/b
  * are 0-255. Writes straight into
  * E.theme, replacing whatever the fallback (or an earlier-loaded theme package)
  * set — lets a theme be an ordinary package (packages/theme-dark,
@@ -679,6 +680,7 @@ Lisp editorSetThemeColor(Lisp args, LispError *e, LispContext ctx) {
          : !strcmp(role, "default")                ? &E.theme.COLOR_DEFAULT
          : !strcmp(role, "added")                  ? &E.theme.COLOR_ADDED
          : !strcmp(role, "removed")                ? &E.theme.COLOR_REMOVED
+         : !strcmp(role, "debug-line-background")  ? &E.theme.DEBUG_LINE_BACKGROUND
                                                    : NULL;
   if (slot) {
     // Every color is galloc'd (initEditor() copies the fallback ones), so

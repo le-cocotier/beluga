@@ -91,10 +91,15 @@ src_files = files(
   'src/terminal.c',
   'src/builtins.c',
   'src/builtins_edit.c',
+  'src/builtins_debug.c',
   'src/buffer.c',
   'src/split_screen.c',
   'src/utf8.c',
   'src/completion.c',
+  'src/jsonrpc_stream.c',
+  'src/breakpoints.c',
+  'src/dap.c',
+  'src/debug_ui.c',
   'src/lsp_ui.c',
   'src/buffer_switcher.c',
   'src/list_popup.c',
@@ -151,7 +156,7 @@ test('galloc', find_program('tools/check_galloc.sh'),
 # Unit tests (test/): each is a small program linked against the editor's
 # code; test/test.c stands in for main.c's globals. On Windows they get
 # beluga.exe's manifest too, so file names are UTF-8 for them as well.
-foreach t : ['utf8', 'buffer', 'ansi_parser', 'os', 'completion', 'packages', 'highlight', 'lsp_symbols']
+foreach t : ['utf8', 'buffer', 'ansi_parser', 'os', 'completion', 'packages', 'highlight', 'lsp_symbols', 'breakpoints']
   test(t, executable('test_' + t,
     files('test/test_' + t + '.c', 'test/test.c') + extra_sources,
     c_args : core_args,

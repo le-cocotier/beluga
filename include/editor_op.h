@@ -28,6 +28,7 @@ typedef struct
     int first_terminal; // index of terminals[0]'s stream
     // Index of each LSP client's output stream, -1 when it has none.
     int lsp_index[LSP_MAX_CLIENTS];
+    int dap_index; // the debug adapter's output stream, -1 without one
 } RunLoopWatch;
 
 // Appends the terminal panes, the language server and background

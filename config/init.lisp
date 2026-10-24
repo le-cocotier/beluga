@@ -50,6 +50,8 @@
 (add-prefix "project")
 (add-prefix "config")
 (add-prefix "help")
+(add-prefix "debug")
+(add-prefix "debug-view" #t) ; keys inside the *debug* panel
 (add-prefix "help-view" #t) ; keys inside *help* and *bindings*
 (add-prefix "settings-view" #t) ; keys inside *settings*
 
@@ -378,7 +380,49 @@
 (map-key ")" macro-end "user")
 (map-key "x" macro-run "user")
 (map-key "h" '(editor-set-prefix "help") "user")
+(map-key "B" '(editor-set-prefix "debug") "user")  ; B for bug
 (if (app-debug?) (map-key "m" memory-inspector "user"))
+
+;; debug — everything under CTRL-x B, and one letter each inside the
+;; *debug* panel. No function keys: on a Mac the F-row is media keys
+;; unless fn is held, and F11 is Show Desktop even then (bind them in
+;; personal-config if your keyboard has them: (map-key "F5" debug-continue
+;; "no-prefix")). The adapter for each language comes from its package
+;; (dap-adapter), e.g. gdb -i dap for C. CTRL-x B c asks for the program to
+;; run; for anything more, (debug-start '(("program" . "build/app") ("args"
+;; "-v"))) passes the adapter's own launch arguments.
+(map-key "c" debug-continue "debug")            ; start (asks for the program), or continue
+(map-key "n" debug-next "debug")
+(map-key "i" debug-step-in "debug")
+(map-key "u" debug-step-out "debug")
+(map-key "q" debug-stop "debug")
+(map-key "p" debug-pause "debug")
+(map-key "s" debug-start "debug")
+(map-key "b" debug-toggle-breakpoint "debug")
+(map-key "k" debug-breakpoint-condition "debug") ; stop only when an expression is true
+(map-key "l" debug-breakpoints "debug")          ; listed in *search*, ENTER jumps
+(map-key "x" debug-clear-breakpoints "debug")
+(map-key "e" debug-evaluate "debug")            ; an expression, in the selected frame
+(map-key "g" debug-command "debug")             ; a command for the debugger (gdb's own)
+(map-key "d" debug-panel "debug")
+(map-key "o" debug-output "debug")
+;; debug-view (inside *debug* and *debug-output*)
+(map-key "ENTER" debug-panel-select "debug-view") ; select a frame, open a variable
+(map-key "ARROW-UP" '(move-cursor "up") "debug-view")
+(map-key "ARROW-DOWN" '(move-cursor "down") "debug-view")
+(map-key "PAGE-UP" move-cursor-page-up "debug-view")
+(map-key "PAGE-DOWN" move-cursor-page-down "debug-view")
+(map-key "c" debug-continue "debug-view")
+(map-key "n" debug-next "debug-view")
+(map-key "i" debug-step-in "debug-view")
+(map-key "u" debug-step-out "debug-view")
+(map-key "q" debug-stop "debug-view")
+(map-key "p" debug-pause "debug-view")
+(map-key "e" debug-evaluate "debug-view")
+(map-key "g" debug-command "debug-view")
+(map-key "o" debug-output "debug-view")
+(map-key "CTRL-x" '(editor-set-prefix "user") "debug-view")
+(map-key "ALT-x" execute-command "debug-view")
 
 ;; help
 (map-key "k" describe-key "help")

@@ -12,6 +12,7 @@
 #include "../include/ansi_parser.h"
 #include "../include/buffer.h"
 #include "../include/completion.h"
+#include "../include/dap.h"
 #include "../include/data.h"
 #include "../include/input.h"
 #include "../include/output.h"
@@ -146,6 +147,12 @@ void editorWatchStreams(RunLoopWatch *w, OsStream **streams, int *n_streams,
     }
   }
 
+  w->dap_index = -1;
+  if (dapStream() && *n_streams < max) {
+    w->dap_index = *n_streams;
+    streams[(*n_streams)++] = dapStream();
+  }
+
   *n_streams += asyncProcessStreams(streams + *n_streams, max - *n_streams);
 }
 
@@ -176,6 +183,9 @@ void editorHandleStreams(const RunLoopWatch *w, const int *ready) {
     if (w->lsp_index[i] >= 0 && ready[w->lsp_index[i]])
       lspPoll(E.lsp_clients[i]);
 
+  if (w->dap_index >= 0 && ready[w->dap_index])
+    dapPoll();
+
   // Before keys: a finished process's callback (e.g. a refresh after
   // a push) should land before the next keystroke acts on its buffer.
   asyncProcessPoll();
@@ -190,6 +200,7 @@ void editorTick(void) {
     lspSyncDebounceTick();
     lspDecorationsTick();
   }
+  dapTick();
   autosaveTick();
   fileCheckDiskChanges();
 }

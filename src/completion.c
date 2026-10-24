@@ -5,6 +5,7 @@
 
 #include "../include/completion.h"
 #include "../include/galloc.h"
+#include "../include/jsonrpc_stream.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -42,15 +43,7 @@ static long monotonic_ms(void)
 
 static void lsp_send(const LspClient *lsp, const char *json)
 {
-    const int body_len = (int) strlen(json);
-    char header[1024];
-    const int header_len = snprintf(header, sizeof(header),
-                              "Content-Length: %d\r\n\r\n", body_len);
-
-    os_proc_write(lsp->proc, header, (size_t) header_len);
-    os_proc_write(lsp->proc, json, (size_t) body_len);
-
-    appDebug("[LSP →] Content-Length: %d | %s\n", body_len, json);
+    jsonRpcWrite(lsp->proc, json, "LSP");
 }
 
 /**
@@ -334,84 +327,15 @@ static void (*lsp_pop_pending(LspClient *lsp, const int id))(LspClient*, const c
     return NULL;
 }
 
-/**
- * @brief Feed newly-arrived bytes into the client's incremental
- * Content-Length/JSON parser. Non-blocking: only acts on complete
- * messages; partial messages persist in recv_buf across calls.
- */
+static void lsp_on_message(void *ctx, const char *body)
+{
+    appDebug("[LSP ←] %s\n", body);
+    lspHandleMessage(ctx, body);
+}
+
 void lspFeed(LspClient *lsp, const char *data, size_t len)
 {
-    // Grow the persistent receive buffer and append
-    const size_t needed = lsp->recv_len + len;
-    size_t new_cap;
-    char *grown;
-    char *header_end;
-    int header_len;
-    char header_copy[1024];
-    int copy_len;
-    int content_length;
-    char *cl;
-    int body_start;
-    char *body;
-    size_t consumed;
-    if (needed > lsp->recv_cap)
-    {
-        new_cap = lsp->recv_cap ? lsp->recv_cap * 2 : 4096;
-        while (new_cap < needed) new_cap *= 2;
-        grown = grealloc(lsp->recv_buf, new_cap);
-        if (!grown) return; // best-effort: drop data rather than crash
-        lsp->recv_buf = grown;
-        lsp->recv_cap = new_cap;
-    }
-    if (len == 0)
-        return;
-    memcpy(lsp->recv_buf + lsp->recv_len, data, len);
-    lsp->recv_len += len;
-
-    // Try to extract as many complete messages as are currently buffered
-    while (1)
-    {
-        header_end = utilMemmem(lsp->recv_buf, lsp->recv_len, "\r\n\r\n", 4);
-        if (!header_end) break; // headers not fully arrived yet
-
-        header_len = (int)(header_end - lsp->recv_buf);
-        copy_len = header_len < (int)sizeof(header_copy) - 1 ? header_len : (int)sizeof(header_copy) - 1;
-        memcpy(header_copy, lsp->recv_buf, copy_len);
-        header_copy[copy_len] = '\0';
-
-        content_length = 0;
-        cl = strstr(header_copy, "Content-Length: ");
-        if (cl) content_length = atoi(cl + 16);
-
-        body_start = header_len + 4;
-        if (content_length <= 0)
-        {
-            // No usable Content-Length (missing, 0, or garbage): there is
-            // no body to wait for. Drop the header and carry on, or every
-            // later message would wait behind it forever.
-            memmove(lsp->recv_buf, lsp->recv_buf + body_start, lsp->recv_len - (size_t) body_start);
-            lsp->recv_len -= (size_t) body_start;
-            continue;
-        }
-        if (lsp->recv_len < (size_t) body_start + (size_t) content_length)
-            break; // body not fully arrived yet
-
-        // Full message available — extract and dispatch
-        body = galloc(content_length + 1);
-        if (body)
-        {
-            memcpy(body, lsp->recv_buf + body_start, content_length);
-            body[content_length] = '\0';
-            appDebug("[LSP ←] %s\n", body);
-            lspHandleMessage(lsp, body);
-            gfree(body);
-        }
-
-        // Shift any remaining buffered bytes down to the front
-        consumed = body_start + content_length;
-        memmove(lsp->recv_buf, lsp->recv_buf + consumed, lsp->recv_len - consumed);
-        lsp->recv_len -= consumed;
-    }
+    jsonRpcStreamFeed(&lsp->recv, data, len, lsp_on_message, lsp);
 }
 
 // ─── Response handlers ─────────────────────────────────────────────────────
@@ -1739,9 +1663,7 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
         lsp->next_id = 1;
         lsp->state = LSP_INITIALIZING;
         lsp->pending_count = 0;
-        lsp->recv_buf = NULL;
-        lsp->recv_len = 0;
-        lsp->recv_cap = 0;
+        memset(&lsp->recv, 0, sizeof(lsp->recv));
         lsp->completion_debounce_pending = 0;
         lsp->completion_debounce_deadline_ms = 0;
         lsp->completion_latest_request_id = 0;
@@ -3722,8 +3644,7 @@ void lspShutdown(LspClient *lsp)
 
     // Only ever reached from lspCleanup() at exit, after the main loop —
     // never while lspFeed() is parsing this buffer — so it's safe to free.
-    gfree(lsp->recv_buf);
-    lsp->recv_buf = NULL;
+    jsonRpcStreamFree(&lsp->recv);
     lsp_free_diag_cache();
     if (g_code_actions_client == lsp)
     {
@@ -3731,9 +3652,6 @@ void lspShutdown(LspClient *lsp)
         g_code_actions = NULL;
         g_code_actions_client = NULL;
     }
-    lsp->recv_len = 0;
-    lsp->recv_cap = 0;
-
     if (lsp->proc)
     {
         // It was just told to exit: give it 100ms to do so on its own;

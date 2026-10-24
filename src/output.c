@@ -13,6 +13,7 @@
 #include "../include/data.h"
 #include "../include/define.h"
 #include "../include/editor_op.h"
+#include "../include/debug_ui.h"
 #include "../include/lsp_ui.h"
 #include "../include/buffer_switcher.h"
 #include "../include/file_finder.h"
@@ -78,7 +79,8 @@ int editorGutterWidth(const struct buffer_t *buf) {
   int marker;
   if (!buf)
     return 0;
-  marker = (buf->type == FILE_BUFF && (E.constantes.LSP || buf->git_available))
+  marker = (buf->type == FILE_BUFF &&
+            (E.constantes.LSP || buf->git_available || debugUiWantsGutter(buf)))
                    ? GUTTER_WIDTH : 0;
   return editorLineNumberWidth(buf) + marker;
 }
@@ -402,6 +404,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   int hinted_cols;
   char *hinted;
   const Diagnostic *diag;
+  char *debug_path;
 
   if (pane == NULL || pane->buffer_id < 0)
     return;
@@ -416,7 +419,9 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   // told to give up, misaligning its own line-wrapping. content_width is
   // what's actually left for text once the gutter (if any) is accounted for;
   // gutter + content_width always adds up to the pane's full on-screen span.
-  has_gutter = buf->type == FILE_BUFF && (E.constantes.LSP || buf->git_available);
+  debug_path = debugUiGutterPath(buf);
+  has_gutter = buf->type == FILE_BUFF &&
+               (E.constantes.LSP || buf->git_available || debug_path);
   lineno_width = editorLineNumberWidth(buf);
   gutter_width = editorGutterWidth(buf);
   content_width = pane->width - gutter_width;
@@ -503,7 +508,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         // theme's, the moment line numbers are on (the default).
         abAppend(ab, E.theme.COLOR_DEFAULT, (int) strlen(E.theme.COLOR_DEFAULT));
       }
-      if (has_gutter) {
+      if (has_gutter && !debugUiDrawGutter(ab, debug_path, file_row)) {
         git_status = (buf->git_lines && file_row < buf->git_lines_count)
                                         ? buf->git_lines[file_row] : GIT_LINE_NONE;
         lspUiDrawGutter(ab, &E.lsp_diagnostics, pane->buffer_id, file_row, git_status);
@@ -546,7 +551,10 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
                      : rowInlayHints(buf, file_row, &span, hint_at, hint_labels, 64);
         // A sticky row gets the cursor line's background: it's not where
         // it is in the file, and should look apart from the rows below.
-        if (is_cursor_line || is_sticky)
+        // The line the debugger stopped on outranks both.
+        if (!is_sticky && debug_path && debugUiIsCurrentLine(debug_path, file_row))
+            abAppend(ab, E.theme.DEBUG_LINE_BACKGROUND, (int) strlen(E.theme.DEBUG_LINE_BACKGROUND));
+        else if (is_cursor_line || is_sticky)
             abAppend(ab, E.theme.LINE_CURSOR_BACKGROUND, (int) strlen(E.theme.LINE_CURSOR_BACKGROUND));
         else
             abAppend(ab, E.theme.BACKGROUND_COLOR, (int) strlen(E.theme.BACKGROUND_COLOR));
@@ -652,6 +660,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
         abAppend(ab, "\x1b[27m", 5);
     }
   }
+  gfree(debug_path);
 }
 
 /**
