@@ -1944,6 +1944,7 @@ void bufferFree(struct buffer_t *buf) {
   gfree(buf->git_lines);
   lspFreeSymbols(buf->lsp_symbols, buf->lsp_symbols_count);
   lspFreeInlayHints(buf->lsp_hints, buf->lsp_hints_count);
+  lspFreeInlayHints(buf->lsp_layout, buf->lsp_layout_count);
   gfree(buf->comment_state);
   gfree(buf->lsp_sent_text);
   gfree(buf);

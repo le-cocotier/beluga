@@ -207,7 +207,11 @@ static int info_push_line(LspInfoPopup *popup, const char *src, const int len) {
     start = 0;
     end = len;
     // Markdown headings ("### function `foo`") read fine without the hashes.
+    // Only hashes followed by a space: "#define X 1" (a macro's hover) is
+    // code, and lost its "#" here.
     while (start < end && src[start] == '#') start++;
+    if (start > 0 && start < end && src[start] != ' ')
+        start = 0;
     while (start < end && src[start] == ' ') start++;
     // Trailing spaces and the "\" markdown hard break.
     while (end > start && (src[end - 1] == ' ' || src[end - 1] == '\\' ||
@@ -747,4 +751,21 @@ int lspUiBreadcrumbs(const struct buffer_t *buf, const int row, char *out, const
     if (len >= size)
         len = size - 1;
     return (int) len;
+}
+
+int lspUiDrawEolNote(struct abuf *ab, const char *text, const int max_cols)
+{
+    int bytes;
+    int cols;
+    if (!text || max_cols < 8)
+        return 0;
+    bytes = lspUiClipToColumns(text, (int) strlen(text), max_cols - 6, &cols);
+    abAppend(ab, "   ", 3);
+    abAppend(ab, E.theme.COLOR_COMMENT, (int) strlen(E.theme.COLOR_COMMENT));
+    ab_sgr(ab, "3");
+    abAppend(ab, "// ", 3);
+    abAppend(ab, text, bytes);
+    ab_sgr(ab, "23");
+    abAppend(ab, E.theme.COLOR_DEFAULT, (int) strlen(E.theme.COLOR_DEFAULT));
+    return 6 + cols;
 }

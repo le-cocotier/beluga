@@ -405,11 +405,28 @@
 (map-key "p" '(dired-open (package-directory)) "config")
 (map-key "m" '(editor-open-file-path (string-append (package-directory "personal-config") "/init.lisp")) "config")
 (map-key "s" list-settings "config")(map-key "m" '(editor-open-file-path "~/.beluga/packages/personal-config/init.lisp") "config")
+;; Who calls the function at the cursor, as a tree: its callers indented
+;; under it, theirs under them. Type to filter, ENTER jumps to the call.
+(define (lsp-call-hierarchy)
+  (let ((calls (lsp-incoming-calls 3)))
+    (cond ((null? calls) (editor-message "No call hierarchy here"))
+          ((null? (cdr calls)) (editor-message "Nothing calls it"))
+          (else (editor-list-popup "Callers" calls
+                                   (lambda (loc)
+                                     (begin
+                                       (lsp-goto-location loc)
+                                       (editor-recenter)))
+                                   '()
+                                   #t)))))
+
 ;; project
 (map-key "d" lsp-definition "project")
 (map-key "f" lsp-references "project")   ; listed in *search*, ENTER jumps
 (map-key "e" lsp-diagnostics "project")  ; every error/warning of the open files
 (map-key "w" lsp-workspace-symbols "project") ; a function/type by name, anywhere
+(map-key "m" lsp-expand-macro "project")      ; what the macro under the cursor expands to
+(map-key "l" lsp-struct-layout "project")     ; offsets, sizes, padding of the struct (again hides)
+(map-key "c" lsp-call-hierarchy "project")    ; who calls this, and who calls them
 (map-key "h" lsp-hover "project")
 (map-key "s" lsp-signature-help "project")
 (map-key "a" lsp-code-action "project")

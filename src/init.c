@@ -110,6 +110,10 @@ void initBuiltins(void) {
   registerBuiltin("lsp-diagnostics", lspDiagnostics);
   registerBuiltin("lsp-document-symbols", lspDocumentSymbols);
   registerBuiltin("lsp-workspace-symbols", lspWorkspaceSymbols);
+  registerBuiltin("lsp-expand-macro", lspExpandMacro);
+  registerBuiltin("lsp-struct-layout", lspStructLayout);
+  registerBuiltin("lsp-incoming-calls", lspIncomingCalls);
+  registerBuiltin("lsp-goto-location", lspGotoLocationBuiltin);
   registerBuiltin("lsp-signature-help", lspSignatureHelp);
   registerBuiltin("lsp-code-action", lspCodeAction);
   registerBuiltin("lsp-apply-code-action", lspApplyCodeAction_L);

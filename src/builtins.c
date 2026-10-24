@@ -1995,6 +1995,117 @@ Lisp lspWorkspaceSymbols(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function to show what the macro under the cursor expands to
+ * @details (lsp-expand-macro) — its definition and expansion in the hover
+ * popup. Waits for the server (up to 1.5s).
+ * @return lisp_null()
+ */
+Lisp lspExpandMacro(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = active ? bufferFindById(active->buffer_id) : NULL;
+  LspClient *lsp = buf ? lspClientForBuffer(buf) : NULL;
+  (void)args;
+  (void)e;
+  (void)ctx;
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY) {
+    editorSetStatusMessage("LSP not ready");
+    return lisp_null();
+  }
+  lspShowMacroExpansion(lsp, buf);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to show or hide the memory layout of a struct
+ * @details (lsp-struct-layout) — after each field of the struct around the
+ * cursor, its offset, size and the padding after it; after the struct's
+ * name, its size and total padding. Again (or an edit) hides them.
+ * @return lisp_null()
+ */
+Lisp lspStructLayout(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = active ? bufferFindById(active->buffer_id) : NULL;
+  LspClient *lsp = buf ? lspClientForBuffer(buf) : NULL;
+  (void)args;
+  (void)e;
+  (void)ctx;
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY) {
+    editorSetStatusMessage("LSP not ready");
+    return lisp_null();
+  }
+  lspToggleStructLayout(lsp, buf);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to list who calls the function at the cursor
+ * @details (lsp-incoming-calls [depth]) — the function, then its callers
+ * indented under it, theirs under them, `depth` levels (default 3, at
+ * most 5): a list of (label . (path row col)) pairs, (path row col) being
+ * where the call is — the shape (editor-list-popup ...) and
+ * (lsp-goto-location ...) take. '() when there's nothing to show.
+ * @return The list, or lisp_null()
+ */
+Lisp lspIncomingCalls(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf = active ? bufferFindById(active->buffer_id) : NULL;
+  LspClient *lsp = buf ? lspClientForBuffer(buf) : NULL;
+  LspCallNode *nodes;
+  Lisp head;
+  Lisp tail;
+  Lisp cell;
+  Lisp loc;
+  int depth = 3;
+  int n;
+  int i;
+  (void)e;
+  if (!E.constantes.LSP || !lsp || lsp->state != LSP_READY)
+    return lisp_null();
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT)
+    depth = (int)lisp_int(lisp_car(args));
+
+  n = lspIncomingCallTree(lsp, buf, depth, &nodes);
+  head = lisp_null();
+  tail = lisp_null();
+  for (i = 0; i < n; i++) {
+    loc = lisp_cons(lisp_make_string2(nodes[i].path, ctx),
+                    lisp_cons(lisp_make_int(nodes[i].line),
+                              lisp_cons(lisp_make_int(nodes[i].col), lisp_null(), ctx),
+                              ctx),
+                    ctx);
+    cell = lisp_cons(lisp_cons(lisp_make_string2(nodes[i].label, ctx), loc, ctx),
+                     lisp_null(), ctx);
+    if (lisp_is_null(head))
+      head = cell;
+    else
+      lisp_set_cdr(tail, cell);
+    tail = cell;
+  }
+  if (n > 0)
+    lspFreeCallTree(nodes, n);
+  return head;
+}
+
+/**
+ * @brief Lisp function to open a file at a position
+ * @details (lsp-goto-location (path row col)) — switches to the file's
+ * buffer (opening it if needed) with the cursor at 0-based row/col: what
+ * an item of (lsp-incoming-calls) carries.
+ * @return lisp_null()
+ */
+Lisp lspGotoLocationBuiltin(Lisp args, LispError *e, LispContext ctx) {
+  Lisp loc = lisp_car(args);
+  (void)e;
+  (void)ctx;
+  if (!lisp_is_pair(loc) || lisp_type(lisp_car(loc)) != LISP_STRING ||
+      !lisp_is_pair(lisp_cdr(loc)) || !lisp_is_pair(lisp_cdr(lisp_cdr(loc))))
+    return lisp_null();
+  lspGotoLocation(lisp_string(lisp_car(loc)), (int)lisp_int(lisp_car(lisp_cdr(loc))),
+                  (int)lisp_int(lisp_car(lisp_cdr(lisp_cdr(loc)))));
+  return lisp_null();
+}
+
+/**
  * @brief Lisp function to list every diagnostic of the open buffers
  * @details (lsp-diagnostics) — in the "*search*" buffer, ENTER jumps to one.
  * @return lisp_null()

@@ -628,8 +628,17 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
       // Start from how many columns the content actually filled.
       filled = span.columns;
 
-      // The line's diagnostic after its text, when the end of the line is
-      // in view (and not under a selection running past it).
+      // After the line's text, when its end is in view (and not under a
+      // selection running past it): its struct layout note, if shown, then
+      // its diagnostic.
+      if (buf->lsp_layout && buf->lsp_layout_seq == buf->edit_seq + 1 && !is_sticky &&
+          !(has_selection && sel_extends) && span.end >= row->size) {
+        for (i = 0; i < buf->lsp_layout_count; i++)
+          if (buf->lsp_layout[i].line == file_row) {
+            filled += lspUiDrawEolNote(ab, buf->lsp_layout[i].label, content_width - filled);
+            break;
+          }
+      }
       if (E.constantes.INLINE_DIAGNOSTICS && buf->type == FILE_BUFF && !is_sticky &&
           !(has_selection && sel_extends) && span.end >= row->size) {
         diag = lspUiWorstDiagnostic(&E.lsp_diagnostics, pane->buffer_id, file_row);

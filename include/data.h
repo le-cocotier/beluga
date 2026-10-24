@@ -692,6 +692,11 @@ typedef struct buffer_t
     LspInlayHint* lsp_hints; // sorted by (line, col)
     int lsp_hints_count;
     int lsp_decor_seq; // edit_seq + 1 they were asked for at; 0 = never
+    // Struct layout notes (lspToggleStructLayout()), one per line, drawn
+    // after it while lsp_layout_seq is still edit_seq + 1.
+    LspInlayHint* lsp_layout;
+    int lsp_layout_count;
+    int lsp_layout_seq;
 
     // ── Syntax highlighter: block-comment state cache ────────────────────
     // highlight_line() only ever sees whichever rows are currently on
