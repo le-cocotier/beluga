@@ -11,6 +11,13 @@
 # GITEA_TOKEN is used; if your Gitea refuses it (HTTP 403), create a
 # personal access token with the "write:repository" scope and save it as
 # the Actions secret RELEASE_TOKEN (Settings > Actions > Secrets).
+#
+# The same zip also goes to the Generic package registry, at
+#   <server>/api/packages/<owner>/generic/beluga/<version>/beluga-<tag>-windows-x64.zip
+# where <version> is the tag without its "v" (v3.4 -> 3.4). If Gitea refuses
+# the automatic token there (HTTP 401/403), create a personal access token
+# with the "write:package" scope and save it as the Actions secret
+# PACKAGE_TOKEN.
 
 name: Release Windows package
 
@@ -87,6 +94,32 @@ jobs:
 
           api -X POST -F "attachment=@dist/$PKG.zip" "$API/releases/$ID/assets?name=$PKG.zip" \
             | jq -er '"Published: " + .browser_download_url'
+
+      - name: Publish to Gitea Packages
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.PACKAGE_TOKEN || secrets.GITEA_TOKEN }}
+          SERVER: ${{ github.server_url }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          api() { curl -sS --fail-with-body -H "Authorization: token $TOKEN" "$@"; }
+
+          VERSION="${TAG#v}"
+          URL="$SERVER/api/packages/$OWNER/generic/beluga/$VERSION/$PKG.zip"
+
+          # Gitea refuses to overwrite a file (HTTP 409), so a re-run on the
+          # same tag deletes the old one first.
+          curl -sS -o /dev/null -X DELETE -H "Authorization: token $TOKEN" "$URL" || true
+          api --upload-file "dist/$PKG.zip" "$URL"
+          echo "Published: $URL"
+
+          # Show the package on the repository's Packages tab. Already
+          # linked (or an older Gitea) is fine.
+          curl -sS -o /dev/null -X POST -H "Authorization: token $TOKEN" \
+            "$SERVER/api/v1/packages/$OWNER/generic/beluga/-/link/$REPO" || true
 
       - name: Keep the zip as a build artifact too
         uses: actions/upload-artifact@v3
