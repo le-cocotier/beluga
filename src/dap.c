@@ -10,7 +10,9 @@
  * until configurationDone. gdb sends it straight after initialize, and
  * its launch runs the program at once, so breakpoints sent after launch
  * race with the program. Hence launch waits a moment for "initialized":
- * if it comes, launch follows configurationDone; if not, it goes first. A "stopped" event asks for
+ * if it comes, launch follows configurationDone; if not, it goes first.
+ * gdb 16 refuses a configurationDone that comes before launch, so then
+ * it goes again after launch. A "stopped" event asks for
  * the call stack, the selected frame's scopes and their variables, and
  * each answer refreshes the panel (debug_ui.c). Variables deeper down are
  * fetched when the panel expands them.
@@ -90,6 +92,13 @@ static struct
     // setBreakpoints still unanswered before configurationDone may go:
     // gdb lets the program run without them otherwise. -1 once it's sent.
     int config_waiting;
+    // configurationDone went out before launch: gdb 16 refuses it then
+    // and holds the program until it comes again.
+    int config_early;
+    // After "terminated": when disconnect goes out, then when the session
+    // ends if the adapter hasn't exited by then (ms), 0 otherwise.
+    long long ending_at;
+    int disconnected;      // disconnect sent after "terminated"
     int thread_id;         // the thread that stopped (or the first one seen)
     int gen;
     DapPending pending[DAP_MAX_PENDING];
@@ -339,6 +348,8 @@ static void endSession(const char *message, const int run_hook) {
   }
   s.state = DAP_OFF;
   s.configured = 0;
+  s.ending_at = 0;
+  s.disconnected = 0;
   if (message)
     editorSetStatusMessage("%s", message);
   debugUiRefresh();
@@ -381,10 +392,22 @@ static void sendLaunch(void) {
     sendRequest("launch", launch, onLaunch, NULL);
 }
 
+static void onConfigurationDone(cJSON *response, void *ctx) {
+  (void)ctx;
+  // gdb 15 and earlier take configurationDone before launch and run the
+  // program on launch; gdb 16 answers "launch or attach not specified"
+  // and only runs it on a configurationDone after launch, which has gone
+  // out by now.
+  if (s.config_early && !responseOk(response) && s.state != DAP_OFF)
+    sendRequest("configurationDone", NULL, NULL, NULL);
+  s.config_early = 0;
+}
+
 // The program may run once the adapter has every breakpoint.
 static void configurationDone(void) {
   s.config_waiting = -1;
-  sendRequest("configurationDone", NULL, NULL, NULL);
+  s.config_early = s.launch != NULL;
+  sendRequest("configurationDone", NULL, onConfigurationDone, NULL);
   sendLaunch(); // if it waited for this
   if (s.state == DAP_STARTING)
     s.state = DAP_RUNNING;
@@ -709,9 +732,28 @@ static void onInitialize(cJSON *response, void *ctx) {
   s.launch_at = os_monotonic_ms() + LAUNCH_WAIT_MS;
 }
 
+#define TERMINATED_WAIT_MS 300  // for the program's last output after "terminated"
+#define DISCONNECT_WAIT_MS 1000 // for the adapter to exit after disconnect
+
+// The program is gone: ends the session, saying how it exited.
+static void endTerminated(void) {
+  char message[64];
+  snprintf(message, sizeof(message), "The program exited with code %d", s.exit_code);
+  endSession(message, 1);
+}
+
 void dapTick(void) {
   if (s.launch && s.launch_at && os_monotonic_ms() >= s.launch_at)
     sendLaunch();
+  if (s.ending_at && os_monotonic_ms() >= s.ending_at) {
+    if (s.disconnected) {
+      endTerminated();
+    } else {
+      sendRequest("disconnect", NULL, NULL, NULL);
+      s.disconnected = 1;
+      s.ending_at = os_monotonic_ms() + DISCONNECT_WAIT_MS;
+    }
+  }
 }
 
 static void onEvaluate(cJSON *response, void *ctx) {
@@ -803,7 +845,6 @@ static void onStopped(cJSON *body) {
 
 static void onEvent(const char *event, cJSON *body) {
   cJSON *item;
-  char message[64];
   if (!strcmp(event, "initialized")) {
     // The adapter is ready for the breakpoints; configurationDone, once
     // they're all answered, lets the program run. (gdb answers it with an
@@ -833,12 +874,12 @@ static void onEvent(const char *event, cJSON *body) {
   } else if (!strcmp(event, "exited")) {
     s.exit_code = (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(body, "exitCode"));
   } else if (!strcmp(event, "terminated")) {
-    snprintf(message, sizeof(message), "The program exited with code %d", s.exit_code);
-    // Polite, though most adapters exit on their own at this point.
-    sendRequest("disconnect", NULL, NULL, NULL);
-    if (s.proc)
-      os_proc_wait(s.proc, 200, NULL);
-    endSession(message, 1);
+    // gdb 16 can send the program's last output after this, and drops it
+    // if disconnect comes first: disconnect waits a moment (dapTick()).
+    // Most adapters exit on their own instead; the session ends when the
+    // adapter does (dapPoll()).
+    if (!s.ending_at)
+      s.ending_at = os_monotonic_ms() + TERMINATED_WAIT_MS;
     return;
   }
   debugUiRefresh();
@@ -898,6 +939,10 @@ void dapPoll(void) {
     dapFeed(chunk, (size_t)n);
   if (s.proc && n < 0) {
     // The adapter's output has ended: it exited (or crashed).
+    if (s.ending_at) {
+      endTerminated();
+      return;
+    }
     code = -1;
     os_proc_wait(s.proc, 100, &code);
     if (code == 127)
@@ -1086,6 +1131,9 @@ int dapStart(const char *ext, const char *launch_json) {
   s.exit_code = -1;
   s.configured = 0;
   s.config_waiting = 0;
+  s.config_early = 0;
+  s.ending_at = 0;
+  s.disconnected = 0;
   s.stop_reason[0] = '\0';
   s.launch = launch;
   s.launch_at = 0;

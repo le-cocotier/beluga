@@ -106,8 +106,8 @@ void dapPoll(void);
 // Feeds bytes as if the adapter had sent them (dapPoll()'s reader, and
 // the tests).
 void dapFeed(const char *data, size_t len);
-// Time-driven work (sending launch when the adapter didn't ask first),
-// once per run loop tick.
+// Time-driven work (sending launch when the adapter didn't ask first,
+// disconnecting after the program ended), once per run loop tick.
 void dapTick(void);
 // Ends any session and frees the adapter table. Called on shutdown.
 void dapFree(void);
