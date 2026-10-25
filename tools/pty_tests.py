@@ -329,6 +329,43 @@ def debugger_lldb(binary, repo):
     debug_session(binary, repo, '(define LSP #f)\n(add-package "c")')
 
 
+def debugger_python_in_terminal(binary, repo):
+    """debugpy with "console": "integratedTerminal": its runInTerminal
+    request runs the program in a *debuggee* pane, where it reads what is
+    typed, while breakpoints and the panel work as usual."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        with open(ed.path('t.py'), 'w') as f:
+            f.write("name = input('name? ')\n"
+                    "total = len(name)\n"
+                    "print('hello', name, total)\n")
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "py" "%s" "-m" "debugpy.adapter")\n'
+                    '(define (debug-in-terminal) (debug-start \'(("program" . "%s")'
+                    ' ("console" . "integratedTerminal"))))\n'
+                    % (sys.executable, ed.path('t.py')))
+        ed.start('t.py')
+        ed.wait_for('hello')
+        ed.keys(DOWN, *DEBUG, 'b')
+        ed.keys('\x1bx', delay=0.4)
+        ed.keys(*'debug-in-terminal', delay=0.02)
+        ed.keys('\r', delay=0.3)
+        ed.wait_for('*debuggee*', 30)
+        for _ in range(100):  # the program's prompt, not the code's line
+            if any(line.startswith('name?') for line in ed.text()):
+                break
+            ed.pump(0.1)
+        ed.write('bob\r')                # the program's pane has the keys
+        ed.wait_for('stopped (breakpoint)', 20)
+        ed.keys('\x1b', delay=0.3)       # out of the terminal's keys
+        ed.keys(*DEBUG, 'c')
+        ed.wait_for('hello bob 3', 20)
+        ed.wait_for('exited with code 0', 20)
+        ed.quit()
+
+
 def terminal_app_shift_function_keys(binary, repo):
     """Terminal.app sends Shift+F5-F12 as the VT220's F13-F20 codes
     (ESC [25~ ... ESC [34~); xterm and iTerm2 send ESC [15;2~."""
@@ -451,6 +488,7 @@ TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
     ('debugger-gdb', debugger_gdb),
     ('debugger-lldb', debugger_lldb),
+    ('debugger-python-in-terminal', debugger_python_in_terminal),
     ('terminal-app-shift-function-keys', terminal_app_shift_function_keys),
     ('tab-completion-list', tab_completion_list),
     ('terminal-alternate-screen', terminal_alternate_screen),

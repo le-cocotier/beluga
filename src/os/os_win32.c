@@ -512,6 +512,81 @@ static wchar_t *environmentWith(const wchar_t *extra)
     return block;
 }
 
+/**
+ * @brief Whether environment entry `entry` ("NAME=value") is for the
+ * variable named by `spec` ("NAME=..." or "NAME"), case-insensitively as
+ * Windows compares variable names.
+ */
+static int sameVariable(const wchar_t *entry, const wchar_t *spec)
+{
+    const wchar_t *eq = wcschr(spec, L'=');
+    const size_t len = eq ? (size_t) (eq - spec) : wcslen(spec);
+    return len > 0 && _wcsnicmp(entry, spec, len) == 0 && entry[len] == L'=';
+}
+
+/**
+ * @brief This process's environment with each of `changes` applied
+ * ("NAME=value" sets, "NAME" unsets), for CREATE_UNICODE_ENVIRONMENT.
+ * malloc'd; NULL on failure.
+ */
+static wchar_t *environmentChanged(const char *const *changes)
+{
+    wchar_t *env = GetEnvironmentStringsW();
+    wchar_t **wide = NULL;
+    const wchar_t *p;
+    wchar_t *block = NULL;
+    size_t size = 1;
+    size_t used = 0;
+    size_t len;
+    int n = 0;
+    int i;
+    int keep;
+
+    if (!env)
+        return NULL;
+    while (changes && changes[n])
+        n++;
+    wide = gcalloc((size_t) n + 1, sizeof(*wide));
+    if (!wide)
+        goto done;
+    for (i = 0; i < n; i++)
+        if (!(wide[i] = toWide(changes[i])))
+            goto done;
+    for (p = env; *p; p += wcslen(p) + 1)
+        size += wcslen(p) + 1;
+    for (i = 0; i < n; i++)
+        size += wcslen(wide[i]) + 1;
+    block = galloc(size * sizeof(wchar_t));
+    if (!block)
+        goto done;
+    for (p = env; *p; p += len + 1)
+    {
+        len = wcslen(p);
+        keep = 1;
+        for (i = 0; i < n && keep; i++)
+            keep = !sameVariable(p, wide[i]);
+        if (keep)
+        {
+            memcpy(block + used, p, (len + 1) * sizeof(wchar_t));
+            used += len + 1;
+        }
+    }
+    for (i = 0; i < n; i++)
+        if (wcschr(wide[i], L'='))
+        {
+            len = wcslen(wide[i]);
+            memcpy(block + used, wide[i], (len + 1) * sizeof(wchar_t));
+            used += len + 1;
+        }
+    block[used] = L'\0';
+done:
+    for (i = 0; wide && i < n; i++)
+        gfree(wide[i]);
+    gfree(wide);
+    FreeEnvironmentStringsW(env);
+    return block;
+}
+
 /***********************************************************************************************************************
  *
  *                                                 Streams and waiting
@@ -1472,7 +1547,13 @@ static DWORD WINAPI closePseudoConsoleThread(LPVOID console)
     return 0;
 }
 
-OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int cols)
+/**
+ * @brief A pseudoconsole running `cmd` (taken over: freed here), with
+ * `app` the program when known (NULL: CreateProcess finds it from `cmd`),
+ * in `cwd`, with `env` applied to the environment (TERM included).
+ */
+static OsPty *ptyStart(WBuf cmd, const wchar_t *app, const char *cwd, const char *const *env,
+                       const int rows, const int cols)
 {
     HANDLE in_read = NULL, in_write = NULL, out_read = NULL, out_write = NULL;
     HPCON console = NULL;
@@ -1481,9 +1562,7 @@ OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int
     PROCESS_INFORMATION pi;
     SIZE_T attr_size = 0;
     LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
-    WBuf cmd = { NULL, 0, 0 };
-    wchar_t *wshell;
-    wchar_t *env = NULL;
+    wchar_t *env_block = NULL;
     wchar_t *wcwd = NULL;
     DWORD attrs_of_cwd;
     OsPty *p = gcalloc(1, sizeof(*p));
@@ -1505,15 +1584,6 @@ OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int
                                    sizeof(console), NULL, NULL))
         goto fail;
 
-    if (shell && *shell)
-    {
-        wshell = toWide(shell);
-        if (wshell)
-            appendQuotedArg(&cmd, wshell, 0);
-        gfree(wshell);
-    }
-    else
-        defaultShellCommand(&cmd);
     if (!cmd.s)
         goto fail;
 
@@ -1528,7 +1598,7 @@ OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int
     si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     si.lpAttributeList = attrs;
 
-    env = environmentWith(L"TERM=xterm-256color"); // as a Unix pane gets
+    env_block = environmentChanged(env);
     if (cwd && *cwd)
     {
         wcwd = toWide(cwd);
@@ -1540,9 +1610,9 @@ OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int
             wcwd = NULL;
         }
     }
-    if (!CreateProcessW(NULL, cmd.s, NULL, NULL, FALSE,
+    if (!CreateProcessW(app, cmd.s, NULL, NULL, FALSE,
                         CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-                        env, wcwd, &si.StartupInfo, &pi))
+                        env_block, wcwd, &si.StartupInfo, &pi))
         goto fail;
 
     p->process = pi.hProcess;
@@ -1555,7 +1625,7 @@ OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int
     CloseHandle(out_write);
     DeleteProcThreadAttributeList(attrs);
     gfree(attrs);
-    gfree(env);
+    gfree(env_block);
     gfree(wcwd);
     gfree(cmd.s);
     return p;
@@ -1566,7 +1636,7 @@ fail:
         DeleteProcThreadAttributeList(attrs);
         gfree(attrs);
     }
-    gfree(env);
+    gfree(env_block);
     gfree(wcwd);
     gfree(cmd.s);
     if (console) ClosePseudoConsole(console);
@@ -1576,6 +1646,61 @@ fail:
     if (out_write) CloseHandle(out_write);
     gfree(p);
     return NULL;
+}
+
+OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int cols)
+{
+    static const char *const term[] = { "TERM=xterm-256color", NULL }; // as a Unix pane gets
+    WBuf cmd = { NULL, 0, 0 };
+    wchar_t *wshell;
+    if (shell && *shell)
+    {
+        wshell = toWide(shell);
+        if (wshell)
+            appendQuotedArg(&cmd, wshell, 0);
+        gfree(wshell);
+    }
+    else
+        defaultShellCommand(&cmd);
+    return ptyStart(cmd, NULL, cwd, term, rows, cols);
+}
+
+OsPty *os_pty_spawn(const char *const *argv, const char *cwd, const char *const *env,
+                    const int rows, const int cols)
+{
+    wchar_t app[MAX_PATH * 2];
+    WBuf cmd = { NULL, 0, 0 };
+    const char **all;
+    OsPty *p;
+    int n = 0;
+    int i;
+
+    if (!argv || !argv[0])
+        return NULL;
+    if (!buildCommandLine((char *const *) argv, app, sizeof(app) / sizeof(app[0]), &cmd))
+    {
+        gfree(cmd.s);
+        return NULL;
+    }
+    while (env && env[n])
+        n++;
+    all = gcalloc((size_t) n + 2, sizeof(*all));
+    if (!all)
+    {
+        gfree(cmd.s);
+        return NULL;
+    }
+    for (i = 0; i < n; i++)
+        all[i] = env[i];
+    all[n] = "TERM=xterm-256color";
+    p = ptyStart(cmd, app, cwd, all, rows, cols);
+    gfree(all);
+    return p;
+}
+
+long os_pty_pid(OsPty *p)
+{
+    return p && p->process ? (long) GetProcessId(p->process) : -1;
 }
 
 OsStream *os_pty_output(OsPty *p)

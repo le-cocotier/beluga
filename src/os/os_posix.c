@@ -672,12 +672,21 @@ struct OsPty {
   int exited;
 };
 
-OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int cols) {
+/**
+ * @brief forkpty() for os_pty_open() and os_pty_spawn(): the child changes
+ * to `cwd`, applies `env` and TERM, then runs `argv` (execvp) or, with
+ * `shell` set instead, the shell interactively.
+ */
+static OsPty *ptyStart(const char *shell, const char *const *argv, const char *cwd,
+                       const char *const *env, const int rows, const int cols) {
   struct winsize ws;
   OsPty *p;
   pid_t pid;
   int master;
   const char *sh;
+  const char *eq;
+  char name[256];
+  int i;
 
   p = gcalloc(1, sizeof(*p));
   if (!p)
@@ -692,14 +701,29 @@ OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int
     return NULL;
   }
   if (pid == 0) {
-    // The child: become the shell.
     if (cwd && *cwd && chdir(cwd) != 0) {
       // Not there any more: the editor's directory, as before.
     }
+    for (i = 0; env && env[i]; i++) {
+      eq = strchr(env[i], '=');
+      if (!eq) {
+        unsetenv(env[i]);
+      } else if ((size_t)(eq - env[i]) < sizeof(name)) {
+        memcpy(name, env[i], (size_t)(eq - env[i]));
+        name[eq - env[i]] = '\0';
+        setenv(name, eq + 1, 1);
+      }
+    }
+    setenv("TERM", "xterm-256color", 1);
+    if (argv) {
+      execvp(argv[0], (char *const *)argv);
+      fprintf(stderr, "%s: %s\n", argv[0], strerror(errno));
+      _exit(127);
+    }
+    // The child: become the shell.
     sh = (shell && *shell) ? shell : getenv("SHELL");
     if (!sh || !*sh)
       sh = access("/bin/zsh", X_OK) == 0 ? "/bin/zsh" : "/bin/sh";
-    setenv("TERM", "xterm-256color", 1);
     execl(sh, sh, "-i", (char *)NULL);
     _exit(127);
   }
@@ -709,6 +733,19 @@ OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int
   streamInit(&p->out, master, 0);
   return p;
 }
+
+OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int cols) {
+  return ptyStart(shell ? shell : "", NULL, cwd, NULL, rows, cols);
+}
+
+OsPty *os_pty_spawn(const char *const *argv, const char *cwd, const char *const *env,
+                    const int rows, const int cols) {
+  if (!argv || !argv[0])
+    return NULL;
+  return ptyStart(NULL, argv, cwd, env, rows, cols);
+}
+
+long os_pty_pid(OsPty *p) { return p ? (long)p->pid : -1; }
 
 OsStream *os_pty_output(OsPty *p) { return p ? &p->out : NULL; }
 

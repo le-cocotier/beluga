@@ -62,10 +62,6 @@ left after the first step:
 The Debug Adapter Protocol client (src/dap.c, src/debug_ui.c,
 src/breakpoints.c). What's left after the first step:
 
-- [ ] **[feature]** `runInTerminal`: run the program in a terminal pane,
-  for programs that read stdin or draw with curses. Today the adapter's
-  request is refused and the program's output arrives as output events
-  (`refuseRequest()` in `src/dap.c`).
 - [ ] **[feature]** Adapters reached over TCP (delve's `dlv dap`, codelldb,
   js-debug) need a TCP connect in `os.h`; only stdio adapters work.
 - [ ] **[feature]** Attach to a running process (`attach` with a pid
@@ -75,8 +71,8 @@ src/breakpoints.c). What's left after the first step:
 - [ ] **[debt]** Daemon mode: one session for the whole daemon, and the
   stopped line moves whichever window last typed. Give each project its
   own session.
-- [ ] **[debt]** Not tried yet with debugpy, or lldb-dap on Windows.
-  gdb 15 on Linux and lldb-dap on macOS are covered by
+- [ ] **[debt]** Not tried yet with lldb-dap on Windows. gdb 15 on Linux,
+  lldb-dap on macOS and debugpy (`runInTerminal` included) are covered by
   `tools/pty_tests.py`.
 
 ---

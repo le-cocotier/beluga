@@ -919,7 +919,12 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
       return -1;
     utf8Cpy(filename, name_start);
   } else if (type == TERMINAL_BUFF) { // path is already just a plain name, no
-    filename = stringToUtf8(temp_filename);
+    // "term" (the shell of CTRL-x t), or the name given (a debugged
+    // program's, ptySessionSetNextProgram()).
+    filename = path ? (Utf8Char *)gcalloc(utf8StringLen(path), sizeof(Utf8Char))
+                    : stringToUtf8(temp_filename);
+    if (filename && path)
+      utf8Cpy(filename, path);
     // splitting needed
     if (!filename)
       return -1;
@@ -1023,7 +1028,13 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   {
     new_buf->pty = NULL;
     new_buf->path = NULL;
-    new_buf->fullname = stringToUtf8((unsigned char *)"term");
+    if (path) {
+      new_buf->fullname = gcalloc(utf8StringLen(path), sizeof(Utf8Char));
+      if (new_buf->fullname)
+        utf8Cpy(new_buf->fullname, path);
+    } else {
+      new_buf->fullname = stringToUtf8((unsigned char *)"term");
+    }
 
     active = splitScreenGetActivePane();
     if (ptySessionSpawn(new_buf, NULL, active->height, active->width) != 0) {

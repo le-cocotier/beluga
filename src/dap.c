@@ -40,6 +40,7 @@
 #include "../include/galloc.h"
 #include "../include/jsonrpc_stream.h"
 #include "../include/project.h"
+#include "../include/pty_session.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
 #include "../include/utf8.h"
@@ -797,8 +798,9 @@ static void onEvaluate(cJSON *response, void *ctx) {
   debugUiRefresh();
 }
 
-// Answers the adapter's own requests (runInTerminal, ...): not supported.
-static void refuseRequest(cJSON *request) {
+// Answers one of the adapter's own requests; `body` (taken over) may be
+// NULL, `message` is for a refusal.
+static void respond(cJSON *request, const int success, cJSON *body, const char *message) {
   cJSON *msg;
   char *text;
   cJSON *seq = cJSON_GetObjectItemCaseSensitive(request, "seq");
@@ -808,14 +810,138 @@ static void refuseRequest(cJSON *request) {
   cJSON_AddStringToObject(msg, "type", "response");
   cJSON_AddNumberToObject(msg, "request_seq", cJSON_GetNumberValue(seq));
   cJSON_AddStringToObject(msg, "command", command ? command : "");
-  cJSON_AddBoolToObject(msg, "success", 0);
-  cJSON_AddStringToObject(msg, "message", "not supported by beluga");
+  cJSON_AddBoolToObject(msg, "success", success);
+  if (!success)
+    cJSON_AddStringToObject(msg, "message", message ? message : "failed");
+  if (body)
+    cJSON_AddItemToObject(msg, "body", body);
   text = cJSON_PrintUnformatted(msg);
   cJSON_Delete(msg);
   if (text) {
     jsonRpcWrite(s.proc, text, "DAP");
     gfree(text);
   }
+}
+
+#define DEBUGGEE_BUFFER "*debuggee*"
+
+/**
+ * @brief Shows terminal buffer `id` in pane `pane` (the last program's)
+ * or, with -1, in a new pane under the active one, and moves the focus
+ * there: the program is what reads the keys now (ESC gives them back to
+ * the editor). @return 0, or -1 when the pane is too small to split (the
+ * buffer is then only reached with CTRL-x b).
+ */
+static int showProgramPane(const int id, int pane) {
+  ScreenLayout *layout = splitScreenGetLayout();
+  struct prefix_t prefix;
+  int i;
+  if (pane < 0 || pane >= layout->num_panes) {
+    if (splitScreenSplitActive(SPLIT_HORIZONTAL) != 0)
+      return -1;
+    layout = splitScreenGetLayout();
+    pane = layout->active_pane;
+  }
+  layout->panes[pane].buffer_id = id;
+  layout->panes[pane].shown_buffer_id = -1;
+  for (i = 0; i < layout->num_panes; i++)
+    layout->panes[i].is_active = 0;
+  layout->active_pane = pane;
+  layout->panes[pane].is_active = 1;
+  // The terminal's keymap, or ENTER, arrows... run editor commands (the
+  // split above left the prefix of the pane it copied).
+  prefix = find_prefix("term");
+  if (prefix.prefix_id != -1)
+    E.prefix_state = prefix.prefix_id;
+  return 0;
+}
+
+/**
+ * @brief runInTerminal: the program runs in a terminal pane of its own,
+ * *debuggee*, so it can read keys and draw (curses), rather than through
+ * the adapter. The last session's *debuggee* is closed first.
+ */
+static void runInTerminal(cJSON *request) {
+  cJSON *args = cJSON_GetObjectItemCaseSensitive(request, "arguments");
+  cJSON *argv_json = cJSON_GetObjectItemCaseSensitive(args, "args");
+  cJSON *env_json = cJSON_GetObjectItemCaseSensitive(args, "env");
+  const char *cwd = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(args, "cwd"));
+  const char **argv = NULL;
+  char **env = NULL;
+  cJSON *item;
+  cJSON *body;
+  Utf8Char *name;
+  struct buffer_t *old;
+  int n_args = cJSON_GetArraySize(argv_json);
+  int n_env = cJSON_GetArraySize(env_json);
+  ScreenLayout *layout;
+  int pane = -1;
+  int id;
+  int i = 0;
+  long pid = -1;
+
+  argv = gcalloc((size_t)n_args + 1, sizeof(*argv));
+  env = gcalloc((size_t)n_env + 1, sizeof(*env));
+  if (!argv || !env || n_args == 0)
+    goto done;
+  cJSON_ArrayForEach(item, argv_json) {
+    if (!cJSON_IsString(item))
+      goto done;
+    argv[i++] = item->valuestring;
+  }
+  i = 0;
+  cJSON_ArrayForEach(item, env_json) {
+    if (!item->string)
+      continue;
+    env[i++] = cJSON_IsString(item) ? utilFormat("%s=%s", item->string, item->valuestring)
+                                    : utilStrdup(item->string); // null: unset
+  }
+
+  name = stringToUtf8((unsigned char *)DEBUGGEE_BUFFER);
+  id = name ? bufferFindByFilename(name) : -1;
+  old = bufferFindById(id);
+  layout = splitScreenGetLayout();
+  for (i = 0; old && i < layout->num_panes; i++)
+    if (layout->panes[i].buffer_id == id && i != layout->active_pane)
+      pane = i; // the new program goes where the last one was
+  if (old) {
+    ptySessionClose(old); // a live one would make bufferClose() ask
+    bufferClose(id);
+  }
+  ptySessionSetNextProgram(argv, cwd, (const char *const *)env);
+  id = name ? bufferCreate(name, READ_AND_WRITE, TERMINAL_BUFF) : -1;
+  ptySessionSetNextProgram(NULL, NULL, NULL);
+  gfree(name);
+  if (bufferFindById(id)) {
+    pid = ptySessionPid(bufferFindById(id));
+    if (showProgramPane(id, pane) != 0)
+      E.prefix_state = 0; // bufferCreate() gave the terminal's keys, but
+                          // the focus stayed on another buffer
+  }
+
+done:
+  if (pid > 0) {
+    body = cJSON_CreateObject();
+    cJSON_AddNumberToObject(body, "processId", (double)pid);
+    respond(request, 1, body, NULL);
+    editorSetStatusMessage("The program runs in %s: type to it, ESC for the editor's keys",
+                           DEBUGGEE_BUFFER);
+  } else {
+    respond(request, 0, NULL, "couldn't start the program in a terminal");
+  }
+  for (i = 0; env && i < n_env; i++)
+    gfree(env[i]);
+  gfree(env);
+  gfree((void *)argv);
+}
+
+// The adapter's own requests: runInTerminal; anything else is refused.
+static void onRequest(cJSON *request) {
+  const char *command = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(request, "command"));
+  if (command && !strcmp(command, "runInTerminal"))
+    runInTerminal(request);
+  else
+    respond(request, 0, NULL, "not supported by beluga");
 }
 
 /***********************************************************************************************************************
@@ -922,7 +1048,7 @@ static void handleMessage(const char *json) {
     event = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(msg, "event"));
     onEvent(event ? event : "", cJSON_GetObjectItemCaseSensitive(msg, "body"));
   } else if (type && !strcmp(type, "request")) {
-    refuseRequest(msg);
+    onRequest(msg);
   }
   cJSON_Delete(msg);
 }
@@ -1184,7 +1310,7 @@ int dapStart(const char *ext, const char *launch_json) {
   cJSON_AddBoolToObject(args, "linesStartAt1", 1);
   cJSON_AddBoolToObject(args, "columnsStartAt1", 1);
   cJSON_AddBoolToObject(args, "supportsVariableType", 1);
-  cJSON_AddBoolToObject(args, "supportsRunInTerminalRequest", 0);
+  cJSON_AddBoolToObject(args, "supportsRunInTerminalRequest", 1);
   sendRequest("initialize", args, onInitialize, NULL);
 
   debugUiOpenPanel();

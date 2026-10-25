@@ -233,9 +233,25 @@ typedef struct OsPty OsPty;
  * @param shell NULL: the user's shell ($SHELL, else zsh or /bin/sh on Unix;
  * $BELUGA_SHELL, then pwsh, then Windows PowerShell, then cmd.exe on
  * Windows).
+ * @param cwd The directory it starts in; NULL: the editor's.
  */
-// `cwd`: the directory it starts in; NULL: the editor's.
 OsPty *os_pty_open(const char *shell, const char *cwd, int rows, int cols);
+
+/**
+ * @brief Starts a program (not a shell) on a new pseudo-terminal: what a
+ * debugger's runInTerminal asks for.
+ * @param argv Program and arguments, NULL-terminated; the program is looked
+ * up on PATH.
+ * @param cwd NULL: the editor's directory.
+ * @param env "NAME=value" to set, "NAME" alone to unset, on top of the
+ * editor's environment; NULL-terminated, or NULL for none.
+ * @return NULL if it couldn't be started.
+ */
+OsPty *os_pty_spawn(const char *const *argv, const char *cwd, const char *const *env,
+                    int rows, int cols);
+
+// The process id of what runs on it (the shell, or the program).
+long os_pty_pid(OsPty *p);
 
 // What the shell writes (VT escape sequences included); ends once it exits.
 OsStream *os_pty_output(OsPty *p);

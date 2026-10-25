@@ -227,5 +227,10 @@ Ctrl-x B c prompt doesn't cover, hand the adapter its own launch arguments, e.g.
                  ("stopAtBeginningOfMainSubprogram" . #t))))
 ```
 
+A program that reads the keyboard or draws on the terminal (curses) can run in a terminal pane
+of its own, `*debuggee*`, which takes the keys (ESC gives them back to the editor): ask the
+adapter for it, with `("console" . "integratedTerminal")` for debugpy or `("runInTerminal" . #t)`
+for lldb-dap. gdb has no such option; its program's output arrives in the panel.
+
 The hooks `debug-stopped` (path line reason) and `debug-exited` (exit-code) let a config react,
 and `debug-frames`, `debug-breakpoints` and `debug-state` read the session from Lisp.
