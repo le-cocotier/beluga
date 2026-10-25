@@ -218,6 +218,23 @@ def terminal_fast_typing(binary, repo):
         ed.quit()
 
 
+def terminal_long_burst(binary, repo):
+    """A 2000-character command line sent in one write reaches the shell
+    whole: more than macOS's ~1 KB pty input queue between the harness and
+    the editor. (Not into `cat`: a canonical-mode line longer than 1024
+    bytes is discarded by the macOS tty itself, editor or not.)"""
+    with Beluga(binary, repo) as ed:
+        ed.start()
+        open_terminal(ed)
+        line = ''.join(chr(ord('a') + i % 26) for i in range(2000))
+        shell(ed, 'echo ' + line + ' > long.txt')
+        ed.pump(2.0)
+        with open(ed.path('long.txt')) as f:
+            got = f.read()
+        assert got == line + '\n', '%d bytes: %r' % (len(got), got[:80])
+        ed.quit()
+
+
 def breakpoint_gutter(binary, repo):
     """CTRL-x B b puts a breakpoint in the gutter; it moves down with a
     line inserted above it, and CTRL-x B b again takes it away."""
@@ -335,6 +352,7 @@ TESTS = [
     ('terminal-wide-characters', terminal_wide_characters),
     ('terminal-wrap', terminal_wrap),
     ('terminal-fast-typing', terminal_fast_typing),
+    ('terminal-long-burst', terminal_long_burst),
 ]
 
 
