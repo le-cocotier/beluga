@@ -14,11 +14,13 @@
 #include "../include/editor_op.h"
 #include "../include/galloc.h"
 #include "../include/input.h"
+#include "../include/list_popup.h"
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/utf8.h"
 #include "../include/utils.h"
 
+#include <stddef.h>
 #include <string.h>
 
 extern EditorConfig E;
@@ -70,6 +72,61 @@ Lisp l_debugToggleBreakpoint(Lisp args, LispError *e, LispContext ctx) {
   return lisp_make_bool(added == 1);
 }
 
+// One of the texts a breakpoint can carry, set by a command.
+typedef struct
+{
+    size_t field; // in Breakpoint
+    int (*set)(const char *path, int line, const char *text);
+    const char *prompt;
+    const char *set_message;   // with the line and the text
+    const char *clear_message; // with the line
+} BreakpointText;
+
+/**
+ * @brief Sets the text `what` describes on the breakpoint at the cursor:
+ * the argument, or what the user types (the current one offered).
+ */
+static Lisp setBreakpointText(Lisp args, LispError *e, const BreakpointText *what) {
+  char *path;
+  int line;
+  Utf8Char *input;
+  char *text;
+  const Breakpoint *bp;
+  const char *current;
+  Utf8Char *placeholder;
+  if (!cursorLocation(&path, &line))
+    return lisp_null();
+  if (lisp_is_pair(args)) {
+    if (lisp_type(lisp_car(args)) != LISP_STRING) {
+      gfree(path);
+      *e = LISP_ERROR_ARG_TYPE;
+      return lisp_null();
+    }
+    text = utilStrdup(lisp_string(lisp_car(args)));
+  } else {
+    bp = breakpointAt(path, line);
+    current = bp ? *(char *const *)((const char *)bp + what->field) : NULL;
+    placeholder = current ? stringToUtf8((unsigned char *)current) : NULL;
+    input = editorPrompt(what->prompt, placeholder, 0);
+    gfree(placeholder);
+    if (!input) {
+      gfree(path);
+      return lisp_null();
+    }
+    text = (char *)utf8ToString(input);
+    gfree(input);
+  }
+  if (what->set(path, line, text) == 0) {
+    if (text && *text)
+      editorSetStatusMessage(what->set_message, line + 1, text);
+    else
+      editorSetStatusMessage(what->clear_message, line + 1);
+  }
+  gfree(text);
+  gfree(path);
+  return lisp_null();
+}
+
 /**
  * @brief Lisp function: give the breakpoint at the cursor a condition
  * @details (debug-breakpoint-condition ["expression"]) — asks for the
@@ -80,41 +137,48 @@ Lisp l_debugToggleBreakpoint(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp l_debugBreakpointCondition(Lisp args, LispError *e, LispContext ctx) {
-  char *path;
-  int line;
-  Utf8Char *input;
-  char *condition;
-  const Breakpoint *bp;
-  Utf8Char *current;
+  static const BreakpointText what = {
+      offsetof(Breakpoint, condition), breakpointSetCondition,
+      "Break when: %u (ESC to cancel)", "Breakpoint at line %d stops when %s",
+      "Breakpoint at line %d always stops"};
   (void)ctx;
-  if (!cursorLocation(&path, &line))
-    return lisp_null();
-  if (lisp_is_pair(args)) {
-    if (lisp_type(lisp_car(args)) != LISP_STRING) {
-      gfree(path);
-      *e = LISP_ERROR_ARG_TYPE;
-      return lisp_null();
-    }
-    condition = utilStrdup(lisp_string(lisp_car(args)));
-  } else {
-    bp = breakpointAt(path, line);
-    current = (bp && bp->condition) ? stringToUtf8((unsigned char *)bp->condition) : NULL;
-    input = editorPrompt("Break when: %u (ESC to cancel)", current, 0);
-    gfree(current);
-    if (!input) {
-      gfree(path);
-      return lisp_null();
-    }
-    condition = (char *)utf8ToString(input);
-    gfree(input);
-  }
-  if (breakpointSetCondition(path, line, condition) == 0)
-    editorSetStatusMessage(condition && *condition ? "Breakpoint at line %d stops when %s"
-                                                   : "Breakpoint at line %d always stops",
-                           line + 1, condition);
-  gfree(condition);
-  gfree(path);
-  return lisp_null();
+  return setBreakpointText(args, e, &what);
+}
+
+/**
+ * @brief Lisp function: how many hits the breakpoint at the cursor waits for
+ * @details (debug-breakpoint-hit-count ["count"]) — asks when it isn't
+ * given. The adapter decides what it understands: a number ("3": from the
+ * third hit on) everywhere, gdb also "> 5" or "% 2" (every other one). An
+ * empty one stops every time again. Adds the breakpoint if the line has
+ * none.
+ * @return lisp_null()
+ */
+Lisp l_debugBreakpointHitCount(Lisp args, LispError *e, LispContext ctx) {
+  static const BreakpointText what = {
+      offsetof(Breakpoint, hit_condition), breakpointSetHitCondition,
+      "Stop after how many hits: %u (ESC to cancel)", "Breakpoint at line %d stops on hit %s",
+      "Breakpoint at line %d stops every time"};
+  (void)ctx;
+  return setBreakpointText(args, e, &what);
+}
+
+/**
+ * @brief Lisp function: make the breakpoint at the cursor a logpoint
+ * @details (debug-logpoint ["message"]) — asks when it isn't given. The
+ * program doesn't stop there: the message goes to the output each time,
+ * with every {expression} replaced by its value ("i = {i}"). An empty one
+ * makes it an ordinary breakpoint again. Adds the breakpoint if the line
+ * has none.
+ * @return lisp_null()
+ */
+Lisp l_debugLogpoint(Lisp args, LispError *e, LispContext ctx) {
+  static const BreakpointText what = {
+      offsetof(Breakpoint, log_message), breakpointSetLogMessage,
+      "Log ({expression}s are replaced): %u (ESC to cancel)", "Line %d logs: %s",
+      "Breakpoint at line %d stops again"};
+  (void)ctx;
+  return setBreakpointText(args, e, &what);
 }
 
 /**
@@ -135,9 +199,9 @@ Lisp l_debugClearBreakpoints(Lisp args, LispError *e, LispContext ctx) {
 /**
  * @brief Lisp function: the breakpoints, listed
  * @details (debug-breakpoints) lists them in the "*search*" buffer (ENTER
- * jumps to one) and returns them as a list of ("path" line "condition"),
- * line 1-based and condition "" for none. (debug-breakpoints #f) only
- * returns the list.
+ * jumps to one) and returns them as a list of ("path" line "condition"
+ * "hit-count" "log-message"), line 1-based and "" for each text it doesn't
+ * have. (debug-breakpoints #f) only returns the list.
  * @return Lisp list
  */
 Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx) {
@@ -149,8 +213,12 @@ Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx) {
   Lisp entry;
   (void)e;
   for (i = count - 1; i >= 0; i--) {
-    entry = lisp_cons(lisp_make_string2(all[i].condition ? all[i].condition : "", ctx),
+    entry = lisp_cons(lisp_make_string2(all[i].log_message ? all[i].log_message : "", ctx),
                       lisp_null(), ctx);
+    entry = lisp_cons(lisp_make_string2(all[i].hit_condition ? all[i].hit_condition : "", ctx),
+                      entry, ctx);
+    entry = lisp_cons(lisp_make_string2(all[i].condition ? all[i].condition : "", ctx), entry,
+                      ctx);
     entry = lisp_cons(lisp_make_int(all[i].line + 1), entry, ctx);
     entry = lisp_cons(lisp_make_string2(all[i].path, ctx), entry, ctx);
     result = lisp_cons(entry, result, ctx);
@@ -168,11 +236,83 @@ Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx) {
     locs[i].abs_path = all[i].path;
     locs[i].line = all[i].line + 1;
     locs[i].col = 0;
-    locs[i].text = all[i].condition ? all[i].condition : "breakpoint";
+    locs[i].text = all[i].log_message ? all[i].log_message
+                   : all[i].condition ? all[i].condition
+                   : all[i].hit_condition ? all[i].hit_condition
+                                          : "breakpoint";
   }
   projectSearchShowLocations("Breakpoints", locs, count);
   gfree(locs);
   return result;
+}
+
+/**
+ * @brief Lisp function: which exceptions stop the program
+ * @details (debug-exception-breakpoints) asks, listing the filters the
+ * adapter offers (start a session first to see them); (debug-exception-
+ * breakpoints "raised" "uncaught") sets them, by the adapter's ids
+ * (debugpy: raised, uncaught, userUnhandled; gdb: throw, catch, rethrow;
+ * lldb-dap: cpp_throw, cpp_catch). (debug-exception-breakpoints #f) stops
+ * on none, (debug-exception-breakpoints #t) goes back to the adapter's
+ * defaults. Every session gets them, running or to come.
+ * @return the filters on, space-separated
+ */
+Lisp l_debugExceptionBreakpoints(Lisp args, LispError *e, LispContext ctx) {
+  char *ids = NULL;
+  char *joined;
+  char *offered;
+  char *prompt;
+  char *p;
+  Utf8Char *placeholder;
+  Utf8Char *input;
+  Lisp it;
+  int count;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_BOOL) {
+    dapSetExceptionFilters(lisp_is_true(lisp_car(args)) ? NULL : "");
+  } else if (lisp_is_pair(args)) {
+    for (it = args; lisp_is_pair(it); it = lisp_cdr(it)) {
+      if (lisp_type(lisp_car(it)) != LISP_STRING) {
+        gfree(ids);
+        *e = LISP_ERROR_ARG_TYPE;
+        return lisp_null();
+      }
+      joined = utilFormat("%s%s%s", ids ? ids : "", ids ? " " : "", lisp_string(lisp_car(it)));
+      gfree(ids);
+      ids = joined;
+    }
+    dapSetExceptionFilters(ids);
+    gfree(ids);
+  } else {
+    offered = dapExceptionFilters(&count);
+    prompt = offered ? utilFormat("Stop on exceptions [%s]: %%u", offered)
+                     : utilStrdup("Stop on exceptions (the adapter's filter ids; start a "
+                                  "session to see them): %u");
+    gfree(offered);
+    if (!prompt)
+      return lisp_null();
+    // A label's own "%" isn't a format.
+    for (p = strchr(prompt, '%'); p && p[1] != 'u'; p = strchr(p + 1, '%'))
+      *p = ' ';
+    ids = dapExceptionChoice();
+    placeholder = ids ? stringToUtf8((unsigned char *)ids) : NULL;
+    gfree(ids);
+    input = editorPromptEx(prompt, placeholder, 0, 1);
+    gfree(placeholder);
+    gfree(prompt);
+    if (!input)
+      return lisp_null();
+    ids = (char *)utf8ToString(input);
+    gfree(input);
+    dapSetExceptionFilters(ids ? ids : "");
+    gfree(ids);
+  }
+  ids = dapExceptionChoice();
+  editorSetStatusMessage(ids && *ids ? "Exceptions that stop the program: %s"
+                                     : "No exception stops the program%s",
+                         ids ? (*ids ? ids : "") : "");
+  it = lisp_make_string2(ids ? ids : "", ctx);
+  gfree(ids);
+  return it;
 }
 
 // ─── Adapters and the session ───────────────────────────────────────────────
@@ -188,6 +328,11 @@ static cJSON *lispToJson(Lisp v);
  * extension wins, like lsp-server. An association list at the end gives
  * launch arguments for every session that doesn't set them itself:
  *   (dap-adapter "c" "xcrun" "lldb-dap" '(("sourceMap" ("/tmp" . "/private/tmp"))))
+ * An adapter that listens on a port rather than on stdio gets "{port}" in
+ * its arguments, replaced by a free local port that is then connected to:
+ *   (dap-adapter "go" "dlv" "dap" "--listen=127.0.0.1:{port}")
+ * and one already running is named by its address: (dap-adapter "js"
+ * "tcp:127.0.0.1:8123").
  * @return lisp_null()
  */
 Lisp l_dapAdapter(Lisp args, LispError *e, LispContext ctx) {
@@ -420,6 +565,89 @@ Lisp l_debugStart(Lisp args, LispError *e, LispContext ctx) {
   return lisp_make_bool(ok);
 }
 
+// Attaches to `pid`, with the adapter for the active buffer's file.
+static int attachToPid(const long pid) {
+  cJSON *args = cJSON_CreateObject();
+  char *json;
+  int ok;
+  // gdb and lldb-dap read "pid", debugpy "processId"; each ignores the other.
+  cJSON_AddNumberToObject(args, "pid", (double)pid);
+  cJSON_AddNumberToObject(args, "processId", (double)pid);
+  json = cJSON_PrintUnformatted(args);
+  cJSON_Delete(args);
+  ok = json && dapAttach(NULL, json) == 0;
+  gfree(json);
+  return ok;
+}
+
+// The process picked in (debug-attach)'s list.
+static Lisp attachSelected(Lisp args, LispError *e, LispContext ctx) {
+  (void)e;
+  (void)ctx;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT)
+    attachToPid((long)lisp_int(lisp_car(args)));
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function: debug a program that is already running
+ * @details (debug-attach) lists your processes to pick one from (typing
+ * narrows the list); (debug-attach pid) attaches to that one;
+ * (debug-attach alist) hands the adapter its own attach arguments, with an
+ * "adapter" entry to pick it as in debug-start. The adapter is the active
+ * buffer's file type's. Stopping the session (CTRL-x B q) detaches and
+ * leaves the program running. On Linux gdb may need
+ * /proc/sys/kernel/yama/ptrace_scope at 0 to attach to a process it didn't
+ * start.
+ * @return #t if the session started (for the list: once it's open)
+ */
+Lisp l_debugAttach(Lisp args, LispError *e, LispContext ctx) {
+  OsProcessInfo *procs;
+  char label[320];
+  Lisp items = lisp_null();
+  cJSON *attach;
+  cJSON *adapter;
+  char *ext = NULL;
+  char *json;
+  int count;
+  int ok;
+  int i;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT)
+    return lisp_make_bool(attachToPid((long)lisp_int(lisp_car(args))));
+  if (lisp_is_pair(args)) {
+    if (!isAlist(lisp_car(args))) {
+      *e = LISP_ERROR_ARG_TYPE;
+      return lisp_null();
+    }
+    attach = lispToJson(lisp_car(args));
+    adapter = cJSON_DetachItemFromObjectCaseSensitive(attach, "adapter");
+    if (cJSON_IsString(adapter))
+      ext = utilStrdup(adapter->valuestring);
+    cJSON_Delete(adapter);
+    json = cJSON_PrintUnformatted(attach);
+    cJSON_Delete(attach);
+    ok = json && dapAttach(ext, json) == 0;
+    gfree(json);
+    gfree(ext);
+    return lisp_make_bool(ok);
+  }
+  procs = os_process_list(&count);
+  if (!procs || count == 0) {
+    gfree(procs);
+    editorSetStatusMessage("Couldn't list the processes");
+    return lisp_false();
+  }
+  // Newest (highest pid) first: usually the one just started.
+  for (i = 0; i < count; i++) {
+    snprintf(label, sizeof(label), "%7ld  %s", procs[i].pid, procs[i].command);
+    items = lisp_cons(lisp_cons(lisp_make_string2(label, ctx), lisp_make_int(procs[i].pid), ctx),
+                      items, ctx);
+  }
+  gfree(procs);
+  listPopupOpen("Attach to", items, lisp_make_func(attachSelected), lisp_null(), 1);
+  return lisp_true();
+}
+
 /**
  * @brief Lisp function: continue the paused program, or start one
  * @details (debug-continue) — what CTRL-x B c does: without a session, it's
@@ -498,6 +726,110 @@ Lisp l_debugEvaluate(Lisp args, LispError *e, LispContext ctx) {
 Lisp l_debugCommand(Lisp args, LispError *e, LispContext ctx) {
   (void)ctx;
   return evaluate(args, e, "Debugger command: %u (ESC to cancel)", 1);
+}
+
+/**
+ * @brief Lisp function: watch an expression
+ * @details (debug-watch ["expression"]) — asks when it isn't given. The
+ * panel shows its value in the selected frame each time the program stops,
+ * in every project's session.
+ * @return lisp_null()
+ */
+Lisp l_debugWatch(Lisp args, LispError *e, LispContext ctx) {
+  Utf8Char *input;
+  char *text;
+  (void)ctx;
+  if (lisp_is_pair(args)) {
+    if (lisp_type(lisp_car(args)) != LISP_STRING) {
+      *e = LISP_ERROR_ARG_TYPE;
+      return lisp_null();
+    }
+    text = utilStrdup(lisp_string(lisp_car(args)));
+  } else {
+    input = editorPrompt("Watch: %u (ESC to cancel)", NULL, 0);
+    if (!input)
+      return lisp_null();
+    text = (char *)utf8ToString(input);
+    gfree(input);
+  }
+  if (text && *text && dapWatchAdd(text) == 0) {
+    debugUiOpenPanel();
+    editorSetStatusMessage("Watching %s", text);
+  }
+  gfree(text);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function: stop watching an expression
+ * @details (debug-unwatch ["expression"]) — without it, the watch on the
+ * panel's row under the cursor, else asks (offering the last one added).
+ * @return #t if one was removed
+ */
+Lisp l_debugUnwatch(Lisp args, LispError *e, LispContext ctx) {
+  const char *const *watches;
+  Utf8Char *placeholder;
+  Utf8Char *input;
+  char *text = NULL;
+  int count;
+  int index = -1;
+  int i;
+  (void)ctx;
+  watches = dapWatches(&count);
+  if (lisp_is_pair(args)) {
+    if (lisp_type(lisp_car(args)) != LISP_STRING) {
+      *e = LISP_ERROR_ARG_TYPE;
+      return lisp_null();
+    }
+    text = utilStrdup(lisp_string(lisp_car(args)));
+  } else if ((index = debugUiPanelWatch()) < 0) {
+    if (count == 0) {
+      editorSetStatusMessage("No watch expressions");
+      return lisp_false();
+    }
+    placeholder = stringToUtf8((unsigned char *)watches[count - 1]);
+    input = editorPrompt("Stop watching: %u (ESC to cancel)", placeholder, 0);
+    gfree(placeholder);
+    if (!input)
+      return lisp_false();
+    text = (char *)utf8ToString(input);
+    gfree(input);
+  }
+  for (i = 0; text && i < count && index < 0; i++)
+    if (!strcmp(watches[i], text))
+      index = i;
+  gfree(text);
+  if (index < 0) {
+    editorSetStatusMessage("Not watched");
+    return lisp_false();
+  }
+  editorSetStatusMessage("Stopped watching %s", watches[index]);
+  return lisp_make_bool(dapWatchRemove(index) == 0);
+}
+
+/**
+ * @brief Lisp function: the watch expressions
+ * @details (debug-watches) — a list of ("expression" value), value being
+ * what it came to in the paused program, #f when it isn't paused.
+ * @return Lisp list
+ */
+Lisp l_debugWatches(Lisp args, LispError *e, LispContext ctx) {
+  const char *const *watches;
+  const char *value;
+  Lisp result = lisp_null();
+  Lisp entry;
+  int count;
+  int i;
+  (void)args;
+  (void)e;
+  watches = dapWatches(&count);
+  for (i = count - 1; i >= 0; i--) {
+    value = dapWatchValue(i);
+    entry = lisp_cons(value ? lisp_make_string2(value, ctx) : lisp_false(), lisp_null(), ctx);
+    entry = lisp_cons(lisp_make_string2(watches[i], ctx), entry, ctx);
+    result = lisp_cons(entry, result, ctx);
+  }
+  return result;
 }
 
 /**

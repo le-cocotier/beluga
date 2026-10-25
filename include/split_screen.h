@@ -93,6 +93,18 @@ ScreenLayout *splitScreenGetLayout(void);
  */
 EditorPane *splitScreenGetActivePane(void);
 
+// A cursor per pane: buffer_t x/y is the focused pane's cursor. Called
+// before each key and each redraw, this notices that focus moved (another
+// pane, or another buffer in the pane): the pane that had it keeps its
+// cursor, and the one that has it now gets its own back.
+void splitScreenSyncCursor(void);
+// The focused pane keeps its cursor as if it lost focus: before the layout
+// is swapped for another one (a daemon window's).
+void splitScreenSaveCursor(void);
+// Rows were inserted (delta > 0) or removed (delta < 0) at row `at` of
+// `buf`: the cursors the other panes keep in it move with their lines.
+void splitScreenLinesShifted(const struct buffer_t *buf, int at, int delta);
+
 void freePane(EditorPane *pane);
 void freeScreenLayout(ScreenLayout *layout);
 

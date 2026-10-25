@@ -11,6 +11,8 @@ machine doesn't have (less, vim) is skipped on its own.
 import os
 import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 
@@ -228,9 +230,14 @@ def terminal_long_burst(binary, repo):
         open_terminal(ed)
         line = ''.join(chr(ord('a') + i % 26) for i in range(2000))
         shell(ed, 'echo ' + line + ' > long.txt')
-        ed.pump(2.0)
-        with open(ed.path('long.txt')) as f:
-            got = f.read()
+        got = ''
+        for _ in range(100):  # slower under a sanitizer, or a busy machine
+            ed.pump(0.1)
+            if os.path.exists(ed.path('long.txt')):
+                with open(ed.path('long.txt')) as f:
+                    got = f.read()
+                if got.endswith('\n'):
+                    break
         assert got == line + '\n', '%d bytes: %r' % (len(got), got[:80])
         ed.quit()
 
@@ -253,6 +260,30 @@ def breakpoint_gutter(binary, repo):
         ed.wait_for('Removed breakpoint at line 4')
         assert '●' not in ''.join(ed.text())
         ed.keys(CTRL_X, 'u', delay=0.3)  # undo the new line, quit unsaved
+        ed.quit()
+
+
+def pane_cursors(binary, repo):
+    """Two panes on the same file each keep their own cursor: moving in one
+    doesn't move the other, and lines inserted above a pane's cursor carry
+    it down with its line."""
+    with Beluga(binary, repo, rows=30, cols=100) as ed:
+        with open(ed.path('p.txt'), 'w') as f:
+            f.write(''.join('line %d\n' % i for i in range(1, 41)))
+        ed.start('p.txt')
+        ed.wait_for('line 20')
+        ed.keys(CTRL_X, '"', delay=0.4)      # split: the new pane has focus
+        ed.keys(*([DOWN] * 5))               # its cursor to line 6
+        ed.keys(CTRL_X, 'o', delay=0.3)      # the first pane: still on line 1
+        ed.keys('A', '\r', delay=0.2)       # a line inserted above line 6
+        ed.keys(CTRL_X, 'o', delay=0.3)
+        ed.keys('B', delay=0.3)
+        lines = ed.text()
+        assert lines[0].split('│')[0].rstrip().endswith('A'), lines[:3]
+        assert any('Bline 6' in line for line in lines), lines[:10]
+        assert not any('Bline' in line and 'Bline 6' not in line for line in lines), lines[:10]
+        for _ in range(3):
+            ed.keys(CTRL_X, 'u', delay=0.2)
         ed.quit()
 
 
@@ -302,6 +333,11 @@ def debug_session(binary, repo, config):
         ed.keys(*DEBUG, 'c')
         ed.wait_for('the program exited with code 1')
         assert any('total 50' in line for line in ed.text()), ed.text()
+        # The breakpoint was found at once, not left pending until the
+        # program loaded (gdb gets the program on its command line).
+        ed.keys(*DEBUG, 'o', delay=0.5)
+        ed.wait_for('total 50')
+        assert not any('No source file' in line for line in ed.text()), ed.text()
         ed.quit()
 
 
@@ -314,6 +350,61 @@ def debugger_gdb(binary, repo):
     debug_session(binary, repo, '(dap-adapter "c" "gdb" "-q" "-i" "dap")')
 
 
+ATTACHEE = """#include <stdio.h>
+#include <unistd.h>
+static volatile int ticks;
+static void tick(void) {
+  ticks++;
+}
+int main(void) {
+  printf("ready\\n");
+  fflush(stdout);
+  for (;;) {
+    tick();
+    usleep(50000);
+  }
+}
+"""
+
+
+def debugger_attach(binary, repo):
+    """CTRL-x B a lists the running processes; picking one attaches gdb to
+    it, its breakpoints work, and stopping detaches, the program going on."""
+    if sys.platform == 'darwin':
+        raise Skip('gdb on macOS needs code signing to run programs')
+    if not gdb_with_dap():
+        raise Skip('needs gdb 14 or later and cc')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        with open(ed.path('t.c'), 'w') as f:
+            f.write(ATTACHEE)
+        subprocess.run(['cc', '-g', '-O0', '-o', ed.path('t'), ed.path('t.c')],
+                       check=True)
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "c" "gdb" "-q" "-i" "dap")\n')
+        program = subprocess.Popen([ed.path('t')], stdout=subprocess.PIPE)
+        try:
+            assert program.stdout.readline() == b'ready\n'
+            ed.start('t.c')
+            ed.wait_for('ticks++')
+            ed.keys(*([DOWN] * 4), *DEBUG, 'b')
+            ed.wait_for('Added breakpoint at line 5')
+            ed.keys(*DEBUG, 'a', delay=0.5)
+            ed.wait_for('Attach to')
+            ed.keys(*str(program.pid), delay=0.05)
+            ed.wait_for(ed.path('t'))
+            ed.keys('\r', delay=0.3)
+            ed.wait_for('stopped (breakpoint)', 30)
+            assert re.match(r'\s*5 ▶', ed.text()[4]), ed.text()[4]
+            ed.keys(*DEBUG, 'q', delay=0.5)
+            ed.wait_for('Detached from the program', 20)
+            ed.pump(0.5)
+            assert program.poll() is None, 'the program ended with the session'
+            ed.quit()
+        finally:
+            program.kill()
+            program.wait()
+
+
 def debugger_lldb(binary, repo):
     """The session against lldb-dap, as packages/c sets it up on macOS."""
     if sys.platform != 'darwin' or not shutil.which('cc'):
@@ -321,6 +412,234 @@ def debugger_lldb(binary, repo):
     if subprocess.run(['xcrun', '-f', 'lldb-dap'], capture_output=True).returncode != 0:
         raise Skip('no lldb-dap (Xcode command line tools)')
     debug_session(binary, repo, '(define LSP #f)\n(add-package "c")')
+
+
+def debugger_python_in_terminal(binary, repo):
+    """debugpy with "console": "integratedTerminal": its runInTerminal
+    request runs the program in a *debuggee* pane, where it reads what is
+    typed, while breakpoints and the panel work as usual."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        with open(ed.path('t.py'), 'w') as f:
+            f.write("name = input('name? ')\n"
+                    "total = len(name)\n"
+                    "print('hello', name, total)\n")
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "py" "%s" "-m" "debugpy.adapter")\n'
+                    '(define (debug-in-terminal) (debug-start \'(("program" . "%s")'
+                    ' ("console" . "integratedTerminal"))))\n'
+                    % (sys.executable, ed.path('t.py')))
+        ed.start('t.py')
+        ed.wait_for('hello')
+        ed.keys(DOWN, *DEBUG, 'b')
+        ed.keys('\x1bx', delay=0.4)
+        ed.keys(*'debug-in-terminal', delay=0.02)
+        ed.keys('\r', delay=0.3)
+        ed.wait_for('*debuggee*', 30)
+        for _ in range(100):  # the program's prompt, not the code's line
+            if any(line.startswith('name?') for line in ed.text()):
+                break
+            ed.pump(0.1)
+        ed.write('bob\r')                # the program's pane has the keys
+        ed.wait_for('stopped (breakpoint)', 20)
+        ed.keys('\x1b', delay=0.3)       # out of the terminal's keys
+        ed.keys(*DEBUG, 'c')
+        ed.wait_for('hello bob 3', 20)
+        ed.wait_for('exited with code 0', 20)
+        ed.quit()
+
+
+def debugger_logpoints(binary, repo):
+    """A logpoint writes to the output without stopping; a breakpoint with
+    a hit count lets the first hits go by."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        with open(ed.path('t.py'), 'w') as f:
+            f.write("total = 0\n"
+                    "for i in range(5):\n"
+                    "    total += i\n"
+                    "    total += 0\n"
+                    "print('total', total)\n")
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "py" "%s" "-m" "debugpy.adapter")\n'
+                    '(define (debug-t) (debug-start \'(("program" . "%s"))))\n'
+                    % (sys.executable, ed.path('t.py')))
+        ed.start('t.py')
+        ed.wait_for('total')
+        ed.keys(DOWN, DOWN, *DEBUG, 'L', delay=0.3)
+        ed.wait_for('Log (')
+        ed.write('i is {i}\r')
+        ed.wait_for('Line 3 logs: i is {i}')
+        assert re.match(r'\s*3 ◉', ed.text()[2]), ed.text()[2]
+        ed.keys(DOWN, *DEBUG, 'h', delay=0.3)
+        ed.wait_for('Stop after how many hits')
+        ed.write('3\r')
+        ed.wait_for('Breakpoint at line 4 stops on hit 3')
+        assert re.match(r'\s*4 ◆', ed.text()[3]), ed.text()[3]
+        ed.keys('\x1bx', delay=0.4)
+        ed.keys(*'debug-t', delay=0.02)
+        ed.keys('\r', delay=0.3)
+        ed.wait_for('stopped (breakpoint)', 30)
+        ed.wait_for('i = 2')
+        ed.wait_for('i is 2')
+        assert not any('i is 3' in line for line in ed.text())
+        ed.keys(*DEBUG, 'b')  # line 4: off again, so it runs to the end
+        ed.keys(*DEBUG, 'c')
+        ed.wait_for('exited with code 0', 20)
+        ed.keys(*DEBUG, 'o', delay=0.5)
+        ed.wait_for('i is 4')
+        ed.wait_for('total 10')
+        ed.quit()
+
+
+def debugger_exceptions(binary, repo):
+    """Exception breakpoints: with debugpy's "raised" filter on, an
+    exception the program catches still stops it; the prompt lists the
+    adapter's filters once a session runs."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    with Beluga(binary, repo, rows=30, cols=140) as ed:
+        with open(ed.path('t.py'), 'w') as f:
+            f.write("try:\n"
+                    "    raise ValueError('boom')\n"
+                    "except ValueError:\n"
+                    "    pass\n"
+                    "print('done')\n")
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "py" "%s" "-m" "debugpy.adapter")\n'
+                    '(define (debug-t) (debug-start \'(("program" . "%s"))))\n'
+                    % (sys.executable, ed.path('t.py')))
+        ed.start('t.py')
+        ed.wait_for('boom')
+        ed.keys(*DEBUG, 'E', delay=0.3)
+        ed.wait_for('Stop on exceptions')
+        ed.write('raised\r')
+        ed.wait_for('Exceptions that stop the program: raised')
+        ed.keys('\x1bx', delay=0.4)
+        ed.keys(*'debug-t', delay=0.02)
+        ed.keys('\r', delay=0.3)
+        ed.wait_for('stopped (', 30)
+        for _ in range(50):  # the call stack comes after the stop
+            if re.match(r'\s*2 ▶', ed.text()[1]):
+                break
+            ed.pump(0.1)
+        assert re.match(r'\s*2 ▶', ed.text()[1]), ed.text()[1]
+        ed.keys(*DEBUG, 'E', delay=0.3)
+        ed.wait_for('*raised (')
+        ed.wait_for('uncaught (')
+        ed.keys('\x1b', delay=0.3)
+        ed.keys(*DEBUG, 'c')
+        ed.wait_for('exited with code 0', 20)
+        ed.quit()
+
+
+def debugger_watches(binary, repo):
+    """Watch expressions: shown in the panel with their value at each stop,
+    added before the session or while it's paused, and taken away. The
+    lines up to the stopped one show their variables' values."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        with open(ed.path('t.py'), 'w') as f:
+            f.write("total = 0\n"
+                    "for i in range(3):\n"
+                    "    total += i\n"
+                    "print('total', total)\n")
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "py" "%s" "-m" "debugpy.adapter")\n'
+                    '(define (debug-t) (debug-start \'(("program" . "%s"))))\n'
+                    % (sys.executable, ed.path('t.py')))
+        ed.start('t.py')
+        ed.wait_for('total')
+        ed.keys(*DEBUG, 'w', delay=0.3)
+        ed.write('total * 10\r')
+        ed.wait_for('Watching total * 10')
+        ed.keys(DOWN, DOWN, *DEBUG, 'b')
+        ed.keys('\x1bx', delay=0.4)
+        ed.keys(*'debug-t', delay=0.02)
+        ed.keys('\r', delay=0.3)
+        ed.wait_for('stopped (breakpoint)', 30)
+        ed.wait_for('total * 10 = 0')
+        ed.keys(*DEBUG, 'w', delay=0.3)
+        ed.write('i + 100\r')
+        ed.wait_for('i + 100 = 100')
+        ed.keys(*DEBUG, 'c')
+        ed.wait_for('i + 100 = 101', 20)
+        ed.keys(*DEBUG, 'c')
+        ed.wait_for('i + 100 = 102', 20)
+        ed.wait_for('total * 10 = 10')
+        # The values after the lines that use them (DEBUG-INLINE-VALUES).
+        ed.wait_for('total = 1, i = 2')
+        assert 'total = 1, i = 2' in ed.text()[2], ed.text()[2]
+        assert 'i = 2' in ed.text()[1], ed.text()[1]
+        assert '=' not in ed.text()[3], ed.text()[3]
+        ed.keys(*DEBUG, 'W', delay=0.3)   # offers the last one added
+        ed.wait_for('Stop watching: i + 100')
+        ed.write('\r')
+        ed.wait_for('Stopped watching i + 100')
+        assert not any('i + 100' in line for line in ed.text()[:-1])
+        assert any('total * 10 = 10' in line for line in ed.text())
+        ed.keys(*DEBUG, 'b')  # off again, so it runs to the end
+        ed.keys(*DEBUG, 'c')
+        ed.wait_for('exited with code 0', 20)
+        ed.quit()
+
+
+def python_session(ed, adapter_lisp):
+    """A breakpoint, a stop, a variable, then the end, with debugpy reached
+    as `adapter_lisp` (the arguments of dap-adapter after "py")."""
+    with open(ed.path('t.py'), 'w') as f:
+        f.write("total = 0\n"
+                "for i in range(3):\n"
+                "    total += i\n"
+                "print('total', total)\n")
+    with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+        f.write('\n(dap-adapter "py" %s)\n'
+                '(define (debug-t) (debug-start \'(("program" . "%s"))))\n'
+                % (adapter_lisp, ed.path('t.py')))
+    ed.start('t.py')
+    ed.wait_for('total')
+    ed.keys(DOWN, DOWN, *DEBUG, 'b')
+    ed.keys('\x1bx', delay=0.4)
+    ed.keys(*'debug-t', delay=0.02)
+    ed.keys('\r', delay=0.3)
+    ed.wait_for('stopped (breakpoint)', 30)
+    ed.wait_for('total = 0')
+    ed.keys(*DEBUG, 'b')  # off again, so it runs to the end
+    ed.keys(*DEBUG, 'c')
+    ed.wait_for('exited with code 0', 20)
+    ed.keys(*DEBUG, 'o', delay=0.5)
+    ed.wait_for('total 3')
+    ed.quit()
+
+
+def debugger_over_tcp(binary, repo):
+    """An adapter that listens on a port: started by beluga with {port}
+    in its arguments, or already running and named as tcp:HOST:PORT."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        python_session(ed, '"%s" "-m" "debugpy.adapter" "--host" "127.0.0.1" "--port" "{port}"'
+                       % sys.executable)
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        adapter = subprocess.Popen([sys.executable, '-m', 'debugpy.adapter', '--host',
+                                    '127.0.0.1', '--port', str(port)],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            python_session(ed, '"tcp:127.0.0.1:%d"' % port)
+        finally:
+            adapter.kill()
+            adapter.wait()
 
 
 def terminal_app_shift_function_keys(binary, repo):
@@ -340,10 +659,218 @@ def terminal_app_shift_function_keys(binary, repo):
         ed.quit()
 
 
+def daemon_name(tag):
+    return 'test-%s-%d' % (tag, os.getpid())
+
+
+def daemon_in_background(binary, repo):
+    """beluga --daemon returns at once, the daemon going on in the
+    background; a second one is refused; -c opens a window on it."""
+    name = daemon_name('bg')
+    with Beluga(binary, repo) as ed:
+        try:
+            rc, out = ed.run('--daemon=' + name)
+            assert rc == 0 and 'started' in out, (rc, out)
+            rc, out = ed.run('--daemon=' + name)
+            assert rc == 1 and 'already running' in out, (rc, out)
+            with open(ed.path('a.txt'), 'w') as f:
+                f.write('alpha\n')
+            ed.start('-c', '--name=' + name, 'a.txt')
+            ed.wait_for('alpha')
+            ed.quit()
+        finally:
+            rc, out = ed.run('--kill', '--force', '--name=' + name)
+        assert rc == 0, out
+
+
+def daemon_started_by_client(binary, repo):
+    """beluga -c with no daemon running starts one."""
+    name = daemon_name('auto')
+    with Beluga(binary, repo) as ed:
+        try:
+            ed.start('-c', '--name=' + name)
+            ed.wait_for('closes this window')
+            ed.quit()
+            rc, out = ed.run('--kill', '--name=' + name)
+            assert rc == 0, out
+        finally:
+            ed.run('--kill', '--force', '--name=' + name)
+
+
+def daemon_window_directory(binary, repo):
+    """Each daemon window works from the directory its beluga -c ran in:
+    the open-file prompt starts there, and so does a terminal pane."""
+    name = daemon_name('cwd')
+    with Beluga(binary, repo) as ed:
+        try:
+            os.makedirs(ed.path('proj/sub'))
+            rc, out = ed.run('--daemon=' + name)
+            assert rc == 0, out
+            ed.start('-c', '--name=' + name, cwd='proj/sub')
+            ed.wait_for('closes this window')
+            ed.keys(CTRL_X, 'f', delay=0.4)
+            ed.wait_for('proj/sub/')
+            ed.keys('\x1b', delay=0.3)  # no file after all
+            open_terminal(ed)
+            shell(ed, 'pwd')
+            ed.wait_for(ed.path('proj/sub'))
+            ed.quit()
+        finally:
+            ed.run('--kill', '--force', '--name=' + name)
+
+
+def daemon_prompt_other_windows(binary, repo):
+    """While one window has a prompt open, another goes on: it takes keys
+    and redraws, but can't kill or edit the buffer the prompt's command
+    holds. A second prompt opened in it closes first; then the first
+    window's keys are read again."""
+    name = daemon_name('prompt')
+    with Beluga(binary, repo) as a:
+        try:
+            with open(a.path('a.txt'), 'w') as f:
+                f.write('alpha\n')
+            with open(a.path('b.txt'), 'w') as f:
+                f.write('beta\n')
+            rc, out = a.run('--daemon=' + name)
+            assert rc == 0, out
+            a.start('-c', '--name=' + name, 'a.txt')
+            a.wait_for('alpha')
+            with Beluga(binary, repo, home=a.home) as b:
+                b.start('-c', '--name=' + name, 'b.txt')
+                b.wait_for('beta')
+                a.keys(CTRL_X, 'f', delay=0.5)       # A: the open-file prompt
+                a.wait_for('Open :')
+                b.keys(*'xyz', delay=0.1)            # B goes on
+                b.wait_for('xyzbeta')
+                a.pump(0.3)
+                # A's buffer is held by its prompt: B can't kill or edit it.
+                for _ in range(3):                   # to a.txt
+                    if any('alpha' in line for line in b.text()[:2]):
+                        break
+                    b.keys(CTRL_X, '\x1b[C', delay=0.4)
+                b.wait_for('alpha')
+                b.keys(CTRL_X, 'k', delay=0.4)
+                b.wait_for('Another window has a prompt open on this buffer')
+                b.keys('Q', delay=0.3)
+                assert not any('Qalpha' in line for line in b.text()), b.text()[:3]
+                for _ in range(3):                   # back to b.txt
+                    if any('xyzbeta' in line for line in b.text()):
+                        break
+                    b.keys(CTRL_X, '\x1b[C', delay=0.4)
+                b.wait_for('xyzbeta')
+                a.pump(0.3)
+                b.keys('\x1bx', delay=0.4)          # B: a prompt of its own
+                b.wait_for('M-x:')
+                a.keys('\x1b', delay=0.5)           # read once B's is closed
+                assert not any('Aborted' in line for line in a.text()), a.text()[-2:]
+                b.keys('\x1b', delay=0.4)
+                b.wait_for('Aborted')
+                a.wait_for('Aborted', 5)
+                for _ in range(3):
+                    b.keys(CTRL_X, 'u', delay=0.2)
+                b.quit()
+            a.quit()
+        finally:
+            a.run('--kill', '--force', '--name=' + name)
+
+def daemon_stop_signals(binary, repo):
+    """Ctrl-C on a daemon with an unsaved buffer warns; a second one stops
+    it, keeping the changes in autosave and taking the socket away. A
+    closed terminal (SIGHUP) stops one at once."""
+    name = daemon_name('sig')
+    with Beluga(binary, repo) as daemon:
+        try:
+            with open(daemon.path('u.txt'), 'w') as f:
+                f.write('text\n')
+            daemon.start('--daemon=' + name, '--foreground')
+            daemon.wait_for('daemon "%s" running' % name)
+            with Beluga(binary, repo, home=daemon.home) as window:
+                window.start('-c', '--name=' + name, 'u.txt')
+                window.wait_for('text')
+                window.keys('X', delay=0.3)  # unsaved now
+                window.quit()                # the window only
+            os.kill(daemon.pid, signal.SIGINT)
+            daemon.wait_for('press Ctrl-C again')
+            assert daemon.status is None and os.waitpid(daemon.pid, os.WNOHANG)[0] == 0, \
+                'one Ctrl-C stopped it'
+            os.kill(daemon.pid, signal.SIGINT)
+            status = daemon.wait_exit(10)
+            assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, status
+            daemon.wait_for('~/.beluga/autosave')
+            saved = os.listdir(daemon.path('.beluga/autosave'))
+            assert any(entry.endswith('u.txt') for entry in saved), saved
+            rc, out = daemon.run('--kill', '--name=' + name)
+            assert rc == 1, 'still reachable: ' + out
+        finally:
+            daemon.run('--kill', '--force', '--name=' + name)
+    with Beluga(binary, repo) as daemon:
+        try:
+            daemon.start('--daemon=' + name, '--foreground')
+            daemon.wait_for('running')
+            os.kill(daemon.pid, signal.SIGHUP)
+            status = daemon.wait_exit(10)
+            assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, status
+        finally:
+            daemon.run('--kill', '--force', '--name=' + name)
+
+
+def daemon_debug_per_project(binary, repo):
+    """In a daemon, each project has its own debug session: one paused in
+    project a doesn't stop project b from debugging, and a window opened on
+    a later finds a's session where it was left."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    name = daemon_name('dbg')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        for proj in ('a', 'b'):
+            os.makedirs(ed.path(proj + '/.git'))
+            with open(ed.path(proj + '/t.py'), 'w') as f:
+                f.write("total = 0\n"
+                        "for i in range(3):\n"
+                        "    total += i\n"
+                        "print('%s total', total)\n" % proj)
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "py" "%s" "-m" "debugpy.adapter")\n' % sys.executable)
+            for proj in ('a', 'b'):
+                f.write('(define (debug-%s) (debug-start \'(("program" . "%s"))))\n'
+                        % (proj, ed.path(proj + '/t.py')))
+        try:
+            rc, out = ed.run('--daemon=' + name)
+            assert rc == 0, out
+            for proj in ('a', 'b'):
+                ed.start('-c', '--name=' + name, 't.py', cwd=proj)
+                ed.wait_for('%s total' % proj)
+                ed.keys(DOWN, DOWN, *DEBUG, 'b')
+                ed.keys('\x1bx', delay=0.4)
+                ed.keys(*('debug-' + proj), delay=0.02)
+                ed.keys('\r', delay=0.3)
+                ed.wait_for('stopped (breakpoint)', 30)
+                ed.quit()
+            ed.start('-c', '--name=' + name, 't.py', cwd='a')
+            ed.wait_for('a total')
+            ed.keys(DOWN, DOWN, *DEBUG, 'b')  # off again, so it runs to the end
+            ed.keys(*DEBUG, 'c')
+            ed.wait_for('exited with code 0', 20)
+            ed.keys(*DEBUG, 'o', delay=0.5)
+            ed.wait_for('a total 3')
+            assert not any('b total 3' in line for line in ed.text())
+            ed.quit()
+        finally:
+            ed.run('--kill', '--force', '--name=' + name)
+
+
 TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
+    ('pane-cursors', pane_cursors),
     ('debugger-gdb', debugger_gdb),
+    ('debugger-attach', debugger_attach),
     ('debugger-lldb', debugger_lldb),
+    ('debugger-python-in-terminal', debugger_python_in_terminal),
+    ('debugger-over-tcp', debugger_over_tcp),
+    ('debugger-logpoints', debugger_logpoints),
+    ('debugger-exceptions', debugger_exceptions),
+    ('debugger-watches', debugger_watches),
     ('terminal-app-shift-function-keys', terminal_app_shift_function_keys),
     ('tab-completion-list', tab_completion_list),
     ('terminal-alternate-screen', terminal_alternate_screen),
@@ -352,6 +879,12 @@ TESTS = [
     ('terminal-wide-characters', terminal_wide_characters),
     ('terminal-wrap', terminal_wrap),
     ('terminal-fast-typing', terminal_fast_typing),
+    ('daemon-in-background', daemon_in_background),
+    ('daemon-started-by-client', daemon_started_by_client),
+    ('daemon-window-directory', daemon_window_directory),
+    ('daemon-stop-signals', daemon_stop_signals),
+    ('daemon-prompt-other-windows', daemon_prompt_other_windows),
+    ('daemon-debug-per-project', daemon_debug_per_project),
     ('terminal-long-burst', terminal_long_burst),
 ]
 

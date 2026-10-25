@@ -51,6 +51,49 @@ const char *os_name(void);
 // This process's id (the LSP initialize request reports it).
 long os_getpid(void);
 
+// What a stop signal asked for (os_take_stop_signal()).
+enum {
+    OS_STOP_NONE,
+    OS_STOP_INTERRUPT, // Ctrl-C: SIGINT; CTRL_C / CTRL_BREAK on Windows
+    // The terminal closed, or the process was told to end: SIGHUP,
+    // SIGTERM; the console window closing, logoff or shutdown on Windows,
+    // which leaves the process a few seconds before it is ended anyway.
+    OS_STOP_HANGUP
+};
+
+// From now on the stop signals above no longer end the process: each is
+// remembered for os_take_stop_signal(). The daemon uses it to save what it
+// can and remove its socket before it goes.
+void os_catch_stop_signals(void);
+
+// The stop signal that came since the last call (OS_STOP_HANGUP first when
+// both did), or OS_STOP_NONE.
+int os_take_stop_signal(void);
+
+// The running program's own path (galloc'd), or NULL where it can't be told.
+char *os_exe_path(void);
+
+// A process of the current user's, for picking one to attach a debugger to.
+typedef struct
+{
+    long pid;
+    char command[256]; // its command line (cut), or its program's name
+} OsProcessInfo;
+
+// The current user's processes but this one, by pid: a galloc'd array of
+// *count entries, NULL (and *count 0) when they can't be listed.
+OsProcessInfo *os_process_list(int *count);
+
+/**
+ * @brief Starts `argv` (argv[0] a path) as a background process of its own,
+ * detached from the terminal: a new session on Unix, no console on
+ * Windows. It doesn't end with this process or with the terminal, and its
+ * stdin is the null device. Its stdout and stderr are appended to
+ * `log_file`, or go to the null device when that is NULL.
+ * @return 0 once it is started, or -1 with a one-line reason in `err`.
+ */
+int os_spawn_detached(const char *const *argv, const char *log_file, char *err, size_t err_size);
+
 /***********************************************************************************************************************
  *
  *                                                 Time
@@ -201,8 +244,25 @@ typedef struct OsPty OsPty;
  * @param shell NULL: the user's shell ($SHELL, else zsh or /bin/sh on Unix;
  * $BELUGA_SHELL, then pwsh, then Windows PowerShell, then cmd.exe on
  * Windows).
+ * @param cwd The directory it starts in; NULL: the editor's.
  */
-OsPty *os_pty_open(const char *shell, int rows, int cols);
+OsPty *os_pty_open(const char *shell, const char *cwd, int rows, int cols);
+
+/**
+ * @brief Starts a program (not a shell) on a new pseudo-terminal: what a
+ * debugger's runInTerminal asks for.
+ * @param argv Program and arguments, NULL-terminated; the program is looked
+ * up on PATH.
+ * @param cwd NULL: the editor's directory.
+ * @param env "NAME=value" to set, "NAME" alone to unset, on top of the
+ * editor's environment; NULL-terminated, or NULL for none.
+ * @return NULL if it couldn't be started.
+ */
+OsPty *os_pty_spawn(const char *const *argv, const char *cwd, const char *const *env,
+                    int rows, int cols);
+
+// The process id of what runs on it (the shell, or the program).
+long os_pty_pid(OsPty *p);
 
 // What the shell writes (VT escape sequences included); ends once it exits.
 OsStream *os_pty_output(OsPty *p);
@@ -253,6 +313,20 @@ void os_server_close(OsServer *s);
  * @return NULL, with a one-line reason in `err`, if none is running.
  */
 OsConn *os_conn_connect(const char *name, char *err, size_t err_size);
+
+/**
+ * @brief Connects over TCP to `host` (a name or an address) on `port`,
+ * waiting at most `timeout_ms` for the other end to answer. The
+ * connection is used like a daemon's: os_conn_input(), os_conn_write(),
+ * os_conn_close(). (Debug adapters that listen on a port: dlv dap,
+ * codelldb, js-debug.)
+ * @return NULL, with a one-line reason in `err`, if it can't.
+ */
+OsConn *os_tcp_connect(const char *host, int port, int timeout_ms, char *err, size_t err_size);
+
+// A TCP port on 127.0.0.1 nothing listens on right now (for an adapter to
+// be told to listen on), or -1.
+int os_tcp_free_port(void);
 
 // What the other end sends; ends when it disconnects.
 OsStream *os_conn_input(OsConn *c);

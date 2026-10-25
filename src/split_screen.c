@@ -46,6 +46,8 @@ void splitScreenInit(void) {
     E.layout.panes[0].x_offset = 0;
     E.layout.panes[0].shown_buffer_id = -1;
     E.layout.panes[0].is_active = 1;
+    E.layout.panes[0].id = 0;
+    E.layout.panes[0].saved_buffer_id = -1;
 }
 
 /**
@@ -159,6 +161,8 @@ int splitScreenSplitActive(const SplitMode direction) {
 
     fresh = &E.layout.panes[E.layout.num_panes];
     *fresh = *active;              // inherit buffer and geometry, then carve
+    fresh->id = 0;                 // a pane of its own, starting at active's cursor
+    fresh->saved_buffer_id = -1;
     fresh->cursor_x = 0;
     fresh->cursor_y = 0;
     fresh->x_offset = 0;
@@ -410,6 +414,8 @@ int splitScreenWithSidebar(const int sidebar_buffer_id, const int main_buffer_id
     E.layout.panes[0].x_offset = 0;
     E.layout.panes[0].shown_buffer_id = -1;
     E.layout.panes[0].is_active = 1;
+    E.layout.panes[0].id = 0;
+    E.layout.panes[0].saved_buffer_id = -1;
 
     // Main pane
     E.layout.panes[1].buffer_id = main_buffer_id;
@@ -423,6 +429,8 @@ int splitScreenWithSidebar(const int sidebar_buffer_id, const int main_buffer_id
     E.layout.panes[1].x_offset = 0;
     E.layout.panes[1].shown_buffer_id = -1;
     E.layout.panes[1].is_active = 0;
+    E.layout.panes[1].id = 0;
+    E.layout.panes[1].saved_buffer_id = -1;
 
     // Focus starts on the sidebar — the whole point of just having opened
     // it is to pick something in it.
@@ -555,6 +563,95 @@ ScreenLayout *splitScreenGetLayout(void) {
 EditorPane *splitScreenGetActivePane(void) {
     if (E.layout.num_panes == 0) return NULL;
     return &E.layout.panes[E.layout.active_pane];
+}
+
+/***********************************************************************************************************************
+ *
+ *                                                 A cursor per pane
+ *
+ **********************************************************************************************************************/
+
+static int s_next_pane_id = 1;
+// The pane that had focus at the last sync, and its buffer then.
+static int s_focus_pane = 0;
+static int s_focus_buffer = -1;
+
+static EditorPane *paneById(const int id) {
+    int i;
+    for (i = 0; id > 0 && i < E.layout.num_panes; i++)
+        if (E.layout.panes[i].id == id)
+            return &E.layout.panes[i];
+    return NULL;
+}
+
+// Pane `id` loses focus: it keeps buf's cursor as its own.
+static void leaveCursor(const int id, struct buffer_t *buf) {
+    EditorPane *pane = paneById(id);
+    if (pane && pane->buffer_id == buf->buffer_id) {
+        pane->saved_x = buf->x;
+        pane->saved_y = buf->y;
+        pane->saved_buffer_id = buf->buffer_id;
+    }
+    buf->cursor_pane = id;
+    buf->cursor_left_x = buf->x;
+    buf->cursor_left_y = buf->y;
+}
+
+void splitScreenSyncCursor(void) {
+    EditorPane *active = splitScreenGetActivePane();
+    struct buffer_t *buf;
+    if (!active)
+        return;
+    if (active->id == 0)
+        active->id = s_next_pane_id++;
+    if (active->id == s_focus_pane && active->buffer_id == s_focus_buffer)
+        return;
+    buf = s_focus_pane ? bufferFindById(s_focus_buffer) : NULL;
+    if (buf)
+        leaveCursor(s_focus_pane, buf);
+    buf = bufferFindById(active->buffer_id);
+    // Back to where this pane's cursor was, unless the cursor is already
+    // its own, or was moved on purpose since another pane left it.
+    if (buf && active->saved_buffer_id == buf->buffer_id && buf->cursor_pane != active->id &&
+        buf->x == buf->cursor_left_x && buf->y == buf->cursor_left_y) {
+        buf->y = active->saved_y < buf->numrows ? active->saved_y
+                                                : (buf->numrows > 0 ? buf->numrows - 1 : 0);
+        buf->x = active->saved_x;
+        if (buf->y < buf->numrows && buf->x > buf->row[buf->y].size)
+            buf->x = buf->row[buf->y].size;
+        if (buf->x < 0)
+            buf->x = 0;
+        // The view follows: fitted around the cursor again if it's off screen.
+        if (buf->y < active->y_offset || buf->y >= active->y_offset + active->height)
+            active->shown_buffer_id = -1;
+    }
+    if (buf)
+        buf->cursor_pane = active->id;
+    s_focus_pane = active->id;
+    s_focus_buffer = active->buffer_id;
+}
+
+void splitScreenSaveCursor(void) {
+    struct buffer_t *buf = s_focus_pane ? bufferFindById(s_focus_buffer) : NULL;
+    if (buf)
+        leaveCursor(s_focus_pane, buf);
+    s_focus_pane = 0;
+    s_focus_buffer = -1;
+}
+
+void splitScreenLinesShifted(const struct buffer_t *buf, const int at, const int delta) {
+    EditorPane *pane;
+    int i;
+    for (i = 0; i < E.layout.num_panes; i++) {
+        pane = &E.layout.panes[i];
+        if (pane->id == buf->cursor_pane || pane->saved_buffer_id != buf->buffer_id ||
+            pane->saved_y < at)
+            continue;
+        if (delta < 0 && pane->saved_y < at - delta)
+            pane->saved_y = at > 0 ? at - 1 : 0; // its line went: where the text joined
+        else
+            pane->saved_y += delta;
+    }
 }
 
 void freeScreenLayout(ScreenLayout *layout) {

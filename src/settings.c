@@ -51,6 +51,8 @@ static Setting s_settings[] = {
      "Show a line's error or warning message after its text."},
     {"INLAY-HINTS", SETTING_BOOL, 1, 0, &E.constantes.INLAY_HINTS,
      "Show the server's inlay hints (parameter names, deduced types) inside lines."},
+    {"DEBUG-INLINE-VALUES", SETTING_BOOL, 1, 0, &E.constantes.DEBUG_INLINE_VALUES,
+     "While the debugger is paused, show the variables' values after the lines that use them."},
 };
 
 #define SETTING_COUNT ((int)(sizeof(s_settings) / sizeof(s_settings[0])))

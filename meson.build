@@ -39,7 +39,8 @@ if is_windows
     c_args : ['-D_WIN32_WINNT=0x0A00'],
     dependencies : [cc.find_library('user32'),    # clipboard
                     cc.find_library('shell32'),   # file operations
-                    cc.find_library('advapi32')]) # the daemon pipe's permissions
+                    cc.find_library('advapi32'),  # the daemon pipe's permissions
+                    cc.find_library('ws2_32')])   # debug adapters over TCP
 else
   os_lib = static_library('beluga-os-posix',
     'src/os/os_posix.c',

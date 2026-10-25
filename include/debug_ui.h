@@ -24,6 +24,14 @@ int debugUiDrawGutter(struct abuf *ab, const char *path, int line);
 // frame)? It's drawn on the theme's "debug-line-background".
 int debugUiIsCurrentLine(const char *path, int line);
 
+// While the program is paused in `path`: after row `line` of `buf` (the
+// stopped line or one of the rows above it), the values of the variables
+// it names, "  total = 3, i = 1", in at most `max_cols` columns.
+// @return the columns drawn (0: nothing to show). DEBUG-INLINE-VALUES #f
+// turns it off.
+int debugUiDrawInlineValues(struct abuf *ab, const char *path, const struct buffer_t *buf,
+                            int line, int max_cols);
+
 // Does `buf` need the marker column for debugger marks alone?
 int debugUiWantsGutter(const struct buffer_t *buf);
 
@@ -32,6 +40,9 @@ int debugUiWantsGutter(const struct buffer_t *buf);
 void debugUiOpenPanel(void);
 // Re-renders the panel and the output buffer, if they exist.
 void debugUiRefresh(void);
+// The index of the watch expression on the cursor's row when the panel is
+// the active pane, else -1.
+int debugUiPanelWatch(void);
 // Shows row `line` (0-based) of `path` in a pane that isn't one of the
 // debugger's own buffers.
 void debugUiShowLocation(const char *path, int line);

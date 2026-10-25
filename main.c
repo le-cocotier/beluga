@@ -136,6 +136,7 @@ int main(const int argc, char *argv[]) {
   int client = 0;
   int kill = 0;
   int force = 0;
+  int foreground = 0;
   int i;
   int rc;
   if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
@@ -146,7 +147,9 @@ int main(const int argc, char *argv[]) {
     return syncPackages();
 
   //   beluga [file]                       standalone, as always
-  //   beluga --daemon[=NAME]              the daemon (daemon.c)
+  //   beluga --daemon[=NAME]              the daemon (daemon.c), in the
+  //                                       background; --foreground keeps
+  //                                       it in this terminal
   //   beluga -c | --client[=NAME] [file...]   a window on it
   //   beluga --kill[=NAME] [--force]      stops it
   //   --name=NAME                         which daemon, for any of these
@@ -167,6 +170,8 @@ int main(const int argc, char *argv[]) {
         name = value;
     } else if (!strcmp(argv[i], "--force")) {
       force = 1;
+    } else if (!strcmp(argv[i], "--foreground")) {
+      foreground = 1;
     } else if ((value = optionValue(argv[i], "--name")) != NULL && value[0]) {
       name = value;
     } else {
@@ -182,6 +187,15 @@ int main(const int argc, char *argv[]) {
     return clientKill(name, force);
   if (client)
     return clientMain(name, files, n_files);
+  if (daemon && !foreground) {
+    rc = clientStartDaemon(name);
+    if (rc == 0 && strcmp(name, DAEMON_DEFAULT_NAME) == 0)
+      printf("beluga daemon started. Open a window with: beluga -c [file]\n");
+    else if (rc == 0)
+      printf("beluga daemon \"%s\" started. Open a window with: beluga -c --name=%s [file]\n",
+             name, name);
+    return rc;
+  }
   if (daemon) {
     rc = daemonMain(name);
     if (rc == 0)

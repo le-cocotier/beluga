@@ -14,6 +14,7 @@
 #include "../include/utf8.h"
 #include "../include/utils.h"
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,8 +22,14 @@ static Breakpoint *s_breakpoints;
 static int s_count;
 static int s_cap;
 static void (*s_listener)(const char *path);
+static char *s_store; // the file they are kept in across runs, or NULL
+static int s_loading; // breakpointsLoad() adding: nothing to tell or save
 
 static void notifyChanged(const char *path) {
+  if (s_loading)
+    return;
+  if (s_store)
+    breakpointsSave(s_store);
   if (s_listener)
     s_listener(path);
 }
@@ -44,9 +51,15 @@ static void sortBreakpoints(void) {
   qsort(s_breakpoints, (size_t)s_count, sizeof(Breakpoint), compareBreakpoints);
 }
 
+static void freeBreakpoint(Breakpoint *bp) {
+  gfree(bp->path);
+  gfree(bp->condition);
+  gfree(bp->hit_condition);
+  gfree(bp->log_message);
+}
+
 static void removeAt(const int i) {
-  gfree(s_breakpoints[i].path);
-  gfree(s_breakpoints[i].condition);
+  freeBreakpoint(&s_breakpoints[i]);
   memmove(&s_breakpoints[i], &s_breakpoints[i + 1],
           sizeof(Breakpoint) * (size_t)(s_count - i - 1));
   s_count--;
@@ -99,8 +112,11 @@ int breakpointToggle(const char *path, const int line) {
   return 1;
 }
 
-int breakpointSetCondition(const char *path, const int line, const char *condition) {
+// Sets one of the breakpoint's texts (an offset into Breakpoint), adding
+// the breakpoint if the line has none.
+static int setText(const char *path, const int line, const size_t field, const char *text) {
   Breakpoint *bp;
+  char **slot;
   if (!path || line < 0)
     return -1;
   bp = breakpointAt(path, line);
@@ -108,10 +124,23 @@ int breakpointSetCondition(const char *path, const int line, const char *conditi
     bp = add(path, line);
   if (!bp)
     return -1;
-  gfree(bp->condition);
-  bp->condition = (condition && *condition) ? utilStrdup(condition) : NULL;
+  slot = (char **)((char *)bp + field);
+  gfree(*slot);
+  *slot = (text && *text) ? utilStrdup(text) : NULL;
   notifyChanged(path);
   return 0;
+}
+
+int breakpointSetCondition(const char *path, const int line, const char *condition) {
+  return setText(path, line, offsetof(Breakpoint, condition), condition);
+}
+
+int breakpointSetHitCondition(const char *path, const int line, const char *hit_condition) {
+  return setText(path, line, offsetof(Breakpoint, hit_condition), hit_condition);
+}
+
+int breakpointSetLogMessage(const char *path, const int line, const char *log_message) {
+  return setText(path, line, offsetof(Breakpoint, log_message), log_message);
 }
 
 Breakpoint *breakpointsAll(int *count) {
@@ -141,20 +170,18 @@ int breakpointsClear(void) {
   for (i = 0; i < n; i++)
     if (i == 0 || strcmp(old[i].path, old[i - 1].path) != 0)
       notifyChanged(old[i].path);
-  for (i = 0; i < n; i++) {
-    gfree(old[i].path);
-    gfree(old[i].condition);
-  }
+  for (i = 0; i < n; i++)
+    freeBreakpoint(&old[i]);
   gfree(old);
   return n;
 }
 
 void breakpointsFree(void) {
   int i;
-  for (i = 0; i < s_count; i++) {
-    gfree(s_breakpoints[i].path);
-    gfree(s_breakpoints[i].condition);
-  }
+  gfree(s_store);
+  s_store = NULL;
+  for (i = 0; i < s_count; i++)
+    freeBreakpoint(&s_breakpoints[i]);
   gfree(s_breakpoints);
   s_breakpoints = NULL;
   s_count = 0;
@@ -184,6 +211,23 @@ void breakpointsLinesInserted(const struct buffer_t *buf, const int at, const in
   }
   if (moved)
     notifyChanged(path);
+  gfree(path);
+}
+
+void breakpointsLineMoved(const struct buffer_t *buf, const int from, const int to) {
+  char *path;
+  Breakpoint *bp;
+  if (s_count == 0 || from == to)
+    return;
+  path = breakpointsBufferPath(buf);
+  if (!path)
+    return;
+  bp = breakpointAt(path, from);
+  if (bp && !breakpointAt(path, to)) {
+    bp->line = to;
+    sortBreakpoints();
+    notifyChanged(path);
+  }
   gfree(path);
 }
 
@@ -219,4 +263,112 @@ void breakpointsLinesRemoved(const struct buffer_t *buf, const int at, const int
     notifyChanged(path);
   }
   gfree(path);
+}
+
+// ─── Kept across runs ────────────────────────────────────────────────────────
+// One line per breakpoint:
+//   "<line>\t<path>\t<condition>\t<hit condition>\t<log message>"
+// the line 1-based as a person reads it, the texts possibly empty (and
+// the last two missing in files written before they existed). Paths can't
+// hold a tab or a newline here; the texts' tabs and newlines become spaces.
+
+static void writeText(FILE *f, const char *text) {
+  const char *c;
+  fputc('\t', f);
+  for (c = text; c && *c; c++)
+    fputc((*c == '\n' || *c == '\r' || *c == '\t') ? ' ' : *c, f);
+}
+
+// The next tab-separated field of *rest (NULL when there's none), cut off.
+static char *nextField(char **rest) {
+  char *field = *rest;
+  char *tab;
+  if (!field)
+    return NULL;
+  tab = strchr(field, '\t');
+  if (tab)
+    *tab++ = '\0';
+  *rest = tab;
+  return field;
+}
+
+int breakpointsSave(const char *file) {
+  char tmp[OS_PATH_MAX];
+  char err[256];
+  FILE *f;
+  int i;
+  if (snprintf(tmp, sizeof(tmp), "%s.tmp", file) >= (int)sizeof(tmp))
+    return -1;
+  f = fopen(tmp, "w");
+  if (!f)
+    return -1;
+  for (i = 0; i < s_count; i++) {
+    fprintf(f, "%d\t%s", s_breakpoints[i].line + 1, s_breakpoints[i].path);
+    writeText(f, s_breakpoints[i].condition);
+    writeText(f, s_breakpoints[i].hit_condition);
+    writeText(f, s_breakpoints[i].log_message);
+    fputc('\n', f);
+  }
+  if (os_file_flush(f) != 0) {
+    fclose(f);
+    remove(tmp);
+    return -1;
+  }
+  fclose(f);
+  if (os_replace_file(tmp, file, err, sizeof(err)) != 0) {
+    remove(tmp);
+    return -1;
+  }
+  return 0;
+}
+
+int breakpointsLoad(const char *file) {
+  char line[OS_PATH_MAX + 1024];
+  OsFileInfo info;
+  FILE *f;
+  char *path;
+  char *condition;
+  char *hit_condition;
+  char *log_message;
+  char *rest;
+  char *end;
+  size_t len;
+  long n;
+  int added = 0;
+  f = fopen(file, "r");
+  if (!f)
+    return 0;
+  s_loading = 1;
+  while (fgets(line, sizeof(line), f)) {
+    len = strlen(line);
+    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+      line[--len] = '\0';
+    n = strtol(line, &end, 10);
+    if (end == line || *end != '\t' || n < 1)
+      continue;
+    rest = end + 1;
+    path = nextField(&rest);
+    condition = nextField(&rest);
+    hit_condition = nextField(&rest);
+    log_message = nextField(&rest);
+    // A file that's gone (deleted, renamed) takes its breakpoints with it.
+    if (!*path || breakpointAt(path, (int)n - 1) || os_file_info(path, &info) != 0)
+      continue;
+    if (breakpointSetCondition(path, (int)n - 1, condition) == 0)
+      added++;
+    breakpointSetHitCondition(path, (int)n - 1, hit_condition);
+    breakpointSetLogMessage(path, (int)n - 1, log_message);
+  }
+  s_loading = 0;
+  fclose(f);
+  return added;
+}
+
+void breakpointsSetStore(const char *file) {
+  gfree(s_store);
+  s_store = NULL;
+  if (!file)
+    return;
+  breakpointsLoad(file);
+  s_store = utilStrdup(file);
 }

@@ -32,10 +32,14 @@
 #include "../../include/galloc.h"
 #include "../../include/os.h"
 
+// Before windows.h, which would otherwise bring in the old winsock.h.
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <sddl.h>
+#include <tlhelp32.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -142,6 +146,112 @@ const char *os_name(void)
 long os_getpid(void)
 {
     return (long) GetCurrentProcessId();
+}
+
+static volatile LONG s_interrupted;
+static volatile LONG s_hung_up;
+
+static BOOL WINAPI onConsoleEvent(DWORD type)
+{
+    switch (type)
+    {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+        InterlockedExchange(&s_interrupted, 1);
+        return TRUE;
+    case CTRL_CLOSE_EVENT:
+    case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
+        // Windows ends the process as soon as this returns: wait here
+        // while the main thread saves and exits (which ends this thread
+        // too), up to the few seconds Windows allows.
+        InterlockedExchange(&s_hung_up, 1);
+        Sleep(4500);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+void os_catch_stop_signals(void)
+{
+    SetConsoleCtrlHandler(onConsoleEvent, TRUE);
+}
+
+int os_take_stop_signal(void)
+{
+    if (InterlockedExchange(&s_hung_up, 0))
+    {
+        InterlockedExchange(&s_interrupted, 0);
+        return OS_STOP_HANGUP;
+    }
+    if (InterlockedExchange(&s_interrupted, 0))
+        return OS_STOP_INTERRUPT;
+    return OS_STOP_NONE;
+}
+
+char *os_exe_path(void)
+{
+    wchar_t path[MAX_PATH * 2];
+    char *utf8;
+    const DWORD n = GetModuleFileNameW(NULL, path, sizeof(path) / sizeof(path[0]));
+    if (n == 0 || n >= sizeof(path) / sizeof(path[0]))
+        return NULL;
+    utf8 = toUtf8(path);
+    backslashesToSlashes(utf8);
+    return utf8;
+}
+
+static int compareProcesses(const void *a, const void *b)
+{
+    const long x = ((const OsProcessInfo *) a)->pid;
+    const long y = ((const OsProcessInfo *) b)->pid;
+    return x < y ? -1 : x > y;
+}
+
+OsProcessInfo *os_process_list(int *count)
+{
+    HANDLE snap;
+    PROCESSENTRY32W entry;
+    OsProcessInfo *out = NULL;
+    OsProcessInfo *grown;
+    DWORD session;
+    DWORD own_session = 0;
+    char *name;
+    int cap = 0;
+    *count = 0;
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return NULL;
+    // The user's own processes: those of this logon session.
+    ProcessIdToSessionId(GetCurrentProcessId(), &own_session);
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snap, &entry))
+    {
+        do
+        {
+            if (entry.th32ProcessID == 0 || entry.th32ProcessID == GetCurrentProcessId() ||
+                !ProcessIdToSessionId(entry.th32ProcessID, &session) || session != own_session)
+                continue;
+            if (*count == cap)
+            {
+                grown = grealloc(out, sizeof(OsProcessInfo) * (size_t) (cap ? cap * 2 : 128));
+                if (!grown)
+                    break;
+                out = grown;
+                cap = cap ? cap * 2 : 128;
+            }
+            name = toUtf8(entry.szExeFile);
+            out[*count].pid = (long) entry.th32ProcessID;
+            snprintf(out[*count].command, sizeof(out[*count].command), "%s", name ? name : "?");
+            gfree(name);
+            (*count)++;
+        } while (Process32NextW(snap, &entry));
+    }
+    CloseHandle(snap);
+    if (out)
+        qsort(out, (size_t) *count, sizeof(OsProcessInfo), compareProcesses);
+    return out;
 }
 
 /***********************************************************************************************************************
@@ -458,13 +568,88 @@ static wchar_t *environmentWith(const wchar_t *extra)
     return block;
 }
 
+/**
+ * @brief Whether environment entry `entry` ("NAME=value") is for the
+ * variable named by `spec` ("NAME=..." or "NAME"), case-insensitively as
+ * Windows compares variable names.
+ */
+static int sameVariable(const wchar_t *entry, const wchar_t *spec)
+{
+    const wchar_t *eq = wcschr(spec, L'=');
+    const size_t len = eq ? (size_t) (eq - spec) : wcslen(spec);
+    return len > 0 && _wcsnicmp(entry, spec, len) == 0 && entry[len] == L'=';
+}
+
+/**
+ * @brief This process's environment with each of `changes` applied
+ * ("NAME=value" sets, "NAME" unsets), for CREATE_UNICODE_ENVIRONMENT.
+ * malloc'd; NULL on failure.
+ */
+static wchar_t *environmentChanged(const char *const *changes)
+{
+    wchar_t *env = GetEnvironmentStringsW();
+    wchar_t **wide = NULL;
+    const wchar_t *p;
+    wchar_t *block = NULL;
+    size_t size = 1;
+    size_t used = 0;
+    size_t len;
+    int n = 0;
+    int i;
+    int keep;
+
+    if (!env)
+        return NULL;
+    while (changes && changes[n])
+        n++;
+    wide = gcalloc((size_t) n + 1, sizeof(*wide));
+    if (!wide)
+        goto done;
+    for (i = 0; i < n; i++)
+        if (!(wide[i] = toWide(changes[i])))
+            goto done;
+    for (p = env; *p; p += wcslen(p) + 1)
+        size += wcslen(p) + 1;
+    for (i = 0; i < n; i++)
+        size += wcslen(wide[i]) + 1;
+    block = galloc(size * sizeof(wchar_t));
+    if (!block)
+        goto done;
+    for (p = env; *p; p += len + 1)
+    {
+        len = wcslen(p);
+        keep = 1;
+        for (i = 0; i < n && keep; i++)
+            keep = !sameVariable(p, wide[i]);
+        if (keep)
+        {
+            memcpy(block + used, p, (len + 1) * sizeof(wchar_t));
+            used += len + 1;
+        }
+    }
+    for (i = 0; i < n; i++)
+        if (wcschr(wide[i], L'='))
+        {
+            len = wcslen(wide[i]);
+            memcpy(block + used, wide[i], (len + 1) * sizeof(wchar_t));
+            used += len + 1;
+        }
+    block[used] = L'\0';
+done:
+    for (i = 0; wide && i < n; i++)
+        gfree(wide[i]);
+    gfree(wide);
+    FreeEnvironmentStringsW(env);
+    return block;
+}
+
 /***********************************************************************************************************************
  *
  *                                                 Streams and waiting
  *
  **********************************************************************************************************************/
 
-typedef enum { STREAM_CONSOLE, STREAM_PIPE, STREAM_EMPTY, STREAM_LISTENER } StreamKind;
+typedef enum { STREAM_CONSOLE, STREAM_PIPE, STREAM_EMPTY, STREAM_LISTENER, STREAM_SOCKET } StreamKind;
 
 struct OsStream {
     StreamKind kind;
@@ -473,6 +658,7 @@ struct OsStream {
                         // a pseudoconsole's pipe stays open after it exits)
     int eof;
     int connected;      // STREAM_LISTENER: a client is waiting on h
+    SOCKET sock;        // STREAM_SOCKET: a TCP connection, read and written
 };
 
 static HANDLE consoleIn(void) { return GetStdHandle(STD_INPUT_HANDLE); }
@@ -498,6 +684,11 @@ static void streamClose(OsStream *s)
 {
     if (s->kind == STREAM_PIPE && s->h)
         CloseHandle(s->h);
+    if (s->kind == STREAM_SOCKET && s->sock != INVALID_SOCKET)
+    {
+        closesocket(s->sock);
+        s->sock = INVALID_SOCKET;
+    }
     s->h = NULL;
     s->eof = 1;
 }
@@ -529,6 +720,32 @@ static long pipeAvailable(OsStream *s)
     return 0;
 }
 
+/**
+ * @brief Bytes waiting on a socket stream: >0 available, 0 none yet, -1 its
+ * end (the other side closed, or an error).
+ */
+static long socketAvailable(OsStream *s)
+{
+    fd_set readable;
+    struct timeval now = { 0, 0 };
+    u_long avail = 0;
+    int r;
+    if (s->eof)
+        return -1;
+    FD_ZERO(&readable);
+    FD_SET(s->sock, &readable);
+    r = select(0, &readable, NULL, NULL, &now);
+    if (r == 0)
+        return 0;
+    if (r == SOCKET_ERROR || ioctlsocket(s->sock, FIONREAD, &avail) != 0 || avail == 0)
+    {
+        // Readable with nothing to read: the other side has closed.
+        s->eof = 1;
+        return -1;
+    }
+    return (long) avail;
+}
+
 static int consoleHasInput(void);
 static long consoleRead(void *buf, size_t n, int timeout_ms);
 static int listenerReady(OsStream *s);
@@ -543,6 +760,7 @@ static int streamReady(OsStream *s)
     case STREAM_CONSOLE: return consoleHasInput();
     case STREAM_PIPE:    return pipeAvailable(s) != 0;
     case STREAM_LISTENER: return listenerReady(s);
+    case STREAM_SOCKET:  return socketAvailable(s) != 0;
     default:             return 1;
     }
 }
@@ -563,7 +781,8 @@ int os_wait(OsStream *const *streams, const int n, const int timeout_ms, int *re
             continue;
         if (streams[i]->kind == STREAM_CONSOLE)
             watch_console = 1;
-        else if (streams[i]->kind == STREAM_PIPE || streams[i]->kind == STREAM_LISTENER)
+        else if (streams[i]->kind == STREAM_PIPE || streams[i]->kind == STREAM_LISTENER ||
+                 streams[i]->kind == STREAM_SOCKET)
             has_pipes = 1;
     }
 
@@ -609,6 +828,19 @@ long os_stream_read(OsStream *s, void *buf, const size_t n, const int timeout_ms
     one[0] = s;
     if (!os_wait(one, 1, timeout_ms, &ready))
         return 0;
+    if (s->kind == STREAM_SOCKET)
+    {
+        avail = socketAvailable(s);
+        if (avail <= 0)
+            return avail;
+        avail = recv(s->sock, buf, (int) ((size_t) avail < n ? (size_t) avail : n), 0);
+        if (avail <= 0)
+        {
+            s->eof = 1;
+            return -1;
+        }
+        return avail;
+    }
     avail = pipeAvailable(s);
     if (avail < 0)
         return -1;
@@ -1138,6 +1370,81 @@ fail:
     return p;
 }
 
+int os_spawn_detached(const char *const *argv, const char *log_file, char *err,
+                      const size_t err_size)
+{
+    STARTUPINFOEXW si;
+    PROCESS_INFORMATION pi;
+    HANDLE in_h, out_h;
+    HANDLE handles[2];
+    SIZE_T attr_size = 0;
+    LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
+    wchar_t app[MAX_PATH * 2];
+    WBuf cmd = { NULL, 0, 0 };
+    DWORD flags;
+    BOOL created = FALSE;
+
+    if (!argv || !argv[0])
+    {
+        snprintf(err, err_size, "nothing to start");
+        return -1;
+    }
+    if (!buildCommandLine((char *const *) argv, app, sizeof(app) / sizeof(app[0]), &cmd))
+    {
+        gfree(cmd.s);
+        snprintf(err, err_size, "%s: %s", argv[0], strerror(errno));
+        return -1;
+    }
+    in_h = openNul(0);
+    out_h = log_file ? openAppend(log_file) : INVALID_HANDLE_VALUE;
+    if (out_h == INVALID_HANDLE_VALUE)
+        out_h = openNul(1);
+    handles[0] = in_h;
+    handles[1] = out_h;
+    InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
+    attrs = galloc(attr_size);
+    if (in_h != INVALID_HANDLE_VALUE && out_h != INVALID_HANDLE_VALUE && attrs &&
+        InitializeProcThreadAttributeList(attrs, 1, 0, &attr_size) &&
+        UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
+                                  sizeof(handles), NULL, NULL))
+    {
+        memset(&si, 0, sizeof(si));
+        si.StartupInfo.cb = sizeof(si);
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdInput = in_h;
+        si.StartupInfo.hStdOutput = out_h;
+        si.StartupInfo.hStdError = out_h;
+        si.lpAttributeList = attrs;
+        // No console, its own process group (Ctrl-C in this console doesn't
+        // reach it), and out of this process's job when it is in one that
+        // kills its processes when it closes.
+        flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT |
+                EXTENDED_STARTUPINFO_PRESENT;
+        created = CreateProcessW(app, cmd.s, NULL, NULL, TRUE, flags | CREATE_BREAKAWAY_FROM_JOB,
+                                 NULL, NULL, &si.StartupInfo, &pi);
+        if (!created)
+            created = CreateProcessW(app, cmd.s, NULL, NULL, TRUE, flags, NULL, NULL,
+                                     &si.StartupInfo, &pi);
+    }
+    if (created)
+    {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    else
+        snprintf(err, err_size, "%s: couldn't start it (error %lu)", argv[0],
+                 (unsigned long) GetLastError());
+    if (attrs)
+    {
+        DeleteProcThreadAttributeList(attrs);
+        gfree(attrs);
+    }
+    if (in_h != INVALID_HANDLE_VALUE) CloseHandle(in_h);
+    if (out_h != INVALID_HANDLE_VALUE) CloseHandle(out_h);
+    gfree(cmd.s);
+    return created ? 0 : -1;
+}
+
 OsStream *os_proc_output(OsProc *p)
 {
     return p ? &p->out : NULL;
@@ -1343,7 +1650,13 @@ static DWORD WINAPI closePseudoConsoleThread(LPVOID console)
     return 0;
 }
 
-OsPty *os_pty_open(const char *shell, const int rows, const int cols)
+/**
+ * @brief A pseudoconsole running `cmd` (taken over: freed here), with
+ * `app` the program when known (NULL: CreateProcess finds it from `cmd`),
+ * in `cwd`, with `env` applied to the environment (TERM included).
+ */
+static OsPty *ptyStart(WBuf cmd, const wchar_t *app, const char *cwd, const char *const *env,
+                       const int rows, const int cols)
 {
     HANDLE in_read = NULL, in_write = NULL, out_read = NULL, out_write = NULL;
     HPCON console = NULL;
@@ -1352,9 +1665,9 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
     PROCESS_INFORMATION pi;
     SIZE_T attr_size = 0;
     LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
-    WBuf cmd = { NULL, 0, 0 };
-    wchar_t *wshell;
-    wchar_t *env = NULL;
+    wchar_t *env_block = NULL;
+    wchar_t *wcwd = NULL;
+    DWORD attrs_of_cwd;
     OsPty *p = gcalloc(1, sizeof(*p));
 
     if (!p)
@@ -1374,15 +1687,6 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
                                    sizeof(console), NULL, NULL))
         goto fail;
 
-    if (shell && *shell)
-    {
-        wshell = toWide(shell);
-        if (wshell)
-            appendQuotedArg(&cmd, wshell, 0);
-        gfree(wshell);
-    }
-    else
-        defaultShellCommand(&cmd);
     if (!cmd.s)
         goto fail;
 
@@ -1397,10 +1701,21 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
     si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     si.lpAttributeList = attrs;
 
-    env = environmentWith(L"TERM=xterm-256color"); // as a Unix pane gets
-    if (!CreateProcessW(NULL, cmd.s, NULL, NULL, FALSE,
+    env_block = environmentChanged(env);
+    if (cwd && *cwd)
+    {
+        wcwd = toWide(cwd);
+        // Not there any more: the editor's directory, as before.
+        attrs_of_cwd = wcwd ? GetFileAttributesW(wcwd) : INVALID_FILE_ATTRIBUTES;
+        if (attrs_of_cwd == INVALID_FILE_ATTRIBUTES || !(attrs_of_cwd & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            gfree(wcwd);
+            wcwd = NULL;
+        }
+    }
+    if (!CreateProcessW(app, cmd.s, NULL, NULL, FALSE,
                         CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-                        env, NULL, &si.StartupInfo, &pi))
+                        env_block, wcwd, &si.StartupInfo, &pi))
         goto fail;
 
     p->process = pi.hProcess;
@@ -1413,7 +1728,8 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
     CloseHandle(out_write);
     DeleteProcThreadAttributeList(attrs);
     gfree(attrs);
-    gfree(env);
+    gfree(env_block);
+    gfree(wcwd);
     gfree(cmd.s);
     return p;
 
@@ -1423,7 +1739,8 @@ fail:
         DeleteProcThreadAttributeList(attrs);
         gfree(attrs);
     }
-    gfree(env);
+    gfree(env_block);
+    gfree(wcwd);
     gfree(cmd.s);
     if (console) ClosePseudoConsole(console);
     if (in_read) CloseHandle(in_read);
@@ -1432,6 +1749,61 @@ fail:
     if (out_write) CloseHandle(out_write);
     gfree(p);
     return NULL;
+}
+
+OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int cols)
+{
+    static const char *const term[] = { "TERM=xterm-256color", NULL }; // as a Unix pane gets
+    WBuf cmd = { NULL, 0, 0 };
+    wchar_t *wshell;
+    if (shell && *shell)
+    {
+        wshell = toWide(shell);
+        if (wshell)
+            appendQuotedArg(&cmd, wshell, 0);
+        gfree(wshell);
+    }
+    else
+        defaultShellCommand(&cmd);
+    return ptyStart(cmd, NULL, cwd, term, rows, cols);
+}
+
+OsPty *os_pty_spawn(const char *const *argv, const char *cwd, const char *const *env,
+                    const int rows, const int cols)
+{
+    wchar_t app[MAX_PATH * 2];
+    WBuf cmd = { NULL, 0, 0 };
+    const char **all;
+    OsPty *p;
+    int n = 0;
+    int i;
+
+    if (!argv || !argv[0])
+        return NULL;
+    if (!buildCommandLine((char *const *) argv, app, sizeof(app) / sizeof(app[0]), &cmd))
+    {
+        gfree(cmd.s);
+        return NULL;
+    }
+    while (env && env[n])
+        n++;
+    all = gcalloc((size_t) n + 2, sizeof(*all));
+    if (!all)
+    {
+        gfree(cmd.s);
+        return NULL;
+    }
+    for (i = 0; i < n; i++)
+        all[i] = env[i];
+    all[n] = "TERM=xterm-256color";
+    p = ptyStart(cmd, app, cwd, all, rows, cols);
+    gfree(all);
+    return p;
+}
+
+long os_pty_pid(OsPty *p)
+{
+    return p && p->process ? (long) GetProcessId(p->process) : -1;
 }
 
 OsStream *os_pty_output(OsPty *p)
@@ -1745,6 +2117,113 @@ OsConn *os_conn_connect(const char *name, char *err, const size_t err_size)
     return c;
 }
 
+static int winsockReady(void)
+{
+    static int s_started;
+    WSADATA data;
+    if (!s_started && WSAStartup(MAKEWORD(2, 2), &data) == 0)
+        s_started = 1;
+    return s_started;
+}
+
+OsConn *os_tcp_connect(const char *host, const int port, const int timeout_ms, char *err,
+                       const size_t err_size)
+{
+    struct addrinfo hints;
+    struct addrinfo *found = NULL;
+    struct addrinfo *a;
+    char service[16];
+    fd_set writable, failed;
+    struct timeval wait;
+    u_long nonblocking = 1;
+    u_long blocking = 0;
+    BOOL one = TRUE;
+    SOCKET sock = INVALID_SOCKET;
+    OsConn *c;
+    int rc;
+
+    if (!winsockReady())
+    {
+        snprintf(err, err_size, "Winsock didn't start");
+        return NULL;
+    }
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    snprintf(service, sizeof(service), "%d", port);
+    rc = getaddrinfo(host, service, &hints, &found);
+    if (rc != 0)
+    {
+        snprintf(err, err_size, "%s: can't find it (error %d)", host, rc);
+        return NULL;
+    }
+    for (a = found; a && sock == INVALID_SOCKET; a = a->ai_next)
+    {
+        sock = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+        if (sock == INVALID_SOCKET)
+            continue;
+        ioctlsocket(sock, FIONBIO, &nonblocking);
+        rc = connect(sock, a->ai_addr, (int) a->ai_addrlen);
+        if (rc == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK)
+        {
+            FD_ZERO(&writable);
+            FD_SET(sock, &writable);
+            FD_ZERO(&failed);
+            FD_SET(sock, &failed);
+            wait.tv_sec = timeout_ms / 1000;
+            wait.tv_usec = (timeout_ms % 1000) * 1000;
+            rc = select(0, NULL, &writable, &failed, &wait) == 1 && FD_ISSET(sock, &writable)
+                     ? 0
+                     : SOCKET_ERROR;
+        }
+        if (rc == SOCKET_ERROR)
+        {
+            closesocket(sock);
+            sock = INVALID_SOCKET;
+        }
+    }
+    freeaddrinfo(found);
+    if (sock == INVALID_SOCKET)
+    {
+        snprintf(err, err_size, "%s:%d: nothing answered", host, port);
+        return NULL;
+    }
+    ioctlsocket(sock, FIONBIO, &blocking);
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *) &one, sizeof(one));
+    c = gcalloc(1, sizeof(*c));
+    if (!c)
+    {
+        closesocket(sock);
+        return NULL;
+    }
+    c->in.kind = STREAM_SOCKET;
+    c->in.sock = sock;
+    c->in.eof = 0;
+    return c;
+}
+
+int os_tcp_free_port(void)
+{
+    struct sockaddr_in addr;
+    int len = sizeof(addr);
+    int port = -1;
+    SOCKET sock;
+    if (!winsockReady())
+        return -1;
+    sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET)
+        return -1;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(sock, (struct sockaddr *) &addr, sizeof(addr)) == 0 &&
+        getsockname(sock, (struct sockaddr *) &addr, &len) == 0)
+        port = ntohs(addr.sin_port);
+    closesocket(sock);
+    return port;
+}
+
 OsStream *os_conn_input(OsConn *c)
 {
     return c ? &c->in : NULL;
@@ -1757,6 +2236,18 @@ long os_conn_write(OsConn *c, const void *buf, const size_t n)
     DWORD written;
     ULONGLONG stalled_since = 0;
 
+    if (c && c->in.kind == STREAM_SOCKET)
+    {
+        while (left > 0 && !c->in.eof)
+        {
+            const int sent = send(c->in.sock, p, (int) (left > 65536 ? 65536 : left), 0);
+            if (sent == SOCKET_ERROR)
+                return -1;
+            p += sent;
+            left -= (size_t) sent;
+        }
+        return left == 0 ? (long) n : -1;
+    }
     if (!c || !c->in.h || c->in.eof)
         return -1;
     while (left > 0)

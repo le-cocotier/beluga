@@ -162,14 +162,26 @@ Here is some few command that you will need :
 ### Daemon mode: several windows on one editor
 
 ```
-beluga --daemon          # start the daemon (in its own terminal, or in the background)
-beluga -c [file]         # open a window on it, from any terminal
+beluga --daemon          # start the daemon in the background (--foreground: in this terminal)
+beluga -c [file]         # open a window on it, from any terminal (starts one if none runs)
 beluga --kill            # stop it (refused while a buffer is unsaved; --force to insist)
 ```
 
+A daemon in the background writes what it has to say to `~/.beluga/daemon-server.log`
+(`daemon-NAME.log` for a named one). One in the foreground stops on Ctrl-C, but asks
+first when a buffer is unsaved: a second Ctrl-C within a few seconds stops it anyway. Closing
+its terminal, or SIGTERM, stops it at once. Either way the unsaved changes are kept in
+`~/.beluga/autosave` and offered back when the file is opened again.
+
 Every window shares the daemon's buffers, Lisp config, language servers and terminal panes,
-and has its own splits, popups and status line. Ctrl-x Ctrl-c in a window closes only that
-window. Several daemons can run side by side: `--daemon=work`, then `beluga -c --name=work`
+and has its own splits (each pane with its own cursor, even on a file another window shows),
+popups, status line and working directory (where its `beluga -c` ran:
+the open-file prompt and new terminal panes start there). Each project has its own debug
+session, so two projects can be debugged at once; a session's stops and output go to the window
+that last drove it. A prompt open in one window (open-file, M-x, a y/n question) doesn't stop
+the others; they just can't kill or edit the buffer it was asked about until it closes. Ctrl-x
+Ctrl-c in a window closes only that window. Several daemons can run side by side:
+`--daemon=work`, then `beluga -c --name=work`
 and `beluga --kill=work`. On Unix the windows reach the daemon through a socket in a private
 directory (`$XDG_RUNTIME_DIR/beluga/`, else `/tmp/beluga-<uid>/`); on Windows through a named
 pipe only the current user can open.
@@ -184,6 +196,15 @@ language package names its adapter, like it names its language server:
 (dap-adapter "c" "gdb" "-q" "-i" "dap")   ; packages/c does this (xcrun lldb-dap on macOS)
 ```
 
+An adapter that talks over TCP rather than stdio gets `{port}` where it is told which port to
+listen on; beluga picks a free one and connects to it. One that is already running is named by
+its address instead of a command:
+
+```lisp
+(dap-adapter "go" "dlv" "dap" "--listen=127.0.0.1:{port}")
+(dap-adapter "js" "tcp:127.0.0.1:8123")
+```
+
 An association list after the command gives launch arguments every session gets unless it sets
 them itself; on macOS packages/c uses it for lldb's `sourceMap`, so breakpoints in files under
 `/tmp` or `/var` (links into `/private`) are found.
@@ -196,19 +217,29 @@ is media keys, and F11 is Show Desktop); bind them in personal-config if you lik
 | keybind      | command                                                  |
 |--------------|----------------------------------------------------------|
 | Ctrl-x B b   | toggle a breakpoint on the cursor's line (Ctrl-x B k: with a condition) |
+| Ctrl-x B h   | stop there only from a given hit on (`3`; gdb also takes `> 5`, `% 2`) |
+| Ctrl-x B L   | a logpoint: log `i is {i}` there instead of stopping     |
+| Ctrl-x B E   | which exceptions stop the program (the adapter's filters: debugpy's `raised`, gdb's `throw`) |
 | Ctrl-x B c   | start (asks for the program and its arguments), or continue |
+| Ctrl-x B a   | attach to a running program, picked from your processes (Ctrl-x B q detaches) |
 | Ctrl-x B n / i | next line / step into                                  |
 | Ctrl-x B u   | step out                                                 |
 | Ctrl-x B p   | pause                                                    |
 | Ctrl-x B q   | stop                                                     |
 | Ctrl-x B e   | evaluate an expression in the selected frame             |
+| Ctrl-x B w / W | watch an expression (its value is in the panel at every stop) / stop watching it |
 | Ctrl-x B g   | a command for the debugger itself (gdb's `info registers`, lldb's `bt`) |
 | Ctrl-x B o   | everything the program printed                           |
 | Ctrl-x B l / x | list the breakpoints / remove them all                 |
 
-While the program is paused, the `*debug*` panel shows the call stack, the variables (ENTER
-selects a frame or opens a struct) and the end of the output; the gutter shows `▶` on the
-current line and `●` on breakpoints, which follow the code as you edit. For anything the
+While the program is paused, the `*debug*` panel shows the call stack, the watch expressions,
+the variables (ENTER selects a frame or opens a struct) and the end of the output, and the lines
+up to the current one show the values of the variables they use (`(define DEBUG-INLINE-VALUES
+#f)` hides them); the gutter shows `▶` on the
+current line, `●` on breakpoints, `◆` on those with a condition or a hit count and `◉` on
+logpoints, which follow the code as you edit. Breakpoints are kept
+in `~/.beluga/breakpoints` from one run to the next, and a session only gets those in its own
+project (the files under its root, or under the working directory). For anything the
 Ctrl-x B c prompt doesn't cover, hand the adapter its own launch arguments, e.g. in a project's
 `.beluga/init.lisp`:
 
@@ -218,5 +249,10 @@ Ctrl-x B c prompt doesn't cover, hand the adapter its own launch arguments, e.g.
                  ("stopAtBeginningOfMainSubprogram" . #t))))
 ```
 
+A program that reads the keyboard or draws on the terminal (curses) can run in a terminal pane
+of its own, `*debuggee*`, which takes the keys (ESC gives them back to the editor): ask the
+adapter for it, with `("console" . "integratedTerminal")` for debugpy or `("runInTerminal" . #t)`
+for lldb-dap. gdb has no such option; its program's output arrives in the panel.
+
 The hooks `debug-stopped` (path line reason) and `debug-exited` (exit-code) let a config react,
-and `debug-frames`, `debug-breakpoints` and `debug-state` read the session from Lisp.
+and `debug-frames`, `debug-breakpoints`, `debug-watches` and `debug-state` read the session from Lisp.

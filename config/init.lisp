@@ -39,6 +39,9 @@
 (define BREADCRUMBS #t)
 (define INLINE-DIAGNOSTICS #t)
 (define INLAY-HINTS #t)
+;; DEBUG-INLINE-VALUES: while the debugger is paused, the variables' values
+;; after the lines that use them, "total += i   total = 3, i = 2".
+(define DEBUG-INLINE-VALUES #t)
 
 ;; Prefixes need to exist before anything below tries to (map-key ... "user")
 ;; or "term" — including packages, which load next. A package that tried to
@@ -398,11 +401,17 @@
 (map-key "q" debug-stop "debug")
 (map-key "p" debug-pause "debug")
 (map-key "s" debug-start "debug")
+(map-key "a" debug-attach "debug")              ; a running program, picked from a list
 (map-key "b" debug-toggle-breakpoint "debug")
 (map-key "k" debug-breakpoint-condition "debug") ; stop only when an expression is true
+(map-key "h" debug-breakpoint-hit-count "debug") ; stop only from the Nth hit on
+(map-key "L" debug-logpoint "debug")             ; log a message there instead of stopping
+(map-key "E" debug-exception-breakpoints "debug") ; which exceptions stop the program
 (map-key "l" debug-breakpoints "debug")          ; listed in *search*, ENTER jumps
 (map-key "x" debug-clear-breakpoints "debug")
 (map-key "e" debug-evaluate "debug")            ; an expression, in the selected frame
+(map-key "w" debug-watch "debug")               ; shown in the panel at every stop
+(map-key "W" debug-unwatch "debug")
 (map-key "g" debug-command "debug")             ; a command for the debugger (gdb's own)
 (map-key "d" debug-panel "debug")
 (map-key "o" debug-output "debug")
@@ -419,6 +428,8 @@
 (map-key "q" debug-stop "debug-view")
 (map-key "p" debug-pause "debug-view")
 (map-key "e" debug-evaluate "debug-view")
+(map-key "w" debug-watch "debug-view")
+(map-key "W" debug-unwatch "debug-view")           ; the watch under the cursor
 (map-key "g" debug-command "debug-view")
 (map-key "o" debug-output "debug-view")
 (map-key "CTRL-x" '(editor-set-prefix "user") "debug-view")

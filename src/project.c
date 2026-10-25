@@ -56,7 +56,7 @@ static void canonicalDir(const char *path, char *out, size_t out_size) {
   } else if (os_path_is_absolute(path)) {
     snprintf(out, out_size, "%s", path);
   } else {
-    cwd = os_getcwd();
+    cwd = editorGetCwd();
     snprintf(out, out_size, "%s/%s", cwd ? cwd : "", path);
     gfree(cwd);
   }
@@ -390,7 +390,7 @@ char *projectRootOrCwd(void) {
   char *copy;
   if (root)
     return utilStrdup(root);
-  cwd = os_getcwd();
+  cwd = editorGetCwd();
   if (!cwd)
     return NULL;
   copy = utilStrdup(cwd);

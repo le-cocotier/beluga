@@ -95,6 +95,13 @@ typedef struct editor_pane_t
     // paneFitShownBuffer() in output.c. -1 forces a fit.
     int shown_buffer_id;
     int is_active; // Is this pane currently active
+    // Each pane has its own cursor: a buffer's x/y is the cursor of the
+    // pane that has focus, and the others keep theirs here, for the buffer
+    // saved_buffer_id (-1: none) — see splitScreenSyncCursor(). `id` tells
+    // panes apart across layouts (0 until it is first given one).
+    int id;
+    int saved_x, saved_y;
+    int saved_buffer_id;
 } EditorPane;
 
 /**
@@ -147,6 +154,7 @@ struct const_t
     int BREADCRUMBS;        // (define BREADCRUMBS #t) — "struct › function" in the status bar
     int INLINE_DIAGNOSTICS; // (define INLINE-DIAGNOSTICS #t) — the message after the line
     int INLAY_HINTS;        // (define INLAY-HINTS #t) — parameter names / types inside the line
+    int DEBUG_INLINE_VALUES; // (define DEBUG-INLINE-VALUES #t) — variables' values after the lines, while paused
 };
 
 /**
@@ -623,6 +631,14 @@ typedef struct buffer_t
     int buffer_id;
     int b_lsp_open;
     int x, y; /**< Position in the file */
+    // The pane (EditorPane.id) whose cursor x/y is, and where it was when
+    // that pane last lost focus: x/y moved since means something put the
+    // cursor somewhere on purpose (a jump), which the next pane keeps.
+    int cursor_pane;
+    int cursor_left_x, cursor_left_y;
+    // Daemon mode: windows waiting in a prompt with this buffer active,
+    // while other windows are served. It can't be killed meanwhile.
+    int prompt_holds;
     Row* row;
     int numrows;
     int b_has_changed;
@@ -792,6 +808,15 @@ typedef struct editor_config_t
 
     struct const_t constantes;
     int quit_times_buffer;
+
+    // The working directory relative paths, the open-file prompt and new
+    // terminal panes start from (editorGetCwd()). NULL: the process's. In
+    // the daemon, the current window's (from its client).
+    const char* cwd;
+    // which-key (which_key.c): the prefix it last saw pending, and since
+    // when (ms), so the panel shows only once a chord has settled.
+    int which_key_prefix;
+    long which_key_since;
 
     // ── Projects (project.c) ────────────────────────────────────────────
     // constantes is the current project's copy of the settings;
