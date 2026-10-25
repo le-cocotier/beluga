@@ -205,6 +205,8 @@ void initBuiltins(void) {
   registerBuiltin("editor-scratch-set-prefix", l_editorScratchSetPrefix);
   registerBuiltin("debug-toggle-breakpoint", l_debugToggleBreakpoint);
   registerBuiltin("debug-breakpoint-condition", l_debugBreakpointCondition);
+  registerBuiltin("debug-breakpoint-hit-count", l_debugBreakpointHitCount);
+  registerBuiltin("debug-logpoint", l_debugLogpoint);
   registerBuiltin("debug-clear-breakpoints", l_debugClearBreakpoints);
   registerBuiltin("debug-breakpoints", l_debugBreakpoints);
   registerBuiltin("dap-adapter", l_dapAdapter);

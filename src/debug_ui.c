@@ -84,6 +84,7 @@ int debugUiDrawGutter(struct abuf *ab, const char *path, const int line) {
   const Breakpoint *bp;
   const char *glyph;
   const char *color;
+  int hollow;
   if (!path)
     return 0;
   bp = breakpointAt(path, line);
@@ -92,13 +93,17 @@ int debugUiDrawGutter(struct abuf *ab, const char *path, const int line) {
     glyph = "▶";
     color = "\x1b[1;33m";
   } else if (bp) {
-    // ● a breakpoint, ◆ one with a condition; hollow while a session runs
-    // and the adapter hasn't placed it (no code on that line, not loaded).
-    if (dapState() != DAP_OFF && !bp->verified)
-      glyph = bp->condition ? "◇" : "○";
+    // ● a breakpoint, ◆ one with a condition or a hit count, ◉ a
+    // logpoint; hollow while a session runs and the adapter hasn't placed
+    // it (no code on that line, not loaded).
+    hollow = dapState() != DAP_OFF && !bp->verified;
+    if (bp->log_message)
+      glyph = hollow ? "◎" : "◉";
+    else if (bp->condition || bp->hit_condition)
+      glyph = hollow ? "◇" : "◆";
     else
-      glyph = bp->condition ? "◆" : "●";
-    color = "\x1b[1;31m";
+      glyph = hollow ? "○" : "●";
+    color = bp->log_message ? "\x1b[1;34m" : "\x1b[1;31m";
   } else {
     return 0;
   }

@@ -367,6 +367,51 @@ def debugger_python_in_terminal(binary, repo):
         ed.quit()
 
 
+def debugger_logpoints(binary, repo):
+    """A logpoint writes to the output without stopping; a breakpoint with
+    a hit count lets the first hits go by."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        with open(ed.path('t.py'), 'w') as f:
+            f.write("total = 0\n"
+                    "for i in range(5):\n"
+                    "    total += i\n"
+                    "    total += 0\n"
+                    "print('total', total)\n")
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "py" "%s" "-m" "debugpy.adapter")\n'
+                    '(define (debug-t) (debug-start \'(("program" . "%s"))))\n'
+                    % (sys.executable, ed.path('t.py')))
+        ed.start('t.py')
+        ed.wait_for('total')
+        ed.keys(DOWN, DOWN, *DEBUG, 'L', delay=0.3)
+        ed.wait_for('Log (')
+        ed.write('i is {i}\r')
+        ed.wait_for('Line 3 logs: i is {i}')
+        assert re.match(r'\s*3 ◉', ed.text()[2]), ed.text()[2]
+        ed.keys(DOWN, *DEBUG, 'h', delay=0.3)
+        ed.wait_for('Stop after how many hits')
+        ed.write('3\r')
+        ed.wait_for('Breakpoint at line 4 stops on hit 3')
+        assert re.match(r'\s*4 ◆', ed.text()[3]), ed.text()[3]
+        ed.keys('\x1bx', delay=0.4)
+        ed.keys(*'debug-t', delay=0.02)
+        ed.keys('\r', delay=0.3)
+        ed.wait_for('stopped (breakpoint)', 30)
+        ed.wait_for('i = 2')
+        ed.wait_for('i is 2')
+        assert not any('i is 3' in line for line in ed.text())
+        ed.keys(*DEBUG, 'b')  # line 4: off again, so it runs to the end
+        ed.keys(*DEBUG, 'c')
+        ed.wait_for('exited with code 0', 20)
+        ed.keys(*DEBUG, 'o', delay=0.5)
+        ed.wait_for('i is 4')
+        ed.wait_for('total 10')
+        ed.quit()
+
+
 def python_session(ed, adapter_lisp):
     """A breakpoint, a stop, a variable, then the end, with debugpy reached
     as `adapter_lisp` (the arguments of dap-adapter after "py")."""
@@ -588,6 +633,7 @@ TESTS = [
     ('debugger-lldb', debugger_lldb),
     ('debugger-python-in-terminal', debugger_python_in_terminal),
     ('debugger-over-tcp', debugger_over_tcp),
+    ('debugger-logpoints', debugger_logpoints),
     ('terminal-app-shift-function-keys', terminal_app_shift_function_keys),
     ('tab-completion-list', tab_completion_list),
     ('terminal-alternate-screen', terminal_alternate_screen),

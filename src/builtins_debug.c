@@ -19,6 +19,7 @@
 #include "../include/utf8.h"
 #include "../include/utils.h"
 
+#include <stddef.h>
 #include <string.h>
 
 extern EditorConfig E;
@@ -70,6 +71,61 @@ Lisp l_debugToggleBreakpoint(Lisp args, LispError *e, LispContext ctx) {
   return lisp_make_bool(added == 1);
 }
 
+// One of the texts a breakpoint can carry, set by a command.
+typedef struct
+{
+    size_t field; // in Breakpoint
+    int (*set)(const char *path, int line, const char *text);
+    const char *prompt;
+    const char *set_message;   // with the line and the text
+    const char *clear_message; // with the line
+} BreakpointText;
+
+/**
+ * @brief Sets the text `what` describes on the breakpoint at the cursor:
+ * the argument, or what the user types (the current one offered).
+ */
+static Lisp setBreakpointText(Lisp args, LispError *e, const BreakpointText *what) {
+  char *path;
+  int line;
+  Utf8Char *input;
+  char *text;
+  const Breakpoint *bp;
+  const char *current;
+  Utf8Char *placeholder;
+  if (!cursorLocation(&path, &line))
+    return lisp_null();
+  if (lisp_is_pair(args)) {
+    if (lisp_type(lisp_car(args)) != LISP_STRING) {
+      gfree(path);
+      *e = LISP_ERROR_ARG_TYPE;
+      return lisp_null();
+    }
+    text = utilStrdup(lisp_string(lisp_car(args)));
+  } else {
+    bp = breakpointAt(path, line);
+    current = bp ? *(char *const *)((const char *)bp + what->field) : NULL;
+    placeholder = current ? stringToUtf8((unsigned char *)current) : NULL;
+    input = editorPrompt(what->prompt, placeholder, 0);
+    gfree(placeholder);
+    if (!input) {
+      gfree(path);
+      return lisp_null();
+    }
+    text = (char *)utf8ToString(input);
+    gfree(input);
+  }
+  if (what->set(path, line, text) == 0) {
+    if (text && *text)
+      editorSetStatusMessage(what->set_message, line + 1, text);
+    else
+      editorSetStatusMessage(what->clear_message, line + 1);
+  }
+  gfree(text);
+  gfree(path);
+  return lisp_null();
+}
+
 /**
  * @brief Lisp function: give the breakpoint at the cursor a condition
  * @details (debug-breakpoint-condition ["expression"]) — asks for the
@@ -80,41 +136,48 @@ Lisp l_debugToggleBreakpoint(Lisp args, LispError *e, LispContext ctx) {
  * @return lisp_null()
  */
 Lisp l_debugBreakpointCondition(Lisp args, LispError *e, LispContext ctx) {
-  char *path;
-  int line;
-  Utf8Char *input;
-  char *condition;
-  const Breakpoint *bp;
-  Utf8Char *current;
+  static const BreakpointText what = {
+      offsetof(Breakpoint, condition), breakpointSetCondition,
+      "Break when: %u (ESC to cancel)", "Breakpoint at line %d stops when %s",
+      "Breakpoint at line %d always stops"};
   (void)ctx;
-  if (!cursorLocation(&path, &line))
-    return lisp_null();
-  if (lisp_is_pair(args)) {
-    if (lisp_type(lisp_car(args)) != LISP_STRING) {
-      gfree(path);
-      *e = LISP_ERROR_ARG_TYPE;
-      return lisp_null();
-    }
-    condition = utilStrdup(lisp_string(lisp_car(args)));
-  } else {
-    bp = breakpointAt(path, line);
-    current = (bp && bp->condition) ? stringToUtf8((unsigned char *)bp->condition) : NULL;
-    input = editorPrompt("Break when: %u (ESC to cancel)", current, 0);
-    gfree(current);
-    if (!input) {
-      gfree(path);
-      return lisp_null();
-    }
-    condition = (char *)utf8ToString(input);
-    gfree(input);
-  }
-  if (breakpointSetCondition(path, line, condition) == 0)
-    editorSetStatusMessage(condition && *condition ? "Breakpoint at line %d stops when %s"
-                                                   : "Breakpoint at line %d always stops",
-                           line + 1, condition);
-  gfree(condition);
-  gfree(path);
-  return lisp_null();
+  return setBreakpointText(args, e, &what);
+}
+
+/**
+ * @brief Lisp function: how many hits the breakpoint at the cursor waits for
+ * @details (debug-breakpoint-hit-count ["count"]) — asks when it isn't
+ * given. The adapter decides what it understands: a number ("3": from the
+ * third hit on) everywhere, gdb also "> 5" or "% 2" (every other one). An
+ * empty one stops every time again. Adds the breakpoint if the line has
+ * none.
+ * @return lisp_null()
+ */
+Lisp l_debugBreakpointHitCount(Lisp args, LispError *e, LispContext ctx) {
+  static const BreakpointText what = {
+      offsetof(Breakpoint, hit_condition), breakpointSetHitCondition,
+      "Stop after how many hits: %u (ESC to cancel)", "Breakpoint at line %d stops on hit %s",
+      "Breakpoint at line %d stops every time"};
+  (void)ctx;
+  return setBreakpointText(args, e, &what);
+}
+
+/**
+ * @brief Lisp function: make the breakpoint at the cursor a logpoint
+ * @details (debug-logpoint ["message"]) — asks when it isn't given. The
+ * program doesn't stop there: the message goes to the output each time,
+ * with every {expression} replaced by its value ("i = {i}"). An empty one
+ * makes it an ordinary breakpoint again. Adds the breakpoint if the line
+ * has none.
+ * @return lisp_null()
+ */
+Lisp l_debugLogpoint(Lisp args, LispError *e, LispContext ctx) {
+  static const BreakpointText what = {
+      offsetof(Breakpoint, log_message), breakpointSetLogMessage,
+      "Log ({expression}s are replaced): %u (ESC to cancel)", "Line %d logs: %s",
+      "Breakpoint at line %d stops again"};
+  (void)ctx;
+  return setBreakpointText(args, e, &what);
 }
 
 /**
@@ -135,9 +198,9 @@ Lisp l_debugClearBreakpoints(Lisp args, LispError *e, LispContext ctx) {
 /**
  * @brief Lisp function: the breakpoints, listed
  * @details (debug-breakpoints) lists them in the "*search*" buffer (ENTER
- * jumps to one) and returns them as a list of ("path" line "condition"),
- * line 1-based and condition "" for none. (debug-breakpoints #f) only
- * returns the list.
+ * jumps to one) and returns them as a list of ("path" line "condition"
+ * "hit-count" "log-message"), line 1-based and "" for each text it doesn't
+ * have. (debug-breakpoints #f) only returns the list.
  * @return Lisp list
  */
 Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx) {
@@ -149,8 +212,12 @@ Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx) {
   Lisp entry;
   (void)e;
   for (i = count - 1; i >= 0; i--) {
-    entry = lisp_cons(lisp_make_string2(all[i].condition ? all[i].condition : "", ctx),
+    entry = lisp_cons(lisp_make_string2(all[i].log_message ? all[i].log_message : "", ctx),
                       lisp_null(), ctx);
+    entry = lisp_cons(lisp_make_string2(all[i].hit_condition ? all[i].hit_condition : "", ctx),
+                      entry, ctx);
+    entry = lisp_cons(lisp_make_string2(all[i].condition ? all[i].condition : "", ctx), entry,
+                      ctx);
     entry = lisp_cons(lisp_make_int(all[i].line + 1), entry, ctx);
     entry = lisp_cons(lisp_make_string2(all[i].path, ctx), entry, ctx);
     result = lisp_cons(entry, result, ctx);
@@ -168,7 +235,10 @@ Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx) {
     locs[i].abs_path = all[i].path;
     locs[i].line = all[i].line + 1;
     locs[i].col = 0;
-    locs[i].text = all[i].condition ? all[i].condition : "breakpoint";
+    locs[i].text = all[i].log_message ? all[i].log_message
+                   : all[i].condition ? all[i].condition
+                   : all[i].hit_condition ? all[i].hit_condition
+                                          : "breakpoint";
   }
   projectSearchShowLocations("Breakpoints", locs, count);
   gfree(locs);

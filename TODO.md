@@ -65,7 +65,7 @@ src/breakpoints.c). What's left after the first step:
 - [ ] **[feature]** Attach to a running process (`attach` with a pid
   picked from a list), exception breakpoints, watch expressions, values
   inline after the code while paused (the inlay hint drawing could carry
-  them), logpoints and hit counts (gdb supports both).
+  them).
 - [ ] **[debt]** Not tried yet with lldb-dap on Windows. gdb 15 on Linux,
   lldb-dap on macOS and debugpy (`runInTerminal` included) are covered by
   `tools/pty_tests.py`.

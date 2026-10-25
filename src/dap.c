@@ -621,6 +621,10 @@ static void sendBreakpoints(const char *path) {
     cJSON_AddNumberToObject(bp, "line", all[i].line + 1);
     if (all[i].condition)
       cJSON_AddStringToObject(bp, "condition", all[i].condition);
+    if (all[i].hit_condition)
+      cJSON_AddStringToObject(bp, "hitCondition", all[i].hit_condition);
+    if (all[i].log_message)
+      cJSON_AddStringToObject(bp, "logMessage", all[i].log_message);
     cJSON_AddItemToArray(list, bp);
   }
   sendRequest("setBreakpoints", args, onSetBreakpoints, utilStrdup(path));

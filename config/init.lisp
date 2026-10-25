@@ -400,6 +400,8 @@
 (map-key "s" debug-start "debug")
 (map-key "b" debug-toggle-breakpoint "debug")
 (map-key "k" debug-breakpoint-condition "debug") ; stop only when an expression is true
+(map-key "h" debug-breakpoint-hit-count "debug") ; stop only from the Nth hit on
+(map-key "L" debug-logpoint "debug")             ; log a message there instead of stopping
 (map-key "l" debug-breakpoints "debug")          ; listed in *search*, ENTER jumps
 (map-key "x" debug-clear-breakpoints "debug")
 (map-key "e" debug-evaluate "debug")            ; an expression, in the selected frame

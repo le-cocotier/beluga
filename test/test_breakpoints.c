@@ -49,6 +49,12 @@ static void testCondition(void) {
   CHECK_STR(breakpointAt("/src/main.c", 2)->condition, "i == 3");
   CHECK_INT(breakpointSetCondition("/src/main.c", 2, ""), 0);
   CHECK(breakpointAt("/src/main.c", 2)->condition == NULL);
+  CHECK_INT(breakpointSetHitCondition("/src/main.c", 6, "% 2"), 0); // adds one
+  CHECK_STR(breakpointAt("/src/main.c", 6)->hit_condition, "% 2");
+  CHECK_INT(breakpointSetLogMessage("/src/main.c", 6, "at {i}"), 0);
+  CHECK_STR(breakpointAt("/src/main.c", 6)->log_message, "at {i}");
+  CHECK_INT(breakpointSetLogMessage("/src/main.c", 6, NULL), 0);
+  CHECK(breakpointAt("/src/main.c", 6)->log_message == NULL);
   breakpointsClear();
 }
 
@@ -130,26 +136,39 @@ static void testKeptAcrossRuns(void) {
   fclose(f);
   breakpointToggle(self, 3);
   breakpointSetCondition(self, 7, "i\t== 2");
+  breakpointSetHitCondition(self, 7, "3");
+  breakpointSetLogMessage(self, 5, "i = {i}");
   breakpointToggle("/no/such/file.c", 1);
   CHECK_INT(breakpointsSave(file), 0);
   breakpointsClear();
   // The gone file's breakpoint isn't brought back; the others are, with
   // the condition (its tab now a space), and loading tells nobody.
   s_notified = 0;
-  CHECK_INT(breakpointsLoad(file), 2);
+  CHECK_INT(breakpointsLoad(file), 3);
   CHECK_INT(s_notified, 0);
   CHECK(breakpointAt(self, 3) != NULL);
+  CHECK(breakpointAt(self, 3)->log_message == NULL);
   CHECK_STR(breakpointAt(self, 7)->condition, "i == 2");
+  CHECK_STR(breakpointAt(self, 7)->hit_condition, "3");
+  CHECK_STR(breakpointAt(self, 5)->log_message, "i = {i}");
+  CHECK(breakpointAt(self, 5)->condition == NULL);
   CHECK(breakpointAt("/no/such/file.c", 1) == NULL);
   // Setting a store loads it (the clear above, without one, saved
-  // nothing), then every change is written at once.
+  // nothing), then every change is written at once. A line from before
+  // hit counts and logpoints (three fields) still loads.
+  f = fopen(file, "a");
+  CHECK(f != NULL);
+  fprintf(f, "12\t%s\tx > 1\n", self);
+  fclose(f);
   breakpointsClear();
   breakpointsSetStore(file);
-  CHECK_INT(breakpointsInFile(self), 2);
+  CHECK_INT(breakpointsInFile(self), 4);
+  CHECK_STR(breakpointAt(self, 11)->condition, "x > 1");
+  CHECK(breakpointAt(self, 11)->hit_condition == NULL);
   breakpointToggle(self, 9);
   breakpointsSetStore(NULL);
   breakpointsClear();
-  CHECK_INT(breakpointsLoad(file), 3);
+  CHECK_INT(breakpointsLoad(file), 5);
   CHECK(breakpointAt(self, 9) != NULL);
   breakpointsClear();
   remove(file);

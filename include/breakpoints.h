@@ -16,6 +16,13 @@ typedef struct
     char *path;      // absolute, as in buffer_t's fullname
     int line;        // 0-based
     char *condition; // NULL: always stops
+    // NULL: every time. Otherwise how many hits it takes, in the adapter's
+    // terms: "3" (the third hit on), ">= 5", "% 2" for gdb.
+    char *hit_condition;
+    // NULL: it stops. Otherwise a logpoint: the program doesn't stop, and
+    // the message goes to the output, {expression}s replaced by their
+    // values ("i = {i}").
+    char *log_message;
     // What the debug adapter answered for it: 1 once it found code at that
     // line, 0 before a session has seen it (drawn hollow).
     int verified;
@@ -28,6 +35,10 @@ int breakpointToggle(const char *path, int line);
 // Sets (or, with NULL or "", clears) the condition of the breakpoint at
 // `line` of `path`, adding the breakpoint if there is none. @return 0 or -1.
 int breakpointSetCondition(const char *path, int line, const char *condition);
+// Same for the hit count (Breakpoint.hit_condition) and the log message
+// (Breakpoint.log_message, which makes it a logpoint).
+int breakpointSetHitCondition(const char *path, int line, const char *hit_condition);
+int breakpointSetLogMessage(const char *path, int line, const char *log_message);
 // The breakpoint at `line` of `path`, or NULL.
 Breakpoint *breakpointAt(const char *path, int line);
 // Every breakpoint, sorted by path then line. *count gets how many.

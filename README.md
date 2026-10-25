@@ -213,6 +213,8 @@ is media keys, and F11 is Show Desktop); bind them in personal-config if you lik
 | keybind      | command                                                  |
 |--------------|----------------------------------------------------------|
 | Ctrl-x B b   | toggle a breakpoint on the cursor's line (Ctrl-x B k: with a condition) |
+| Ctrl-x B h   | stop there only from a given hit on (`3`; gdb also takes `> 5`, `% 2`) |
+| Ctrl-x B L   | a logpoint: log `i is {i}` there instead of stopping     |
 | Ctrl-x B c   | start (asks for the program and its arguments), or continue |
 | Ctrl-x B n / i | next line / step into                                  |
 | Ctrl-x B u   | step out                                                 |
@@ -225,7 +227,8 @@ is media keys, and F11 is Show Desktop); bind them in personal-config if you lik
 
 While the program is paused, the `*debug*` panel shows the call stack, the variables (ENTER
 selects a frame or opens a struct) and the end of the output; the gutter shows `▶` on the
-current line and `●` on breakpoints, which follow the code as you edit. Breakpoints are kept
+current line, `●` on breakpoints, `◆` on those with a condition or a hit count and `◉` on
+logpoints, which follow the code as you edit. Breakpoints are kept
 in `~/.beluga/breakpoints` from one run to the next, and a session only gets those in its own
 project (the files under its root, or under the working directory). For anything the
 Ctrl-x B c prompt doesn't cover, hand the adapter its own launch arguments, e.g. in a project's
