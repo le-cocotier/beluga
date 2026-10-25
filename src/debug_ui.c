@@ -32,12 +32,12 @@ extern EditorConfig E;
 #define PANEL_OUTPUT_LINES 8 // the end of the output, shown in the panel
 #define VALUE_MAX 160        // longer values are cut, with "…"
 
-typedef enum { ROW_OTHER, ROW_FRAME, ROW_VAR } RowKind;
+typedef enum { ROW_OTHER, ROW_FRAME, ROW_VAR, ROW_WATCH } RowKind;
 
 typedef struct
 {
     RowKind kind;
-    int frame;   // ROW_FRAME
+    int frame;   // ROW_FRAME; ROW_WATCH: the watch's index
     DapVar *var; // ROW_VAR
 } PanelRow;
 
@@ -235,6 +235,30 @@ static void addVars(struct buffer_t *buf, DapVar *vars, const int count, const i
   }
 }
 
+static void addWatches(struct buffer_t *buf, const DapState state) {
+  const char *const *watches;
+  const char *value;
+  char line[512];
+  char shown[VALUE_MAX + 8];
+  int count;
+  int i;
+  watches = dapWatches(&count);
+  if (count == 0)
+    return;
+  addText(buf, "");
+  addText(buf, "Watch");
+  for (i = 0; i < count; i++) {
+    value = dapWatchValue(i);
+    if (state != DAP_STOPPED) {
+      snprintf(line, sizeof(line), "  %s", watches[i]);
+    } else {
+      oneLine(value ? value : "…", shown, sizeof(shown));
+      snprintf(line, sizeof(line), "  %s = %s", watches[i], shown);
+    }
+    addRow(buf, line, ROW_WATCH, i, NULL);
+  }
+}
+
 static void renderPanel(struct buffer_t *buf) {
   const DapFrame *frames;
   DapVar *scopes;
@@ -269,7 +293,7 @@ static void renderPanel(struct buffer_t *buf) {
   }
   addText(buf, line);
   addText(buf, "c go  n next  i in  u out  q stop  p pause");
-  addText(buf, "ENTER select/open  e evaluate  o output");
+  addText(buf, "ENTER select/open  e evaluate  w/W watch/unwatch  o output");
 
   if (state == DAP_STOPPED) {
     frames = dapFrames(&frame_count, &selected);
@@ -285,7 +309,11 @@ static void renderPanel(struct buffer_t *buf) {
                  frames[i].name ? frames[i].name : "??");
       addRow(buf, line, ROW_FRAME, i, NULL);
     }
+  }
 
+  addWatches(buf, state);
+
+  if (state == DAP_STOPPED) {
     scopes = dapScopes(&scope_count);
     for (i = 0; i < scope_count; i++) {
       addText(buf, "");
@@ -437,6 +465,14 @@ void debugUiPanelSelect(void) {
     dapSelectFrame(row->frame);
   else if (row->kind == ROW_VAR)
     dapToggleVar(row->var);
+}
+
+int debugUiPanelWatch(void) {
+  const struct buffer_t *buf = bufferFindById(splitScreenGetActivePane()->buffer_id);
+  if (!buf || buf->buffer_id != s_panel_id || buf->y < 0 || buf->y >= s_row_count ||
+      s_rows[buf->y].kind != ROW_WATCH)
+    return -1;
+  return s_rows[buf->y].frame;
 }
 
 void debugUiShowOutput(void) {

@@ -406,6 +406,8 @@
 (map-key "l" debug-breakpoints "debug")          ; listed in *search*, ENTER jumps
 (map-key "x" debug-clear-breakpoints "debug")
 (map-key "e" debug-evaluate "debug")            ; an expression, in the selected frame
+(map-key "w" debug-watch "debug")               ; shown in the panel at every stop
+(map-key "W" debug-unwatch "debug")
 (map-key "g" debug-command "debug")             ; a command for the debugger (gdb's own)
 (map-key "d" debug-panel "debug")
 (map-key "o" debug-output "debug")
@@ -422,6 +424,8 @@
 (map-key "q" debug-stop "debug-view")
 (map-key "p" debug-pause "debug-view")
 (map-key "e" debug-evaluate "debug-view")
+(map-key "w" debug-watch "debug-view")
+(map-key "W" debug-unwatch "debug-view")           ; the watch under the cursor
 (map-key "g" debug-command "debug-view")
 (map-key "o" debug-output "debug-view")
 (map-key "CTRL-x" '(editor-set-prefix "user") "debug-view")

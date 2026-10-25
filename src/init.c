@@ -223,6 +223,9 @@ void initBuiltins(void) {
   registerBuiltin("debug-output", l_debugOutput);
   registerBuiltin("debug-evaluate", l_debugEvaluate);
   registerBuiltin("debug-command", l_debugCommand);
+  registerBuiltin("debug-watch", l_debugWatch);
+  registerBuiltin("debug-unwatch", l_debugUnwatch);
+  registerBuiltin("debug-watches", l_debugWatches);
   registerBuiltin("debug-state", l_debugState);
   registerBuiltin("debug-frames", l_debugFrames);
 #ifdef APP_DEBUG

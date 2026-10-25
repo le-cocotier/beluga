@@ -89,6 +89,15 @@ void dapSetExceptionFilters(const char *ids);
 char *dapExceptionFilters(int *count);
 // The ids on now, space-separated, galloc'd.
 char *dapExceptionChoice(void);
+// Watch expressions: evaluated in the selected frame whenever the program
+// stops, for every session. Adding one already there does nothing.
+// @return 0, or -1 (empty, out of memory, no such index).
+int dapWatchAdd(const char *expression);
+int dapWatchRemove(int index);
+const char *const *dapWatches(int *count);
+// What watch `index` came to in the current project's paused program, or
+// NULL (not stopped, not answered yet).
+const char *dapWatchValue(int index);
 // Selects frame `index` of the call stack: its source is shown and its
 // variables listed.
 void dapSelectFrame(int index);

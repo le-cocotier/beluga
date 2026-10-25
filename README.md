@@ -222,6 +222,7 @@ is media keys, and F11 is Show Desktop); bind them in personal-config if you lik
 | Ctrl-x B p   | pause                                                    |
 | Ctrl-x B q   | stop                                                     |
 | Ctrl-x B e   | evaluate an expression in the selected frame             |
+| Ctrl-x B w / W | watch an expression (its value is in the panel at every stop) / stop watching it |
 | Ctrl-x B g   | a command for the debugger itself (gdb's `info registers`, lldb's `bt`) |
 | Ctrl-x B o   | everything the program printed                           |
 | Ctrl-x B l / x | list the breakpoints / remove them all                 |
@@ -247,4 +248,4 @@ adapter for it, with `("console" . "integratedTerminal")` for debugpy or `("runI
 for lldb-dap. gdb has no such option; its program's output arrives in the panel.
 
 The hooks `debug-stopped` (path line reason) and `debug-exited` (exit-code) let a config react,
-and `debug-frames`, `debug-breakpoints` and `debug-state` read the session from Lisp.
+and `debug-frames`, `debug-breakpoints`, `debug-watches` and `debug-state` read the session from Lisp.

@@ -645,6 +645,110 @@ Lisp l_debugCommand(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function: watch an expression
+ * @details (debug-watch ["expression"]) — asks when it isn't given. The
+ * panel shows its value in the selected frame each time the program stops,
+ * in every project's session.
+ * @return lisp_null()
+ */
+Lisp l_debugWatch(Lisp args, LispError *e, LispContext ctx) {
+  Utf8Char *input;
+  char *text;
+  (void)ctx;
+  if (lisp_is_pair(args)) {
+    if (lisp_type(lisp_car(args)) != LISP_STRING) {
+      *e = LISP_ERROR_ARG_TYPE;
+      return lisp_null();
+    }
+    text = utilStrdup(lisp_string(lisp_car(args)));
+  } else {
+    input = editorPrompt("Watch: %u (ESC to cancel)", NULL, 0);
+    if (!input)
+      return lisp_null();
+    text = (char *)utf8ToString(input);
+    gfree(input);
+  }
+  if (text && *text && dapWatchAdd(text) == 0) {
+    debugUiOpenPanel();
+    editorSetStatusMessage("Watching %s", text);
+  }
+  gfree(text);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function: stop watching an expression
+ * @details (debug-unwatch ["expression"]) — without it, the watch on the
+ * panel's row under the cursor, else asks (offering the last one added).
+ * @return #t if one was removed
+ */
+Lisp l_debugUnwatch(Lisp args, LispError *e, LispContext ctx) {
+  const char *const *watches;
+  Utf8Char *placeholder;
+  Utf8Char *input;
+  char *text = NULL;
+  int count;
+  int index = -1;
+  int i;
+  (void)ctx;
+  watches = dapWatches(&count);
+  if (lisp_is_pair(args)) {
+    if (lisp_type(lisp_car(args)) != LISP_STRING) {
+      *e = LISP_ERROR_ARG_TYPE;
+      return lisp_null();
+    }
+    text = utilStrdup(lisp_string(lisp_car(args)));
+  } else if ((index = debugUiPanelWatch()) < 0) {
+    if (count == 0) {
+      editorSetStatusMessage("No watch expressions");
+      return lisp_false();
+    }
+    placeholder = stringToUtf8((unsigned char *)watches[count - 1]);
+    input = editorPrompt("Stop watching: %u (ESC to cancel)", placeholder, 0);
+    gfree(placeholder);
+    if (!input)
+      return lisp_false();
+    text = (char *)utf8ToString(input);
+    gfree(input);
+  }
+  for (i = 0; text && i < count && index < 0; i++)
+    if (!strcmp(watches[i], text))
+      index = i;
+  gfree(text);
+  if (index < 0) {
+    editorSetStatusMessage("Not watched");
+    return lisp_false();
+  }
+  editorSetStatusMessage("Stopped watching %s", watches[index]);
+  return lisp_make_bool(dapWatchRemove(index) == 0);
+}
+
+/**
+ * @brief Lisp function: the watch expressions
+ * @details (debug-watches) — a list of ("expression" value), value being
+ * what it came to in the paused program, #f when it isn't paused.
+ * @return Lisp list
+ */
+Lisp l_debugWatches(Lisp args, LispError *e, LispContext ctx) {
+  const char *const *watches;
+  const char *value;
+  Lisp result = lisp_null();
+  Lisp entry;
+  int count;
+  int i;
+  (void)args;
+  (void)e;
+  watches = dapWatches(&count);
+  for (i = count - 1; i >= 0; i--) {
+    value = dapWatchValue(i);
+    entry = lisp_cons(value ? lisp_make_string2(value, ctx) : lisp_false(), lisp_null(), ctx);
+    entry = lisp_cons(lisp_make_string2(watches[i], ctx), entry, ctx);
+    result = lisp_cons(entry, result, ctx);
+  }
+  return result;
+}
+
+/**
  * @brief Lisp function: the session's state
  * @details (debug-state) — "off", "starting", "running" or "stopped".
  * @return Lisp string

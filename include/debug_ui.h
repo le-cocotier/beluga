@@ -32,6 +32,9 @@ int debugUiWantsGutter(const struct buffer_t *buf);
 void debugUiOpenPanel(void);
 // Re-renders the panel and the output buffer, if they exist.
 void debugUiRefresh(void);
+// The index of the watch expression on the cursor's row when the panel is
+// the active pane, else -1.
+int debugUiPanelWatch(void);
 // Shows row `line` (0-based) of `path` in a pane that isn't one of the
 // debugger's own buffers.
 void debugUiShowLocation(const char *path, int line);

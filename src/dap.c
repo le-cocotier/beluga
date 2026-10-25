@@ -84,6 +84,9 @@ typedef struct
 
 static DapAdapter s_adapters[DAP_MAX_ADAPTERS];
 static int s_adapter_count;
+// The watch expressions, evaluated whenever a session stops.
+static char **s_watches;
+static int s_watch_count;
 // The exception filters chosen (dapSetExceptionFilters()), separated by
 // spaces, or NULL for each adapter's defaults.
 static char *s_exception_choice;
@@ -144,6 +147,11 @@ typedef struct
     char last_root[OS_PATH_MAX];
     int owner; // the daemon window it reports to (dapSetWindowHooks()), 0: none
     cJSON *capabilities; // the adapter's, from initialize; NULL before
+    // What the watch expressions came to in the selected frame, one per
+    // expression (NULL: not answered yet); watch_value_count 0 while not
+    // stopped.
+    char **watch_values;
+    int watch_value_count;
 } DapSession;
 
 static DapSession s_sessions[DAP_MAX_SESSIONS];
@@ -330,12 +338,22 @@ static void clearFrames(void) {
   s->selected = 0;
 }
 
+static void clearWatchValues(void) {
+  int i;
+  for (i = 0; i < s->watch_value_count; i++)
+    gfree(s->watch_values[i]);
+  gfree(s->watch_values);
+  s->watch_values = NULL;
+  s->watch_value_count = 0;
+}
+
 // The stack and variables no longer describe the program: drop them, and
 // any answer still on its way about them.
 static void forgetStoppedState(void) {
   s->gen++;
   clearScopes();
   clearFrames();
+  clearWatchValues();
 }
 
 const DapFrame *dapFrames(int *count, int *selected) {
@@ -926,6 +944,117 @@ static void onScopes(cJSON *response, void *ctx) {
   debugUiRefresh();
 }
 
+// What an evaluate request for a watch needs to find its place again.
+typedef struct
+{
+    int gen;
+    int index;
+    // The watch it was for (the list may have changed since), stored after
+    // the struct: one block, which the session frees if no answer comes.
+    char *expression;
+} WatchRequest;
+
+static void onWatchEvaluate(cJSON *response, void *ctx) {
+  WatchRequest *req = ctx;
+  const char *result;
+  if (req->gen == s->gen && req->index < s->watch_value_count && req->index < s_watch_count &&
+      !strcmp(s_watches[req->index], req->expression)) {
+    if (responseOk(response))
+      result = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(
+          cJSON_GetObjectItemCaseSensitive(response, "body"), "result"));
+    else
+      result = responseMessage(response);
+    gfree(s->watch_values[req->index]);
+    s->watch_values[req->index] = utilStrdup(result ? result : "");
+    debugUiRefresh();
+  }
+}
+
+// Asks for every watch expression's value in the selected frame.
+static void evaluateWatches(void) {
+  WatchRequest *req;
+  cJSON *args;
+  size_t len;
+  int i;
+  clearWatchValues();
+  if (s->state != DAP_STOPPED || s_watch_count == 0)
+    return;
+  s->watch_values = gcalloc((size_t)s_watch_count, sizeof(char *));
+  if (!s->watch_values)
+    return;
+  s->watch_value_count = s_watch_count;
+  for (i = 0; i < s_watch_count; i++) {
+    len = strlen(s_watches[i]);
+    req = galloc(sizeof(WatchRequest) + len + 1);
+    if (!req)
+      continue;
+    req->gen = s->gen;
+    req->index = i;
+    req->expression = (char *)(req + 1);
+    memcpy(req->expression, s_watches[i], len + 1);
+    args = cJSON_CreateObject();
+    cJSON_AddStringToObject(args, "expression", s_watches[i]);
+    cJSON_AddStringToObject(args, "context", "watch");
+    if (s->selected < s->frame_count)
+      cJSON_AddNumberToObject(args, "frameId", s->frames[s->selected].id);
+    sendRequest("evaluate", args, onWatchEvaluate, req);
+  }
+}
+
+// Evaluates the watches again in every stopped session.
+static void reevaluateWatches(void) {
+  DapSession *saved = s;
+  int i;
+  for (i = 0; i < DAP_MAX_SESSIONS; i++) {
+    s = &s_sessions[i];
+    if (s->state == DAP_STOPPED && connected())
+      evaluateWatches();
+  }
+  s = saved;
+  debugUiRefresh();
+}
+
+int dapWatchAdd(const char *expression) {
+  char **grown;
+  int i;
+  if (!expression || !*expression)
+    return -1;
+  for (i = 0; i < s_watch_count; i++)
+    if (!strcmp(s_watches[i], expression))
+      return 0;
+  grown = grealloc(s_watches, sizeof(char *) * (size_t)(s_watch_count + 1));
+  if (!grown)
+    return -1;
+  s_watches = grown;
+  s_watches[s_watch_count] = utilStrdup(expression);
+  if (!s_watches[s_watch_count])
+    return -1;
+  s_watch_count++;
+  reevaluateWatches();
+  return 0;
+}
+
+int dapWatchRemove(const int index) {
+  if (index < 0 || index >= s_watch_count)
+    return -1;
+  gfree(s_watches[index]);
+  memmove(&s_watches[index], &s_watches[index + 1],
+          sizeof(char *) * (size_t)(s_watch_count - index - 1));
+  s_watch_count--;
+  reevaluateWatches();
+  return 0;
+}
+
+const char *const *dapWatches(int *count) {
+  *count = s_watch_count;
+  return (const char *const *)s_watches;
+}
+
+const char *dapWatchValue(const int index) {
+  const DapSession *c = currentSession();
+  return index >= 0 && index < c->watch_value_count ? c->watch_values[index] : NULL;
+}
+
 static void selectFrame(int index);
 
 void dapSelectFrame(const int index) {
@@ -951,6 +1080,7 @@ static void selectFrame(const int index) {
   args = cJSON_CreateObject();
   cJSON_AddNumberToObject(args, "frameId", s->frames[index].id);
   sendRequest("scopes", args, onScopes, gen);
+  evaluateWatches();
   debugUiRefresh();
 }
 
@@ -1795,4 +1925,9 @@ void dapFree(void) {
   s_adapter_count = 0;
   gfree(s_exception_choice);
   s_exception_choice = NULL;
+  for (i = 0; i < s_watch_count; i++)
+    gfree(s_watches[i]);
+  gfree(s_watches);
+  s_watches = NULL;
+  s_watch_count = 0;
 }
