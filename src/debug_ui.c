@@ -16,6 +16,7 @@
 #include "../include/dap.h"
 #include "../include/editor_op.h"
 #include "../include/galloc.h"
+#include "../include/lsp_ui.h"
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/utf8.h"
@@ -113,6 +114,109 @@ int debugUiDrawGutter(struct abuf *ab, const char *path, const int line) {
   abAppend(ab, E.theme.BACKGROUND_COLOR, (int)strlen(E.theme.BACKGROUND_COLOR));
   abAppend(ab, " ", 1);
   return 1;
+}
+
+#define INLINE_LOOKBACK 40  // rows above the stopped line that get values
+#define INLINE_VALUE_MAX 40 // bytes of one value; longer ones are cut, with "…"
+#define INLINE_MAX_VARS 16  // per row
+
+static int isIdentChar(const char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+// The variable named `name` (len bytes) in the stopped frame's open scopes
+// (locals, arguments: the ones fetched without asking), or NULL.
+static const DapVar *frameVariable(const char *name, const size_t len) {
+  const DapVar *scopes;
+  const DapVar *v;
+  int count;
+  int i;
+  int j;
+  scopes = dapScopes(&count);
+  for (i = 0; i < count; i++) {
+    if (!scopes[i].expanded || !scopes[i].loaded)
+      continue;
+    for (j = 0; j < scopes[i].child_count; j++) {
+      v = &scopes[i].children[j];
+      if (v->name && strlen(v->name) == len && !strncmp(v->name, name, len) && v->value &&
+          *v->value)
+        return v;
+    }
+  }
+  return NULL;
+}
+
+// Appends `value` to `out` on one line, cut to INLINE_VALUE_MAX bytes.
+static void appendValue(char *out, const size_t size, const char *value) {
+  size_t n = strlen(out);
+  size_t taken = 0;
+  for (; *value && n + 4 < size; value++) {
+    if (taken == INLINE_VALUE_MAX && ((unsigned char)*value & 0xC0) != 0x80) {
+      snprintf(out + n, size - n, "…");
+      return;
+    }
+    out[n++] = (*value == '\n' || *value == '\r' || *value == '\t') ? ' ' : *value;
+    taken++;
+  }
+  out[n] = '\0';
+}
+
+int debugUiDrawInlineValues(struct abuf *ab, const char *path, const struct buffer_t *buf,
+                            const int line, const int max_cols) {
+  const char *current;
+  const DapVar *shown[INLINE_MAX_VARS];
+  const DapVar *v;
+  char note[512];
+  char *text;
+  int stopped_line;
+  int n_shown = 0;
+  int bytes;
+  int cols;
+  int i;
+  int j;
+  int start;
+  if (!E.constantes.DEBUG_INLINE_VALUES || !path || max_cols < 8 ||
+      !dapCurrentLine(&current, &stopped_line) || !os_path_equal(current, path) ||
+      line > stopped_line || line < stopped_line - INLINE_LOOKBACK || line >= buf->numrows)
+    return 0;
+  text = (char *)utf8ToNString(buf->row[line].characters, buf->row[line].size);
+  if (!text)
+    return 0;
+  note[0] = '\0';
+  for (i = 0; text[i] && n_shown < INLINE_MAX_VARS;) {
+    if (!isIdentChar(text[i]) || (text[i] >= '0' && text[i] <= '9')) {
+      i++;
+      continue;
+    }
+    start = i;
+    while (isIdentChar(text[i]))
+      i++;
+    // A member (p.total, p->total) isn't the local of that name.
+    if (start > 0 && (text[start - 1] == '.' || (start > 1 && text[start - 1] == '>' &&
+                                                 text[start - 2] == '-')))
+      continue;
+    v = frameVariable(text + start, (size_t)(i - start));
+    for (j = 0; v && j < n_shown; j++)
+      if (shown[j] == v)
+        v = NULL;
+    if (!v)
+      continue;
+    shown[n_shown++] = v;
+    snprintf(note + strlen(note), sizeof(note) - strlen(note), "%s%s = ", n_shown > 1 ? ", " : "",
+             v->name);
+    appendValue(note, sizeof(note), v->value);
+  }
+  gfree(text);
+  if (n_shown == 0)
+    return 0;
+  bytes = lspUiClipToColumns(note, (int)strlen(note), max_cols - 3, &cols);
+  abAppend(ab, "   ", 3);
+  abAppend(ab, E.theme.COLOR_COMMENT, (int)strlen(E.theme.COLOR_COMMENT));
+  abAppend(ab, "\x1b[3m", 4);
+  abAppend(ab, note, bytes);
+  abAppend(ab, "\x1b[23m", 5);
+  abAppend(ab, E.theme.COLOR_DEFAULT, (int)strlen(E.theme.COLOR_DEFAULT));
+  return 3 + cols;
 }
 
 /***********************************************************************************************************************

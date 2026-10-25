@@ -227,8 +227,10 @@ is media keys, and F11 is Show Desktop); bind them in personal-config if you lik
 | Ctrl-x B o   | everything the program printed                           |
 | Ctrl-x B l / x | list the breakpoints / remove them all                 |
 
-While the program is paused, the `*debug*` panel shows the call stack, the variables (ENTER
-selects a frame or opens a struct) and the end of the output; the gutter shows `▶` on the
+While the program is paused, the `*debug*` panel shows the call stack, the watch expressions,
+the variables (ENTER selects a frame or opens a struct) and the end of the output, and the lines
+up to the current one show the values of the variables they use (`(define DEBUG-INLINE-VALUES
+#f)` hides them); the gutter shows `▶` on the
 current line, `●` on breakpoints, `◆` on those with a condition or a hit count and `◉` on
 logpoints, which follow the code as you edit. Breakpoints are kept
 in `~/.beluga/breakpoints` from one run to the next, and a session only gets those in its own

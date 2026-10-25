@@ -147,6 +147,7 @@ struct const_t
     int BREADCRUMBS;        // (define BREADCRUMBS #t) — "struct › function" in the status bar
     int INLINE_DIAGNOSTICS; // (define INLINE-DIAGNOSTICS #t) — the message after the line
     int INLAY_HINTS;        // (define INLAY-HINTS #t) — parameter names / types inside the line
+    int DEBUG_INLINE_VALUES; // (define DEBUG-INLINE-VALUES #t) — variables' values after the lines, while paused
 };
 
 /**

@@ -647,6 +647,10 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
             break;
           }
       }
+      // While the debugger is paused here: the values of the variables
+      // the line names.
+      if (debug_path && !is_sticky && !(has_selection && sel_extends) && span.end >= row->size)
+        filled += debugUiDrawInlineValues(ab, debug_path, buf, file_row, content_width - filled);
       if (E.constantes.INLINE_DIAGNOSTICS && buf->type == FILE_BUFF && !is_sticky &&
           !(has_selection && sel_extends) && span.end >= row->size) {
         diag = lspUiWorstDiagnostic(&E.lsp_diagnostics, pane->buffer_id, file_row);

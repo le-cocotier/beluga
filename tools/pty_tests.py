@@ -456,7 +456,8 @@ def debugger_exceptions(binary, repo):
 
 def debugger_watches(binary, repo):
     """Watch expressions: shown in the panel with their value at each stop,
-    added before the session or while it's paused, and taken away."""
+    added before the session or while it's paused, and taken away. The
+    lines up to the stopped one show their variables' values."""
     if subprocess.run([sys.executable, '-c', 'import debugpy'],
                       capture_output=True).returncode != 0:
         raise Skip('no debugpy (pip install debugpy)')
@@ -489,6 +490,11 @@ def debugger_watches(binary, repo):
         ed.keys(*DEBUG, 'c')
         ed.wait_for('i + 100 = 102', 20)
         ed.wait_for('total * 10 = 10')
+        # The values after the lines that use them (DEBUG-INLINE-VALUES).
+        ed.wait_for('total = 1, i = 2')
+        assert 'total = 1, i = 2' in ed.text()[2], ed.text()[2]
+        assert 'i = 2' in ed.text()[1], ed.text()[1]
+        assert '=' not in ed.text()[3], ed.text()[3]
         ed.keys(*DEBUG, 'W', delay=0.3)   # offers the last one added
         ed.wait_for('Stop watching: i + 100')
         ed.write('\r')

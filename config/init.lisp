@@ -39,6 +39,9 @@
 (define BREADCRUMBS #t)
 (define INLINE-DIAGNOSTICS #t)
 (define INLAY-HINTS #t)
+;; DEBUG-INLINE-VALUES: while the debugger is paused, the variables' values
+;; after the lines that use them, "total += i   total = 3, i = 2".
+(define DEBUG-INLINE-VALUES #t)
 
 ;; Prefixes need to exist before anything below tries to (map-key ... "user")
 ;; or "term" — including packages, which load next. A package that tried to
