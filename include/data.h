@@ -95,6 +95,13 @@ typedef struct editor_pane_t
     // paneFitShownBuffer() in output.c. -1 forces a fit.
     int shown_buffer_id;
     int is_active; // Is this pane currently active
+    // Each pane has its own cursor: a buffer's x/y is the cursor of the
+    // pane that has focus, and the others keep theirs here, for the buffer
+    // saved_buffer_id (-1: none) — see splitScreenSyncCursor(). `id` tells
+    // panes apart across layouts (0 until it is first given one).
+    int id;
+    int saved_x, saved_y;
+    int saved_buffer_id;
 } EditorPane;
 
 /**
@@ -624,6 +631,11 @@ typedef struct buffer_t
     int buffer_id;
     int b_lsp_open;
     int x, y; /**< Position in the file */
+    // The pane (EditorPane.id) whose cursor x/y is, and where it was when
+    // that pane last lost focus: x/y moved since means something put the
+    // cursor somewhere on purpose (a jump), which the next pane keeps.
+    int cursor_pane;
+    int cursor_left_x, cursor_left_y;
     Row* row;
     int numrows;
     int b_has_changed;

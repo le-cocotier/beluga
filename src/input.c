@@ -495,6 +495,8 @@ void editorProcessKeypress() {
   int k;
   LspClient *lsp;
 
+  // Focus may have moved since the last key: each pane its own cursor.
+  splitScreenSyncCursor();
   macroNoteKeySequenceStart();
   c = editorReadKey();
 

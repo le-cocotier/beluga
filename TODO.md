@@ -47,9 +47,6 @@ Nothing open right now.
 `beluga --daemon` / `beluga -c` (src/daemon.c, src/daemon_client.c). What's
 left after the first step:
 
-- [ ] **[feature]** A cursor per pane instead of per buffer
-  (`struct buffer_t` x/y): two windows, or two split panes, on the same file
-  share one cursor today.
 - [ ] **[debt]** Prompts block: while one window has an `editorPrompt()`
   open (open-file, M-x, search, kill-buffer confirmation), the other windows
   don't redraw or take keys until it closes. Make the prompt a per-window

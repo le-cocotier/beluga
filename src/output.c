@@ -1071,6 +1071,7 @@ void editorRefreshScreen() {
   abAppend(&ab, E.theme.BACKGROUND_COLOR,
            (int)strlen(E.theme.BACKGROUND_COLOR));
 
+  splitScreenSyncCursor();
   editorScroll();
 
   active = splitScreenGetActivePane();

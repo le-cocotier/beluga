@@ -246,6 +246,7 @@ static void rowJoinNext(struct buffer_t *buf, int row) {
           sizeof(Row) * (buf->numrows - row - 2));
   buf->numrows--;
   breakpointsLinesRemoved(buf, row + 1, 1);
+  splitScreenLinesShifted(buf, row + 1, -1);
   syntaxHighlighterInvalidateAfter(buf, row);
 }
 
@@ -268,6 +269,7 @@ static void rowRemoveAt(struct buffer_t *buf, int at) {
           sizeof(Row) * (buf->numrows - at - 1));
   buf->numrows--;
   breakpointsLinesRemoved(buf, at, 1);
+  splitScreenLinesShifted(buf, at, -1);
   syntaxHighlighterInvalidateAfter(buf, at - 1);
 }
 
@@ -1756,8 +1758,10 @@ void bufferInsertRow(struct buffer_t *buffer, int at, Utf8Char *string,
     buffer->edit_seq++;
   }
   // Rows appended at the end (a file being read) move nothing.
-  if (at < buffer->numrows - 1)
+  if (at < buffer->numrows - 1) {
     breakpointsLinesInserted(buffer, at, 1);
+    splitScreenLinesShifted(buffer, at, 1);
+  }
   syntaxHighlighterInvalidateAfter(buffer, at - 1);
 }
 
@@ -1786,8 +1790,10 @@ static int rowsInsertEmpty(struct buffer_t *buf, int at, int count) {
     END_OF_STRING(buf->row[i].characters[0]);
   }
   buf->numrows += count;
-  if (at < buf->numrows - count)
+  if (at < buf->numrows - count) {
     breakpointsLinesInserted(buf, at, count);
+    splitScreenLinesShifted(buf, at, count);
+  }
   return 1;
 }
 
@@ -1950,6 +1956,7 @@ static char *textDeleteRaw(struct buffer_t *buf, int start_row, int start_col,
             sizeof(Row) * (size_t)(buf->numrows - end_row - 1));
     buf->numrows -= removed;
     breakpointsLinesRemoved(buf, start_row + 1, removed);
+    splitScreenLinesShifted(buf, start_row + 1, -removed);
   }
   syntaxHighlighterInvalidateAfter(buf, start_row);
   return deleted;

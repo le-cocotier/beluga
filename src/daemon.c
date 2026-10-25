@@ -247,6 +247,9 @@ static void clientSwitchTo(DaemonClient *c) {
     c->view.constantes = E.constantes;
     c->view.project_last_buffer = -1;
   }
+  // Its cursors stay with its panes (each window its own, on the same
+  // buffers); the next window's come back at its next key or redraw.
+  splitScreenSaveCursor();
   viewSave(s_current ? &s_current->view : &s_idle);
   viewLoad(c ? &c->view : &s_idle);
   s_current = c;

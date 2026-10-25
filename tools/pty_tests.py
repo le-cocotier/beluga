@@ -258,6 +258,30 @@ def breakpoint_gutter(binary, repo):
         ed.quit()
 
 
+def pane_cursors(binary, repo):
+    """Two panes on the same file each keep their own cursor: moving in one
+    doesn't move the other, and lines inserted above a pane's cursor carry
+    it down with its line."""
+    with Beluga(binary, repo, rows=30, cols=100) as ed:
+        with open(ed.path('p.txt'), 'w') as f:
+            f.write(''.join('line %d\n' % i for i in range(1, 41)))
+        ed.start('p.txt')
+        ed.wait_for('line 20')
+        ed.keys(CTRL_X, '"', delay=0.4)      # split: the new pane has focus
+        ed.keys(*([DOWN] * 5))               # its cursor to line 6
+        ed.keys(CTRL_X, 'o', delay=0.3)      # the first pane: still on line 1
+        ed.keys('A', '\r', delay=0.2)       # a line inserted above line 6
+        ed.keys(CTRL_X, 'o', delay=0.3)
+        ed.keys('B', delay=0.3)
+        lines = ed.text()
+        assert lines[0].split('│')[0].rstrip().endswith('A'), lines[:3]
+        assert any('Bline 6' in line for line in lines), lines[:10]
+        assert not any('Bline' in line and 'Bline 6' not in line for line in lines), lines[:10]
+        for _ in range(3):
+            ed.keys(CTRL_X, 'u', delay=0.2)
+        ed.quit()
+
+
 def gdb_with_dap():
     """gdb 14 or later (it speaks the Debug Adapter Protocol), or None."""
     gdb = shutil.which('gdb')
@@ -779,6 +803,7 @@ def daemon_debug_per_project(binary, repo):
 
 TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
+    ('pane-cursors', pane_cursors),
     ('debugger-gdb', debugger_gdb),
     ('debugger-attach', debugger_attach),
     ('debugger-lldb', debugger_lldb),
