@@ -412,6 +412,48 @@ def debugger_logpoints(binary, repo):
         ed.quit()
 
 
+def debugger_exceptions(binary, repo):
+    """Exception breakpoints: with debugpy's "raised" filter on, an
+    exception the program catches still stops it; the prompt lists the
+    adapter's filters once a session runs."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    with Beluga(binary, repo, rows=30, cols=140) as ed:
+        with open(ed.path('t.py'), 'w') as f:
+            f.write("try:\n"
+                    "    raise ValueError('boom')\n"
+                    "except ValueError:\n"
+                    "    pass\n"
+                    "print('done')\n")
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "py" "%s" "-m" "debugpy.adapter")\n'
+                    '(define (debug-t) (debug-start \'(("program" . "%s"))))\n'
+                    % (sys.executable, ed.path('t.py')))
+        ed.start('t.py')
+        ed.wait_for('boom')
+        ed.keys(*DEBUG, 'E', delay=0.3)
+        ed.wait_for('Stop on exceptions')
+        ed.write('raised\r')
+        ed.wait_for('Exceptions that stop the program: raised')
+        ed.keys('\x1bx', delay=0.4)
+        ed.keys(*'debug-t', delay=0.02)
+        ed.keys('\r', delay=0.3)
+        ed.wait_for('stopped (', 30)
+        for _ in range(50):  # the call stack comes after the stop
+            if re.match(r'\s*2 ▶', ed.text()[1]):
+                break
+            ed.pump(0.1)
+        assert re.match(r'\s*2 ▶', ed.text()[1]), ed.text()[1]
+        ed.keys(*DEBUG, 'E', delay=0.3)
+        ed.wait_for('*raised (')
+        ed.wait_for('uncaught (')
+        ed.keys('\x1b', delay=0.3)
+        ed.keys(*DEBUG, 'c')
+        ed.wait_for('exited with code 0', 20)
+        ed.quit()
+
+
 def python_session(ed, adapter_lisp):
     """A breakpoint, a stop, a variable, then the end, with debugpy reached
     as `adapter_lisp` (the arguments of dap-adapter after "py")."""
@@ -634,6 +676,7 @@ TESTS = [
     ('debugger-python-in-terminal', debugger_python_in_terminal),
     ('debugger-over-tcp', debugger_over_tcp),
     ('debugger-logpoints', debugger_logpoints),
+    ('debugger-exceptions', debugger_exceptions),
     ('terminal-app-shift-function-keys', terminal_app_shift_function_keys),
     ('tab-completion-list', tab_completion_list),
     ('terminal-alternate-screen', terminal_alternate_screen),

@@ -207,6 +207,7 @@ void initBuiltins(void) {
   registerBuiltin("debug-breakpoint-condition", l_debugBreakpointCondition);
   registerBuiltin("debug-breakpoint-hit-count", l_debugBreakpointHitCount);
   registerBuiltin("debug-logpoint", l_debugLogpoint);
+  registerBuiltin("debug-exception-breakpoints", l_debugExceptionBreakpoints);
   registerBuiltin("debug-clear-breakpoints", l_debugClearBreakpoints);
   registerBuiltin("debug-breakpoints", l_debugBreakpoints);
   registerBuiltin("dap-adapter", l_dapAdapter);

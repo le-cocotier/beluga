@@ -84,6 +84,9 @@ typedef struct
 
 static DapAdapter s_adapters[DAP_MAX_ADAPTERS];
 static int s_adapter_count;
+// The exception filters chosen (dapSetExceptionFilters()), separated by
+// spaces, or NULL for each adapter's defaults.
+static char *s_exception_choice;
 
 // One debug session per project (its root, or the working directory
 // without one): in daemon mode each project can be debugged at once, each
@@ -140,6 +143,7 @@ typedef struct
     // that project's after the session ends.
     char last_root[OS_PATH_MAX];
     int owner; // the daemon window it reports to (dapSetWindowHooks()), 0: none
+    cJSON *capabilities; // the adapter's, from initialize; NULL before
 } DapSession;
 
 static DapSession s_sessions[DAP_MAX_SESSIONS];
@@ -496,6 +500,8 @@ static void endSession(const char *message, const int run_hook) {
     os_proc_free(s->proc);
     s->proc = NULL;
   }
+  cJSON_Delete(s->capabilities);
+  s->capabilities = NULL;
   s->state = DAP_OFF;
   s->configured = 0;
   s->ending_at = 0;
@@ -670,6 +676,126 @@ static void onBreakpointEvent(cJSON *body) {
   for (i = 0; i < count; i++)
     if (all[i].id == id)
       all[i].verified = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(bp, "verified"));
+}
+
+/***********************************************************************************************************************
+ *
+ *                                                 Exceptions
+ *
+ **********************************************************************************************************************/
+
+// The adapter's exception filters (an array of {filter, label, default}),
+// or NULL when it has none.
+static cJSON *exceptionFilters(void) {
+  cJSON *list = cJSON_GetObjectItemCaseSensitive(s->capabilities, "exceptionBreakpointFilters");
+  return cJSON_GetArraySize(list) > 0 ? list : NULL;
+}
+
+// Is `id` in the space-separated `ids`?
+static int wordIn(const char *id, const char *ids) {
+  const size_t len = strlen(id);
+  const char *p = ids;
+  while (p && (p = strstr(p, id)) != NULL) {
+    if ((p == ids || p[-1] == ' ') && (p[len] == ' ' || p[len] == '\0'))
+      return 1;
+    p += len;
+  }
+  return 0;
+}
+
+// Is the adapter's `filter` on: chosen, or by default when nothing is?
+static int filterOn(cJSON *filter) {
+  const char *id = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(filter, "filter"));
+  if (!id)
+    return 0;
+  if (s_exception_choice)
+    return wordIn(id, s_exception_choice);
+  return cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(filter, "default"));
+}
+
+static void onSetExceptionBreakpoints(cJSON *response, void *ctx) {
+  (void)ctx;
+  if (s->config_waiting > 0 && --s->config_waiting == 0)
+    configurationDone();
+  if (!responseOk(response))
+    editorSetStatusMessage("Exception breakpoints: %s", responseMessage(response));
+}
+
+// Tells the adapter which exceptions stop the program: the chosen filters
+// it knows. @return 1 if it was sent (the adapter has filters), else 0.
+static int sendExceptionBreakpoints(void) {
+  cJSON *filters = exceptionFilters();
+  cJSON *filter;
+  cJSON *args;
+  cJSON *list;
+  if (!filters)
+    return 0;
+  args = cJSON_CreateObject();
+  list = cJSON_AddArrayToObject(args, "filters");
+  cJSON_ArrayForEach(filter, filters) {
+    if (filterOn(filter))
+      cJSON_AddItemToArray(list, cJSON_CreateString(cJSON_GetStringValue(
+                                     cJSON_GetObjectItemCaseSensitive(filter, "filter"))));
+  }
+  sendRequest("setExceptionBreakpoints", args, onSetExceptionBreakpoints, NULL);
+  return 1;
+}
+
+char *dapExceptionFilters(int *count) {
+  DapSession *saved = s;
+  cJSON *filter;
+  char *text = NULL;
+  char *joined;
+  const char *id;
+  const char *label;
+  *count = 0;
+  s = currentSession();
+  cJSON_ArrayForEach(filter, exceptionFilters()) {
+    id = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(filter, "filter"));
+    label = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(filter, "label"));
+    if (!id)
+      continue;
+    joined = utilFormat("%s%s%s%s (%s)", text ? text : "", text ? ", " : "", filterOn(filter) ? "*" : "",
+                        id, label ? label : id);
+    gfree(text);
+    text = joined;
+    (*count)++;
+  }
+  s = saved;
+  return text;
+}
+
+char *dapExceptionChoice(void) {
+  DapSession *saved = s;
+  cJSON *filter;
+  char *text = NULL;
+  char *joined;
+  if (s_exception_choice)
+    return utilStrdup(s_exception_choice);
+  s = currentSession();
+  cJSON_ArrayForEach(filter, exceptionFilters()) {
+    if (!filterOn(filter))
+      continue;
+    joined = utilFormat("%s%s%s", text ? text : "", text ? " " : "",
+                        cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(filter, "filter")));
+    gfree(text);
+    text = joined;
+  }
+  s = saved;
+  return text ? text : utilStrdup("");
+}
+
+void dapSetExceptionFilters(const char *ids) {
+  DapSession *saved = s;
+  int i;
+  gfree(s_exception_choice);
+  s_exception_choice = ids ? utilStrdup(ids) : NULL;
+  for (i = 0; i < DAP_MAX_SESSIONS; i++) {
+    s = &s_sessions[i];
+    if (connected() && s->configured)
+      sendExceptionBreakpoints();
+  }
+  s = saved;
 }
 
 /***********************************************************************************************************************
@@ -908,6 +1034,8 @@ static void onInitialize(cJSON *response, void *ctx) {
     editorSetStatusMessage("The debug adapter refused to start: %s", responseMessage(response));
     return;
   }
+  cJSON_Delete(s->capabilities);
+  s->capabilities = cJSON_Duplicate(cJSON_GetObjectItemCaseSensitive(response, "body"), 1);
   s->launch_at = os_monotonic_ms() + LAUNCH_WAIT_MS;
 }
 
@@ -1199,7 +1327,7 @@ static void onEvent(const char *event, cJSON *body) {
     // they're all answered, lets the program run. (gdb answers it with an
     // error, "notStopped", and runs the program anyway.)
     s->configured = 1;
-    s->config_waiting = sendAllBreakpoints();
+    s->config_waiting = sendAllBreakpoints() + sendExceptionBreakpoints();
     if (s->config_waiting == 0)
       configurationDone();
   } else if (!strcmp(event, "stopped")) {
@@ -1665,4 +1793,6 @@ void dapFree(void) {
     gfree(s_adapters[i].launch_defaults);
   }
   s_adapter_count = 0;
+  gfree(s_exception_choice);
+  s_exception_choice = NULL;
 }

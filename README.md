@@ -215,6 +215,7 @@ is media keys, and F11 is Show Desktop); bind them in personal-config if you lik
 | Ctrl-x B b   | toggle a breakpoint on the cursor's line (Ctrl-x B k: with a condition) |
 | Ctrl-x B h   | stop there only from a given hit on (`3`; gdb also takes `> 5`, `% 2`) |
 | Ctrl-x B L   | a logpoint: log `i is {i}` there instead of stopping     |
+| Ctrl-x B E   | which exceptions stop the program (the adapter's filters: debugpy's `raised`, gdb's `throw`) |
 | Ctrl-x B c   | start (asks for the program and its arguments), or continue |
 | Ctrl-x B n / i | next line / step into                                  |
 | Ctrl-x B u   | step out                                                 |

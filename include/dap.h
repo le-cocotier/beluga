@@ -78,6 +78,17 @@ void dapPause(void);
 // adapter's console (for gdb, a gdb command such as "info registers");
 // otherwise as an expression. The result goes to the output.
 void dapEvaluate(const char *expression, int repl);
+// Exception breakpoints: which exceptions stop the program, by the
+// adapter's filter ids (debugpy: "raised", "uncaught"; gdb: "throw",
+// "catch"). `ids` is a space-separated list ("" for none, NULL for each
+// adapter's defaults), sent to every session and to the next ones.
+void dapSetExceptionFilters(const char *ids);
+// The filters the current project's adapter offers, as "id (label), ..."
+// with a "*" before the ones on; NULL (and *count 0) without a session.
+// galloc'd.
+char *dapExceptionFilters(int *count);
+// The ids on now, space-separated, galloc'd.
+char *dapExceptionChoice(void);
 // Selects frame `index` of the call stack: its source is shown and its
 // variables listed.
 void dapSelectFrame(int index);

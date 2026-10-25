@@ -245,6 +245,75 @@ Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx) {
   return result;
 }
 
+/**
+ * @brief Lisp function: which exceptions stop the program
+ * @details (debug-exception-breakpoints) asks, listing the filters the
+ * adapter offers (start a session first to see them); (debug-exception-
+ * breakpoints "raised" "uncaught") sets them, by the adapter's ids
+ * (debugpy: raised, uncaught, userUnhandled; gdb: throw, catch, rethrow;
+ * lldb-dap: cpp_throw, cpp_catch). (debug-exception-breakpoints #f) stops
+ * on none, (debug-exception-breakpoints #t) goes back to the adapter's
+ * defaults. Every session gets them, running or to come.
+ * @return the filters on, space-separated
+ */
+Lisp l_debugExceptionBreakpoints(Lisp args, LispError *e, LispContext ctx) {
+  char *ids = NULL;
+  char *joined;
+  char *offered;
+  char *prompt;
+  char *p;
+  Utf8Char *placeholder;
+  Utf8Char *input;
+  Lisp it;
+  int count;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_BOOL) {
+    dapSetExceptionFilters(lisp_is_true(lisp_car(args)) ? NULL : "");
+  } else if (lisp_is_pair(args)) {
+    for (it = args; lisp_is_pair(it); it = lisp_cdr(it)) {
+      if (lisp_type(lisp_car(it)) != LISP_STRING) {
+        gfree(ids);
+        *e = LISP_ERROR_ARG_TYPE;
+        return lisp_null();
+      }
+      joined = utilFormat("%s%s%s", ids ? ids : "", ids ? " " : "", lisp_string(lisp_car(it)));
+      gfree(ids);
+      ids = joined;
+    }
+    dapSetExceptionFilters(ids);
+    gfree(ids);
+  } else {
+    offered = dapExceptionFilters(&count);
+    prompt = offered ? utilFormat("Stop on exceptions [%s]: %%u", offered)
+                     : utilStrdup("Stop on exceptions (the adapter's filter ids; start a "
+                                  "session to see them): %u");
+    gfree(offered);
+    if (!prompt)
+      return lisp_null();
+    // A label's own "%" isn't a format.
+    for (p = strchr(prompt, '%'); p && p[1] != 'u'; p = strchr(p + 1, '%'))
+      *p = ' ';
+    ids = dapExceptionChoice();
+    placeholder = ids ? stringToUtf8((unsigned char *)ids) : NULL;
+    gfree(ids);
+    input = editorPromptEx(prompt, placeholder, 0, 1);
+    gfree(placeholder);
+    gfree(prompt);
+    if (!input)
+      return lisp_null();
+    ids = (char *)utf8ToString(input);
+    gfree(input);
+    dapSetExceptionFilters(ids ? ids : "");
+    gfree(ids);
+  }
+  ids = dapExceptionChoice();
+  editorSetStatusMessage(ids && *ids ? "Exceptions that stop the program: %s"
+                                     : "No exception stops the program%s",
+                         ids ? (*ids ? ids : "") : "");
+  it = lisp_make_string2(ids ? ids : "", ctx);
+  gfree(ids);
+  return it;
+}
+
 // ─── Adapters and the session ───────────────────────────────────────────────
 
 static int isAlist(Lisp l);

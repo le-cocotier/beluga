@@ -402,6 +402,7 @@
 (map-key "k" debug-breakpoint-condition "debug") ; stop only when an expression is true
 (map-key "h" debug-breakpoint-hit-count "debug") ; stop only from the Nth hit on
 (map-key "L" debug-logpoint "debug")             ; log a message there instead of stopping
+(map-key "E" debug-exception-breakpoints "debug") ; which exceptions stop the program
 (map-key "l" debug-breakpoints "debug")          ; listed in *search*, ENTER jumps
 (map-key "x" debug-clear-breakpoints "debug")
 (map-key "e" debug-evaluate "debug")            ; an expression, in the selected frame
