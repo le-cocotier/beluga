@@ -67,6 +67,10 @@ int dapRegisterAdapter(const char *ext, const char *const *argv, const char *lau
 // ("program", "args", "cwd", ...; "cwd" defaults to the project root).
 // @return 0, or -1 (with a status message) if it couldn't start.
 int dapStart(const char *ext, const char *launch_json);
+// The same for a program already running: `attach_json` is the adapter's
+// attach arguments ("pid" for gdb and lldb-dap, "processId" for debugpy).
+// Stopping the session detaches, leaving the program running.
+int dapAttach(const char *ext, const char *attach_json);
 // Ends the session: terminates the program and the adapter.
 void dapStop(void);
 void dapContinue(void);

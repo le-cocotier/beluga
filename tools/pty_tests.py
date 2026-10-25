@@ -321,6 +321,61 @@ def debugger_gdb(binary, repo):
     debug_session(binary, repo, '(dap-adapter "c" "gdb" "-q" "-i" "dap")')
 
 
+ATTACHEE = """#include <stdio.h>
+#include <unistd.h>
+static volatile int ticks;
+static void tick(void) {
+  ticks++;
+}
+int main(void) {
+  printf("ready\\n");
+  fflush(stdout);
+  for (;;) {
+    tick();
+    usleep(50000);
+  }
+}
+"""
+
+
+def debugger_attach(binary, repo):
+    """CTRL-x B a lists the running processes; picking one attaches gdb to
+    it, its breakpoints work, and stopping detaches, the program going on."""
+    if sys.platform == 'darwin':
+        raise Skip('gdb on macOS needs code signing to run programs')
+    if not gdb_with_dap():
+        raise Skip('needs gdb 14 or later and cc')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        with open(ed.path('t.c'), 'w') as f:
+            f.write(ATTACHEE)
+        subprocess.run(['cc', '-g', '-O0', '-o', ed.path('t'), ed.path('t.c')],
+                       check=True)
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "c" "gdb" "-q" "-i" "dap")\n')
+        program = subprocess.Popen([ed.path('t')], stdout=subprocess.PIPE)
+        try:
+            assert program.stdout.readline() == b'ready\n'
+            ed.start('t.c')
+            ed.wait_for('ticks++')
+            ed.keys(*([DOWN] * 4), *DEBUG, 'b')
+            ed.wait_for('Added breakpoint at line 5')
+            ed.keys(*DEBUG, 'a', delay=0.5)
+            ed.wait_for('Attach to')
+            ed.keys(*str(program.pid), delay=0.05)
+            ed.wait_for(ed.path('t'))
+            ed.keys('\r', delay=0.3)
+            ed.wait_for('stopped (breakpoint)', 30)
+            assert re.match(r'\s*5 ▶', ed.text()[4]), ed.text()[4]
+            ed.keys(*DEBUG, 'q', delay=0.5)
+            ed.wait_for('Detached from the program', 20)
+            ed.pump(0.5)
+            assert program.poll() is None, 'the program ended with the session'
+            ed.quit()
+        finally:
+            program.kill()
+            program.wait()
+
+
 def debugger_lldb(binary, repo):
     """The session against lldb-dap, as packages/c sets it up on macOS."""
     if sys.platform != 'darwin' or not shutil.which('cc'):
@@ -725,6 +780,7 @@ def daemon_debug_per_project(binary, repo):
 TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
     ('debugger-gdb', debugger_gdb),
+    ('debugger-attach', debugger_attach),
     ('debugger-lldb', debugger_lldb),
     ('debugger-python-in-terminal', debugger_python_in_terminal),
     ('debugger-over-tcp', debugger_over_tcp),

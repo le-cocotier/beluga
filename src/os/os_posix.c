@@ -39,6 +39,8 @@
 #include <time.h>
 #include <unistd.h>
 #ifdef __APPLE__
+#include <libproc.h>     // proc_pidpath
+#include <sys/sysctl.h>  // KERN_PROC_UID
 #include <mach-o/dyld.h> // _NSGetExecutablePath
 #include <malloc/malloc.h> // malloc_zone_statistics
 #include <util.h> // forkpty
@@ -126,6 +128,109 @@ char *os_exe_path(void) {
   return gstrdup(path);
 #endif
 }
+
+static int compareProcesses(const void *a, const void *b) {
+  const long x = ((const OsProcessInfo *)a)->pid;
+  const long y = ((const OsProcessInfo *)b)->pid;
+  return x < y ? -1 : x > y;
+}
+
+#ifdef __APPLE__
+OsProcessInfo *os_process_list(int *count) {
+  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, (int)geteuid()};
+  struct kinfo_proc *procs = NULL;
+  OsProcessInfo *out;
+  char path[PROC_PIDPATHINFO_MAXSIZE];
+  size_t size = 0;
+  int n;
+  int i;
+  *count = 0;
+  // The list can grow between asking its size and reading it: room to spare.
+  if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0)
+    return NULL;
+  size += size / 4 + sizeof(struct kinfo_proc) * 16;
+  procs = galloc(size);
+  if (!procs)
+    return NULL;
+  if (sysctl(mib, 4, procs, &size, NULL, 0) != 0) {
+    gfree(procs);
+    return NULL;
+  }
+  n = (int)(size / sizeof(struct kinfo_proc));
+  out = gcalloc(n > 0 ? (size_t)n : 1, sizeof(OsProcessInfo));
+  if (!out) {
+    gfree(procs);
+    return NULL;
+  }
+  for (i = 0; i < n; i++) {
+    if (procs[i].kp_proc.p_pid == getpid() || procs[i].kp_proc.p_pid <= 0)
+      continue;
+    out[*count].pid = procs[i].kp_proc.p_pid;
+    if (proc_pidpath(procs[i].kp_proc.p_pid, path, sizeof(path)) > 0)
+      snprintf(out[*count].command, sizeof(out[*count].command), "%s", path);
+    else
+      snprintf(out[*count].command, sizeof(out[*count].command), "%s", procs[i].kp_proc.p_comm);
+    (*count)++;
+  }
+  gfree(procs);
+  qsort(out, (size_t)*count, sizeof(OsProcessInfo), compareProcesses);
+  return out;
+}
+#else
+OsProcessInfo *os_process_list(int *count) {
+  DIR *dir = opendir("/proc");
+  struct dirent *entry;
+  struct stat st;
+  OsProcessInfo *out = NULL;
+  OsProcessInfo *grown;
+  char path[64];
+  char *end;
+  FILE *f;
+  size_t n;
+  size_t i;
+  long pid;
+  int cap = 0;
+  *count = 0;
+  if (!dir)
+    return NULL;
+  while ((entry = readdir(dir)) != NULL) {
+    pid = strtol(entry->d_name, &end, 10);
+    if (*end || pid <= 0 || pid == (long)getpid())
+      continue;
+    snprintf(path, sizeof(path), "/proc/%ld", pid);
+    if (stat(path, &st) != 0 || st.st_uid != geteuid())
+      continue;
+    if (*count == cap) {
+      grown = grealloc(out, sizeof(OsProcessInfo) * (size_t)(cap ? cap * 2 : 128));
+      if (!grown)
+        break;
+      out = grown;
+      cap = cap ? cap * 2 : 128;
+    }
+    out[*count].pid = pid;
+    out[*count].command[0] = '\0';
+    // The arguments, NUL-separated; empty for a kernel thread.
+    snprintf(path, sizeof(path), "/proc/%ld/cmdline", pid);
+    f = fopen(path, "r");
+    n = f ? fread(out[*count].command, 1, sizeof(out[*count].command) - 1, f) : 0;
+    if (f)
+      fclose(f);
+    while (n > 0 && out[*count].command[n - 1] == '\0')
+      n--;
+    for (i = 0; i < n; i++)
+      if (out[*count].command[i] == '\0')
+        out[*count].command[i] = ' ';
+    out[*count].command[n] = '\0';
+    if (n == 0)
+      continue;
+    (*count)++;
+  }
+  closedir(dir);
+  if (out)
+    qsort(out, (size_t)*count, sizeof(OsProcessInfo), compareProcesses);
+  return out;
+}
+#endif
 
 int os_spawn_detached(const char *const *argv, const char *log_file, char *err,
                       const size_t err_size) {

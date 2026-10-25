@@ -21,6 +21,7 @@ Lisp l_debugExceptionBreakpoints(Lisp args, LispError *e, LispContext ctx);
 Lisp l_debugWatch(Lisp args, LispError *e, LispContext ctx);
 Lisp l_debugUnwatch(Lisp args, LispError *e, LispContext ctx);
 Lisp l_debugWatches(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugAttach(Lisp args, LispError *e, LispContext ctx);
 Lisp l_debugClearBreakpoints(Lisp args, LispError *e, LispContext ctx);
 Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx);
 Lisp l_dapAdapter(Lisp args, LispError *e, LispContext ctx);

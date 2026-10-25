@@ -113,7 +113,8 @@ typedef struct
     // The project it debugs (or the working directory): only breakpoints
     // in files under it are sent, not every project's kept ones.
     char *root;
-    cJSON *launch;         // launch arguments, until launch is sent
+    cJSON *launch;         // launch (or attach) arguments, until the request is sent
+    int attach;            // attached to a running process: stopping detaches
     long long launch_at;   // when launch goes anyway (ms), 0 before initialize
     int configured;        // breakpoints sent: changes go out as they happen
     // setBreakpoints still unanswered before configurationDone may go:
@@ -539,14 +540,15 @@ static void stopSession(const int run_hook) {
   cJSON *args;
   if (s->state == DAP_OFF)
     return;
+  // A program it attached to goes on running on its own.
   args = cJSON_CreateObject();
-  cJSON_AddBoolToObject(args, "terminateDebuggee", 1);
+  cJSON_AddBoolToObject(args, "terminateDebuggee", !s->attach);
   sendRequest("disconnect", args, NULL, NULL);
   // Give it a moment to end the program and exit on its own;
   // os_proc_free() kills whatever is left.
   if (s->proc)
     os_proc_wait(s->proc, 1000, NULL);
-  endSession("Debug session ended", run_hook);
+  endSession(s->attach ? "Detached from the program" : "Debug session ended", run_hook);
 }
 
 void dapStop(void) {
@@ -568,7 +570,7 @@ static void sendLaunch(void) {
   cJSON *launch = s->launch;
   s->launch = NULL;
   if (launch)
-    sendRequest("launch", launch, onLaunch, NULL);
+    sendRequest(s->attach ? "attach" : "launch", launch, onLaunch, NULL);
 }
 
 static void onConfigurationDone(cJSON *response, void *ctx) {
@@ -1146,11 +1148,13 @@ static void onStackTrace(cJSON *response, void *ctx) {
 static void onLaunch(cJSON *response, void *ctx) {
   (void)ctx;
   if (!responseOk(response)) {
-    outputAppend("Launch failed: ");
+    outputAppend(s->attach ? "Attach failed: " : "Launch failed: ");
     outputAppend(responseMessage(response));
     outputAppend("\n");
     endSession(NULL, 1);
-    editorSetStatusMessage("Couldn't launch the program: %s", responseMessage(response));
+    editorSetStatusMessage(s->attach ? "Couldn't attach to the program: %s"
+                                     : "Couldn't launch the program: %s",
+                           responseMessage(response));
   }
 }
 
@@ -1435,6 +1439,16 @@ static void onStopped(cJSON *body) {
   // "signal SIGSTOP".
   if (reason && !strcmp(reason, "exception") && description && *description)
     reason = description;
+  // gdb stops the program it attaches to, and only reads its symbols then:
+  // the breakpoints sent before came back pending ("No source file").
+  // Send them again and let it go on, as it was before the attach.
+  if (s->attach && reason && !strcmp(reason, "attach")) {
+    sendAllBreakpoints();
+    sendRequest("continue", threadArguments(), NULL, NULL);
+    s->state = DAP_RUNNING;
+    debugUiRefresh();
+    return;
+  }
   snprintf(s->stop_reason, sizeof(s->stop_reason), "%s", reason ? reason : "paused");
   s->state = DAP_STOPPED;
   outputFlushPartial();
@@ -1790,18 +1804,27 @@ static int substitutePort(const char **argv, char storage[][256]) {
   return 0;
 }
 
-static int startSession(const char *ext, const char *launch_json);
+static int startSession(const char *ext, const char *launch_json, int attach);
 
 int dapStart(const char *ext, const char *launch_json) {
   DapSession *saved = s;
   int rc;
   s = currentSession();
-  rc = startSession(ext, launch_json);
+  rc = startSession(ext, launch_json, 0);
   s = saved;
   return rc;
 }
 
-static int startSession(const char *ext, const char *launch_json) {
+int dapAttach(const char *ext, const char *attach_json) {
+  DapSession *saved = s;
+  int rc;
+  s = currentSession();
+  rc = startSession(ext, attach_json, 1);
+  s = saved;
+  return rc;
+}
+
+static int startSession(const char *ext, const char *launch_json, const int attach) {
   const DapAdapter *adapter;
   cJSON *launch;
   OsSpawn spawn;
@@ -1828,9 +1851,10 @@ static int startSession(const char *ext, const char *launch_json) {
     return -1;
   }
   root = projectRootOrCwd();
-  if (root && !cJSON_GetObjectItemCaseSensitive(launch, "cwd"))
+  if (root && !attach && !cJSON_GetObjectItemCaseSensitive(launch, "cwd"))
     cJSON_AddStringToObject(launch, "cwd", root);
-  addLaunchDefaults(launch, adapter);
+  if (!attach)
+    addLaunchDefaults(launch, adapter);
 
   // stdin/stdout carry the protocol; the adapter's stderr goes where the
   // language servers' does (discarded, or the debug log). One that
@@ -1877,6 +1901,7 @@ static int startSession(const char *ext, const char *launch_json) {
   s->disconnected = 0;
   s->stop_reason[0] = '\0';
   s->launch = launch;
+  s->attach = attach;
   s->root = root;
   snprintf(s->last_root, sizeof(s->last_root), "%s", root ? root : "");
   s->owner = s_window_current ? s_window_current() : 0;

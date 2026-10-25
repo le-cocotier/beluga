@@ -401,6 +401,7 @@
 (map-key "q" debug-stop "debug")
 (map-key "p" debug-pause "debug")
 (map-key "s" debug-start "debug")
+(map-key "a" debug-attach "debug")              ; a running program, picked from a list
 (map-key "b" debug-toggle-breakpoint "debug")
 (map-key "k" debug-breakpoint-condition "debug") ; stop only when an expression is true
 (map-key "h" debug-breakpoint-hit-count "debug") ; stop only from the Nth hit on

@@ -62,8 +62,6 @@ left after the first step:
 The Debug Adapter Protocol client (src/dap.c, src/debug_ui.c,
 src/breakpoints.c). What's left after the first step:
 
-- [ ] **[feature]** Attach to a running process (`attach` with a pid
-  picked from a list).
 - [ ] **[debt]** Not tried yet with lldb-dap on Windows. gdb 15 on Linux,
   lldb-dap on macOS and debugpy (`runInTerminal` included) are covered by
   `tools/pty_tests.py`.

@@ -217,6 +217,7 @@ is media keys, and F11 is Show Desktop); bind them in personal-config if you lik
 | Ctrl-x B L   | a logpoint: log `i is {i}` there instead of stopping     |
 | Ctrl-x B E   | which exceptions stop the program (the adapter's filters: debugpy's `raised`, gdb's `throw`) |
 | Ctrl-x B c   | start (asks for the program and its arguments), or continue |
+| Ctrl-x B a   | attach to a running program, picked from your processes (Ctrl-x B q detaches) |
 | Ctrl-x B n / i | next line / step into                                  |
 | Ctrl-x B u   | step out                                                 |
 | Ctrl-x B p   | pause                                                    |

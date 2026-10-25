@@ -39,6 +39,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <sddl.h>
+#include <tlhelp32.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -199,6 +200,58 @@ char *os_exe_path(void)
     utf8 = toUtf8(path);
     backslashesToSlashes(utf8);
     return utf8;
+}
+
+static int compareProcesses(const void *a, const void *b)
+{
+    const long x = ((const OsProcessInfo *) a)->pid;
+    const long y = ((const OsProcessInfo *) b)->pid;
+    return x < y ? -1 : x > y;
+}
+
+OsProcessInfo *os_process_list(int *count)
+{
+    HANDLE snap;
+    PROCESSENTRY32W entry;
+    OsProcessInfo *out = NULL;
+    OsProcessInfo *grown;
+    DWORD session;
+    DWORD own_session = 0;
+    char *name;
+    int cap = 0;
+    *count = 0;
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return NULL;
+    // The user's own processes: those of this logon session.
+    ProcessIdToSessionId(GetCurrentProcessId(), &own_session);
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snap, &entry))
+    {
+        do
+        {
+            if (entry.th32ProcessID == 0 || entry.th32ProcessID == GetCurrentProcessId() ||
+                !ProcessIdToSessionId(entry.th32ProcessID, &session) || session != own_session)
+                continue;
+            if (*count == cap)
+            {
+                grown = grealloc(out, sizeof(OsProcessInfo) * (size_t) (cap ? cap * 2 : 128));
+                if (!grown)
+                    break;
+                out = grown;
+                cap = cap ? cap * 2 : 128;
+            }
+            name = toUtf8(entry.szExeFile);
+            out[*count].pid = (long) entry.th32ProcessID;
+            snprintf(out[*count].command, sizeof(out[*count].command), "%s", name ? name : "?");
+            gfree(name);
+            (*count)++;
+        } while (Process32NextW(snap, &entry));
+    }
+    CloseHandle(snap);
+    if (out)
+        qsort(out, (size_t) *count, sizeof(OsProcessInfo), compareProcesses);
+    return out;
 }
 
 /***********************************************************************************************************************

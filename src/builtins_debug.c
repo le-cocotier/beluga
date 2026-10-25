@@ -14,6 +14,7 @@
 #include "../include/editor_op.h"
 #include "../include/galloc.h"
 #include "../include/input.h"
+#include "../include/list_popup.h"
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/utf8.h"
@@ -562,6 +563,89 @@ Lisp l_debugStart(Lisp args, LispError *e, LispContext ctx) {
   gfree(json);
   gfree(ext);
   return lisp_make_bool(ok);
+}
+
+// Attaches to `pid`, with the adapter for the active buffer's file.
+static int attachToPid(const long pid) {
+  cJSON *args = cJSON_CreateObject();
+  char *json;
+  int ok;
+  // gdb and lldb-dap read "pid", debugpy "processId"; each ignores the other.
+  cJSON_AddNumberToObject(args, "pid", (double)pid);
+  cJSON_AddNumberToObject(args, "processId", (double)pid);
+  json = cJSON_PrintUnformatted(args);
+  cJSON_Delete(args);
+  ok = json && dapAttach(NULL, json) == 0;
+  gfree(json);
+  return ok;
+}
+
+// The process picked in (debug-attach)'s list.
+static Lisp attachSelected(Lisp args, LispError *e, LispContext ctx) {
+  (void)e;
+  (void)ctx;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT)
+    attachToPid((long)lisp_int(lisp_car(args)));
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function: debug a program that is already running
+ * @details (debug-attach) lists your processes to pick one from (typing
+ * narrows the list); (debug-attach pid) attaches to that one;
+ * (debug-attach alist) hands the adapter its own attach arguments, with an
+ * "adapter" entry to pick it as in debug-start. The adapter is the active
+ * buffer's file type's. Stopping the session (CTRL-x B q) detaches and
+ * leaves the program running. On Linux gdb may need
+ * /proc/sys/kernel/yama/ptrace_scope at 0 to attach to a process it didn't
+ * start.
+ * @return #t if the session started (for the list: once it's open)
+ */
+Lisp l_debugAttach(Lisp args, LispError *e, LispContext ctx) {
+  OsProcessInfo *procs;
+  char label[320];
+  Lisp items = lisp_null();
+  cJSON *attach;
+  cJSON *adapter;
+  char *ext = NULL;
+  char *json;
+  int count;
+  int ok;
+  int i;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT)
+    return lisp_make_bool(attachToPid((long)lisp_int(lisp_car(args))));
+  if (lisp_is_pair(args)) {
+    if (!isAlist(lisp_car(args))) {
+      *e = LISP_ERROR_ARG_TYPE;
+      return lisp_null();
+    }
+    attach = lispToJson(lisp_car(args));
+    adapter = cJSON_DetachItemFromObjectCaseSensitive(attach, "adapter");
+    if (cJSON_IsString(adapter))
+      ext = utilStrdup(adapter->valuestring);
+    cJSON_Delete(adapter);
+    json = cJSON_PrintUnformatted(attach);
+    cJSON_Delete(attach);
+    ok = json && dapAttach(ext, json) == 0;
+    gfree(json);
+    gfree(ext);
+    return lisp_make_bool(ok);
+  }
+  procs = os_process_list(&count);
+  if (!procs || count == 0) {
+    gfree(procs);
+    editorSetStatusMessage("Couldn't list the processes");
+    return lisp_false();
+  }
+  // Newest (highest pid) first: usually the one just started.
+  for (i = 0; i < count; i++) {
+    snprintf(label, sizeof(label), "%7ld  %s", procs[i].pid, procs[i].command);
+    items = lisp_cons(lisp_cons(lisp_make_string2(label, ctx), lisp_make_int(procs[i].pid), ctx),
+                      items, ctx);
+  }
+  gfree(procs);
+  listPopupOpen("Attach to", items, lisp_make_func(attachSelected), lisp_null(), 1);
+  return lisp_true();
 }
 
 /**

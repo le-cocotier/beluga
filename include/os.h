@@ -73,6 +73,17 @@ int os_take_stop_signal(void);
 // The running program's own path (galloc'd), or NULL where it can't be told.
 char *os_exe_path(void);
 
+// A process of the current user's, for picking one to attach a debugger to.
+typedef struct
+{
+    long pid;
+    char command[256]; // its command line (cut), or its program's name
+} OsProcessInfo;
+
+// The current user's processes but this one, by pid: a galloc'd array of
+// *count entries, NULL (and *count 0) when they can't be listed.
+OsProcessInfo *os_process_list(int *count);
+
 /**
  * @brief Starts `argv` (argv[0] a path) as a background process of its own,
  * detached from the terminal: a new session on Unix, no console on
