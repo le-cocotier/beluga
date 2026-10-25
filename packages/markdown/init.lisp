@@ -1,7 +1,7 @@
 ;; ─── Markdown ───────────────────────────────────────────────────────────────
 ;; (add-package "markdown") — highlighting, marksman as the language server,
-;; a heading outline on CTRL-o and list continuation on ENTER, for .md and
-;; .markdown files.
+;; a heading outline on CTRL-o, list continuation on ENTER and CTRL-b /
+;; CTRL-x i to toggle bold/italic, for .md and .markdown files.
 ;;
 ;; marksman is optional: without it you still get everything below except
 ;; what the server adds (completion of links and headings, go to definition
@@ -22,6 +22,9 @@
 ;;     cache, so a fence opened above the top of the pane is still drawn as
 ;;     code after a scroll, and a "# comment" inside one isn't a heading.
 ;;     ~~~ fences aren't recognized (one delimiter pair per language).
+;;   - **bold** and *italic* (also __ and _) are drawn bold and italic, via
+;;     syntax-add-span: one row at a time, so emphasis can't span a line
+;;     break, and snake_case or "a * b" are left alone.
 ;;   - `inline code` is the only quote character, so it's drawn as a string.
 ;;     Not ' or ", which are just apostrophes and quotation marks in prose.
 ;;   - Whole-line rules for headings, quotes, rules and setext underlines.
@@ -30,6 +33,12 @@
 
 (define (markdown--register-syntax ext)
   (syntax-define-language ext "" "```" "```" "`")
+  ;; Emphasis is drawn as real bold and italic text, the markers dimmed.
+  ;; Longer markers first: "**" has to get the chance before "*" does.
+  (syntax-add-span ext "**" "**" "bold")
+  (syntax-add-span ext "__" "__" "bold")
+  (syntax-add-span ext "*" "*" "italic")
+  (syntax-add-span ext "_" "_" "italic")
   (syntax-add-line-prefix ext "#" "keyword")
   (syntax-add-line-prefix ext "===" "keyword")
   (syntax-add-line-prefix ext ">" "comment")
@@ -193,3 +202,84 @@
                        #t)))
 
 (map-key "CTRL-o" markdown-outline "no-prefix" markdown--extensions)
+;; ─── Bold / italic ──────────────────────────────────────────────────────────
+;; CTRL-b toggles **bold** and CTRL-x i *italic* on the selection, or with no
+;; selection on the word under the cursor: wrapped if it isn't, unwrapped if
+;; it is. Outside any word, it inserts the pair of markers with the cursor
+;; between them, ready to type. (Not ALT-b/ALT-i: the terminal input only
+;; knows ALT-x, and ESC b already means ALT-ARROW-LEFT. Inside tmux, whose
+;; prefix is CTRL-b, rebind markdown-toggle-bold to something else.)
+;;
+;; Positions go through (buffer-text ...) one column at a time rather than
+;; string-ref on (line-text): columns count characters, and a line with an
+;; accented letter before the cursor would otherwise be off by its bytes.
+
+(define (markdown--char row col)
+  (buffer-text row col row (+ col 1)))
+
+(define (markdown--word-char? row col)
+  (let ((c (markdown--char row col)))
+    (and (not (string=? c "")) (not (markdown--space? (string-ref c 0))))))
+
+(define (markdown--word-start row col)
+  (if (and (> col 0) (markdown--word-char? row (- col 1)))
+      (markdown--word-start row (- col 1))
+      col))
+
+(define (markdown--word-end row col)
+  (if (markdown--word-char? row col)
+      (markdown--word-end row (+ col 1))
+      col))
+
+;; Whether `text` is `marker` + something + `marker`.
+(define (markdown--wrapped? text marker)
+  (let ((t-len (string-length text)) (m-len (string-length marker)))
+    (and (> t-len (* 2 m-len))
+         (string=? (substring text 0 m-len) marker)
+         (string=? (substring text (- t-len m-len) t-len) marker))))
+
+(define (markdown--unwrap text marker)
+  (substring text (string-length marker) (- (string-length text) (string-length marker))))
+
+;; *italic* is what's wrapped in one "*", so a **bold** word isn't italic
+;; (toggling italic on it makes it ***both***) but a ***both*** one is.
+(define (markdown--has? text marker)
+  (if (string=? marker "*")
+      (and (markdown--wrapped? text "*")
+           (or (not (markdown--wrapped? text "**")) (markdown--wrapped? text "***")))
+      (markdown--wrapped? text marker)))
+
+;; Wraps or unwraps row1:col1..row2:col2, returning the change in length
+;; on the first row (+/- the marker's length) for the cursor to follow.
+(define (markdown--toggle-range r1 c1 r2 c2 marker)
+  (let ((text (buffer-text r1 c1 r2 c2)))
+    (if (markdown--has? text marker)
+        (begin
+          (buffer-replace-range r1 c1 r2 c2 (markdown--unwrap text marker))
+          (- 0 (string-length marker)))
+        (begin
+          (buffer-replace-range r1 c1 r2 c2 (string-append marker text marker))
+          (string-length marker)))))
+
+(define (markdown--toggle marker)
+  (let ((region (region-bounds)))
+    (if region
+        (markdown--toggle-range (car region) (car (cdr region))
+                                (car (cdr (cdr region))) (car (cdr (cdr (cdr region))))
+                                marker)
+        (let* ((row (cursor-row))
+               (col (cursor-col))
+               (start (markdown--word-start row col))
+               (end (markdown--word-end row col)))
+          (if (= start end)
+              (begin
+                (buffer-insert-string (string-append marker marker))
+                (set-cursor row (+ col (string-length marker))))
+              (let ((delta (markdown--toggle-range row start row end marker)))
+                (set-cursor row (if (< (+ col delta) start) start (+ col delta)))))))))
+
+(define (markdown-toggle-bold) (markdown--toggle "**"))
+(define (markdown-toggle-italic) (markdown--toggle "*"))
+
+(map-key "CTRL-b" markdown-toggle-bold "no-prefix" markdown--extensions)
+(map-key "i" markdown-toggle-italic "user" markdown--extensions)

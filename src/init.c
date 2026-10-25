@@ -181,6 +181,7 @@ void initBuiltins(void) {
   registerBuiltin("syntax-add-type", l_syntaxAddType);
   registerBuiltin("syntax-add-comment-word", l_syntaxAddCommentWord);
   registerBuiltin("syntax-add-line-prefix", l_syntaxAddLinePrefix);
+  registerBuiltin("syntax-add-span", l_syntaxAddSpan);
   registerBuiltin("buffer-set-syntax", l_bufferSetSyntax);
   registerBuiltin("write-file", l_writeFile);
   registerBuiltin("app-debug?", l_appDebugP);

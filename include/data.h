@@ -283,6 +283,18 @@ typedef struct
         int role; // a TokenType (syntax_highlighter.h)
     } line_prefixes[12];
     int num_line_prefixes;
+
+    // Inline spans, tried in order where a token can start: `open`, then
+    // text on the same row up to `close`, drawn in `role` (the markers in
+    // the comment color). Markdown-style flanking: no word character just
+    // before `open` or after `close`, no blank just inside either. How
+    // Markdown gets **bold** and *italic* (syntax-add-span).
+    struct syntax_span_t {
+        char open[8];
+        char close[8];
+        int role; // a TokenType
+    } spans[8];
+    int num_spans;
 } LanguageSyntax;
 
 struct lsp_client_t

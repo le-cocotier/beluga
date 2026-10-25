@@ -16,7 +16,11 @@ typedef enum {
   TOKEN_OPERATOR,
   TOKEN_DEFAULT,
   TOKEN_ADDED,
-  TOKEN_REMOVED
+  TOKEN_REMOVED,
+  // Attributes rather than colors: the text keeps the default color and
+  // is drawn bold or italic. For syntax-add-span (Markdown's **x** and *x*).
+  TOKEN_BOLD,
+  TOKEN_ITALIC
 } TokenType;
 
 // Finds the LanguageSyntax registered for `filename`'s extension (see the
@@ -30,8 +34,8 @@ const LanguageSyntax *syntaxLanguageForExtension(const char *ext);
 // The buffer's language: its buffer-set-syntax override if any, else by
 // filename.
 const LanguageSyntax *syntaxLanguageForBuffer(const Buffer *buf);
-// "keyword", "type", "string", "comment", "number", "added", "removed"
-// -> TokenType, or -1.
+// "keyword", "type", "string", "comment", "number", "added", "removed",
+// "default", "bold", "italic" -> TokenType, or -1.
 int syntaxRoleFromName(const char *name);
 
 // Highlights one row according to `lang`'s rules, clipped to the pane's

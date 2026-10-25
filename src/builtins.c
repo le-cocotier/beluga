@@ -3395,6 +3395,47 @@ Lisp l_syntaxAddLinePrefix(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function: color text between two markers on a row
+ * @details (syntax-add-span "ext" "open" "close" "role") — in that
+ * language, text from "open" to the next "close" on the same row is drawn
+ * in "role", which besides the color roles of syntax-add-line-prefix can
+ * be "bold" or "italic"; the markers themselves get the comment color.
+ * Markdown-style flanking applies (no word character just outside a
+ * marker, no blank just inside), so "snake_case" or "a * b" don't match.
+ * Spans are tried in the order they were added: add "**" before "*". The
+ * language must already exist (syntax-define-language).
+ * @return #t, or #f if the language is unknown, the role is unknown, a
+ * marker is empty or too long (7 bytes) or the language already has 8
+ * spans
+ */
+Lisp l_syntaxAddSpan(Lisp args, LispError *e, LispContext ctx) {
+  const char *ext = lisp_string(lisp_car(args));
+  const char *open;
+  const char *close;
+  LanguageSyntax *lang;
+  int role;
+  (void)e;
+  (void)ctx;
+  args = lisp_cdr(args);
+  open = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  close = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  role = syntaxRoleFromName(lisp_string(lisp_car(args)));
+
+  lang = findLanguageByExtension(ext);
+  if (!lang || role < 0 || !*open || !*close ||
+      strlen(open) >= sizeof(lang->spans[0].open) || strlen(close) >= sizeof(lang->spans[0].close) ||
+      lang->num_spans >= (int)(sizeof(lang->spans) / sizeof(lang->spans[0])))
+    return lisp_false();
+  strcpy(lang->spans[lang->num_spans].open, open);
+  strcpy(lang->spans[lang->num_spans].close, close);
+  lang->spans[lang->num_spans].role = role;
+  lang->num_spans++;
+  return lisp_true();
+}
+
+/**
  * @brief Lisp function: highlight a buffer as a given language
  * @details (buffer-set-syntax buffer-id "ext") — the buffer is highlighted
  * with the rules registered for "ext" whatever its name; "" goes back to

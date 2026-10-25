@@ -114,6 +114,28 @@ static const char *get_color(const TokenType type)
     }
 }
 
+// Start and end of a role's drawing. bold/italic switch the attribute on
+// over the default color, and have to switch it off again: COLOR_RESET
+// only resets the foreground.
+static void emitRoleStart(char *result, int *pos, const int size, const TokenType type)
+{
+    if (type == TOKEN_BOLD)
+        *pos += snprintf(&result[*pos], size - *pos, "%s\x1b[1m", E.theme.COLOR_DEFAULT);
+    else if (type == TOKEN_ITALIC)
+        *pos += snprintf(&result[*pos], size - *pos, "%s\x1b[3m", E.theme.COLOR_DEFAULT);
+    else
+        *pos += snprintf(&result[*pos], size - *pos, "%s", get_color(type));
+}
+
+static void emitRoleEnd(char *result, int *pos, const int size, const TokenType type)
+{
+    if (type == TOKEN_BOLD)
+        *pos += snprintf(&result[*pos], size - *pos, "\x1b[22m");
+    else if (type == TOKEN_ITALIC)
+        *pos += snprintf(&result[*pos], size - *pos, "\x1b[23m");
+    *pos += snprintf(&result[*pos], size - *pos, "%s", COLOR_RESET);
+}
+
 const LanguageSyntax *syntaxLanguageForExtension(const char *ext)
 {
     int i;
@@ -148,6 +170,8 @@ int syntaxRoleFromName(const char *name)
     if (!strcmp(name, "added")) return TOKEN_ADDED;
     if (!strcmp(name, "removed")) return TOKEN_REMOVED;
     if (!strcmp(name, "default")) return TOKEN_DEFAULT;
+    if (!strcmp(name, "bold")) return TOKEN_BOLD;
+    if (!strcmp(name, "italic")) return TOKEN_ITALIC;
     return -1;
 }
 
@@ -234,6 +258,54 @@ static const CommentWord *commentWordAt(const Row *row, const int i, const Langu
         {
             *len = n;
             return &s_comment_words[k];
+        }
+    }
+    return NULL;
+}
+
+static int isBlank(const Utf8Char *c)
+{
+    return isAsciiChar(c, ' ') || isAsciiChar(c, '\t');
+}
+
+/**
+ * @brief The span of `lang` that starts at column `i`, if one does
+ * @details Spans are tried in registration order, so "**" has to come
+ * before "*". A span needs its close on the same row and at least one
+ * character inside, and follows Markdown's flanking rules closely enough
+ * for prose: "snake_case" and "2*3*4" aren't emphasis (a word character
+ * touches the outside of a marker) and neither is "a * b" (a blank
+ * touches the inside).
+ * @param open_len Out: the length of the opening marker
+ * @param close_at Out: the column the closing marker starts at
+ */
+static const struct syntax_span_t *spanAt(const Row *row, const int i, const LanguageSyntax *lang,
+                                           int *open_len, int *close_at)
+{
+    int k;
+    int o;
+    int c;
+    int j;
+    const Utf8Char *chars = row->characters;
+    for (k = 0; k < lang->num_spans; k++)
+    {
+        o = rowMatchesAt(row, i, lang->spans[k].open);
+        if (!o)
+            continue;
+        if (i > 0 && is_word_char(&chars[i - 1]))
+            continue;
+        if (i + o >= row->size || isBlank(&chars[i + o]))
+            continue;
+        for (j = i + o + 1; j < row->size; j++)
+        {
+            c = rowMatchesAt(row, j, lang->spans[k].close);
+            if (!c || isBlank(&chars[j - 1]))
+                continue;
+            if (j + c < row->size && is_word_char(&chars[j + c]))
+                continue;
+            *open_len = o;
+            *close_at = j;
+            return &lang->spans[k];
         }
     }
     return NULL;
@@ -521,6 +593,8 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
     const Utf8Char *wc;
     TokenType type;
     int wi;
+    const struct syntax_span_t *emph;
+    int close_at;
     Utf8Span span;
     if (!result)
     {
@@ -556,11 +630,10 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
         {
             if (!rowMatchesAt(row, 0, lang->line_prefixes[k].prefix))
                 continue;
-            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s",
-                                   get_color((TokenType)lang->line_prefixes[k].role));
+            emitRoleStart(result, &result_pos, buf_size, (TokenType)lang->line_prefixes[k].role);
             while (i < row->size)
                 copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
-            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);
+            emitRoleEnd(result, &result_pos, buf_size, (TokenType)lang->line_prefixes[k].role);
             result[result_pos] = '\0';
             *length = result_pos + 1; // same convention as the end of this function
             return result;
@@ -611,6 +684,27 @@ char *highlight_line(const Row *row, int *length, int x_offset, int width,
                 copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
             copy_comment(result, &result_pos, buf_size, row, &i, x_start, x_end, lang,
                          lang->block_comment_close);
+            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);
+            continue;
+        }
+
+        // Inline spans (Markdown emphasis): markers dimmed, text in the
+        // span's role.
+        emph = spanAt(row, i, lang, &openLen, &close_at);
+        if (emph)
+        {
+            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_COMMENT);
+            for (k = 0; k < openLen; k++)
+                copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
+            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);
+            emitRoleStart(result, &result_pos, buf_size, (TokenType)emph->role);
+            while (i < close_at)
+                copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
+            emitRoleEnd(result, &result_pos, buf_size, (TokenType)emph->role);
+            result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", E.theme.COLOR_COMMENT);
+            k = (int)strlen(emph->close);
+            while (k-- > 0)
+                copy_utf8_char(result, &result_pos, chars, &i, x_start, x_end);
             result_pos += snprintf(&result[result_pos], buf_size - result_pos, "%s", COLOR_RESET);
             continue;
         }
