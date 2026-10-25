@@ -18,39 +18,22 @@ Nothing open right now.
 
 ## Known bugs (not marked in the code)
 
-- [ ] **[bug]** Typing fast into a terminal pane drops keystrokes. This
-  reproduces on older binaries too, so it's not a regression. Start from
-  `ptyForwardKey()` (`src/input.c`) and the input read in
-  `editorRunLoop()` (`src/editor_op.c`).
-  - Doesn't reproduce on Linux (bash and dash, a 100-character line sent in
-    one write, keys 2 ms apart, typing during `seq 1 200000`): every key
-    arrived. Input isn't buffered in user space (`readKeyBytes()` reads
-    straight from the fd), so a key can't be lost between ticks. Likely
-    macOS-specific; next step is a repro there (which shell, which
-    terminal app, what was typed).
-  - `tools/pty_tests.py` (`meson test`, the `pty` test) now types into a
-    terminal pane in one burst and 2 ms apart, so the Linux case is
-    checked on every run.
-  - Doesn't reproduce on macOS in a scripted pty either: zsh (bare, and the
-    real oh-my-zsh + powerlevel10k config) and bash; bursts up to 2000
-    bytes at the prompt; keys 0-5 ms apart; typing right after CTRL-x t;
-    typeahead during `sleep 1`; typing during `seq 1 200000`; all of
-    printable ASCII, every control key but CTRL-g/CTRL-x/ESC, and UTF-8
-    (è à € 日). Two things that do lose input there and look like it: a
-    canonical-mode line (into `cat`, or typed while a command runs) longer
-    than 1024 bytes is discarded by the macOS tty itself, editor or not;
-    and CTRL-g or ESC drop the pane out of the "term" keymap, after which
-    ENTER, TAB, BACKSPACE, CTRL-a/e/k/... run editor commands that ignore
-    a terminal buffer, while letters still reach the shell. Next step: a
-    repro in the real terminal app (which one, what was typed, what the
-    status line's prefix showed).
-- [ ] **[feature]** `ESCAPE` in a terminal pane always goes back to the
-  editor (`config/init.lisp`, the `term` prefix), so it never reaches a
-  program: in vim, only CTRL-c leaves insert mode (CTRL-[ is the same
-  byte as `ESCAPE`, so the pane takes it too). Options:
-  send `ESCAPE` to the program while it's on the alternate screen (vim,
-  less, htop) and use another key to leave the pane there, or a double
-  `ESCAPE`. A choice for the keymap, not a parser problem.
+- [ ] **[bug]** Typing fast into a terminal pane drops keystrokes (seen on
+  macOS). No repro yet: in a scripted pty every key arrives on Linux (bash,
+  dash, zsh) and on macOS (zsh with oh-my-zsh + powerlevel10k, bash), in
+  bursts up to 2000 bytes, keys 0-5 ms apart, during `sleep` and
+  `seq 1 200000`, ASCII, control keys and UTF-8. The `pty` meson test
+  (`terminal-fast-typing`, `terminal-long-burst`) keeps checking it.
+  Two things lose input on macOS and look like it:
+  - A canonical-mode line (into `cat`, or typed while a command runs)
+    longer than 1024 bytes is discarded by the macOS tty itself.
+  - CTRL-g or ESC take the pane out of the `term` keymap (the status line
+    shows "no-prefix"): letters still reach the shell, but ENTER, TAB,
+    BACKSPACE, CTRL-a/e/k run editor commands that ignore a terminal.
+  Next step: a repro in the real terminal app (which app, what was typed,
+  what the status line's prefix showed). Start from `ptyForwardKey()`
+  (`src/input.c`) and `editorRunLoop()` (`src/editor_op.c`).
+
 ---
 
 ## Configuration and packages
