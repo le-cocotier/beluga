@@ -75,10 +75,6 @@ src/breakpoints.c). What's left after the first step:
 - [ ] **[debt]** Daemon mode: one session for the whole daemon, and the
   stopped line moves whichever window last typed. Give each project its
   own session.
-- [ ] **[debt]** gdb sets the breakpoints before `launch` has loaded the
-  program (it runs the program as soon as `launch` arrives, see the comment
-  at the top of `src/dap.c`), so every session's output starts with "No
-  source file named …" and a pending breakpoint, which then resolves.
 - [ ] **[debt]** Not tried yet with debugpy, or lldb-dap on Windows.
   gdb 15 on Linux and lldb-dap on macOS are covered by
   `tools/pty_tests.py`.

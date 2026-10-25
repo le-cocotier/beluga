@@ -303,6 +303,11 @@ def debug_session(binary, repo, config):
         ed.keys(*DEBUG, 'c')
         ed.wait_for('the program exited with code 1')
         assert any('total 50' in line for line in ed.text()), ed.text()
+        # The breakpoint was found at once, not left pending until the
+        # program loaded (gdb gets the program on its command line).
+        ed.keys(*DEBUG, 'o', delay=0.5)
+        ed.wait_for('total 50')
+        assert not any('No source file' in line for line in ed.text()), ed.text()
         ed.quit()
 
 

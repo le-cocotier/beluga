@@ -12,7 +12,11 @@
  * race with the program. Hence launch waits a moment for "initialized":
  * if it comes, launch follows configurationDone; if not, it goes first.
  * gdb 16 refuses a configurationDone that comes before launch, so then
- * it goes again after launch. A "stopped" event asks for
+ * it goes again after launch. gdb also only reads the program's symbols
+ * on launch, so it is given the program on its command line as well
+ * (gdbArgv()): the breakpoints sent before launch then resolve at once
+ * instead of coming back pending with "No source file named ...". A
+ * "stopped" event asks for
  * the call stack, the selected frame's scopes and their variables, and
  * each answer refreshes the panel (debug_ui.c). Variables deeper down are
  * fetched when the panel expands them.
@@ -1057,6 +1061,24 @@ static const char *adapterName(const DapAdapter *adapter) {
 }
 
 /**
+ * @brief The command line that starts `adapter`, in `argv` (room for
+ * DAP_MAX_ARGS + 2). gdb gets the launch's program after its own
+ * arguments, so it has the symbols before any breakpoint arrives; other
+ * adapters run as registered.
+ */
+static void adapterArgv(const DapAdapter *adapter, const cJSON *launch, const char **argv) {
+  const char *program = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(launch, "program"));
+  const char *name = adapterName(adapter);
+  int n;
+  for (n = 0; n < DAP_MAX_ARGS && adapter->argv[n]; n++)
+    argv[n] = adapter->argv[n];
+  if (program && *program &&
+      (!strcmp(name, "gdb") || !strcmp(name, "gdb.exe") || !strcmp(name, "gdb-multiarch")))
+    argv[n++] = program;
+  argv[n] = NULL;
+}
+
+/**
  * @brief The adapter for `ext`, or for the active buffer's extension, or
  * the first one registered.
  */
@@ -1087,6 +1109,7 @@ int dapStart(const char *ext, const char *launch_json) {
   cJSON *launch;
   cJSON *args;
   OsSpawn spawn;
+  const char *argv[DAP_MAX_ARGS + 2];
   char *root;
   const char *debug_log;
   Breakpoint *all;
@@ -1115,7 +1138,8 @@ int dapStart(const char *ext, const char *launch_json) {
   // stdin/stdout carry the protocol; the adapter's stderr goes where the
   // language servers' does (discarded, or the debug log).
   memset(&spawn, 0, sizeof(spawn));
-  spawn.argv = (const char *const *)adapter->argv;
+  adapterArgv(adapter, launch, argv);
+  spawn.argv = argv;
   spawn.cwd = root;
   spawn.stdin_pipe = 1;
   debug_log = appDebugLogPath();
