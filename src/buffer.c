@@ -198,16 +198,34 @@ static void textEndPosition(const char *text, int row, int col, int *end_row,
 }
 
 /**
+ * @brief 1 when the characters of `r` before `col` are only spaces and tabs
+ * (none at all included).
+ */
+static int rowHeadIsBlank(const Row *r, int col) {
+  int i;
+  for (i = 0; i < col && i < r->size; i++)
+    if (r->characters[i].length != 1 ||
+        (r->characters[i].character[0] != ' ' &&
+         r->characters[i].character[0] != '\t'))
+      return 0;
+  return 1;
+}
+
+/**
  * @brief Splits `row` into two rows at character index `col` — the tail
  * ([col, size)) becomes a new row right after it. Pure row mutation: no
  * cursor movement, no undo recording (callers do both themselves).
  */
 static void rowSplitAt(struct buffer_t *buf, int row, int col) {
   Row *r = &buf->row[row];
+  const int head_blank = rowHeadIsBlank(r, col);
   bufferInsertRow(buf, row + 1, &r->characters[col], r->size - col);
   r = &buf->row[row]; // bufferInsertRow's recalloc may have moved the array
   r->size = col;
   END_OF_STRING(r->characters[r->size]);
+  // ENTER before a line's code: its breakpoint goes down with the code.
+  if (head_blank)
+    breakpointsLineMoved(buf, row, row + 1);
 }
 
 /**
@@ -1852,6 +1870,8 @@ static void textInsertRaw(struct buffer_t *buf, int row, int col,
   memcpy(tail, r->characters + col, (size_t)tail_len * sizeof(Utf8Char));
   r->size = col;
   END_OF_STRING(r->characters[r->size]);
+  if (rowHeadIsBlank(r, col))
+    breakpointsLineMoved(buf, row, row + lines);
 
   cur = row;
   line_start = 0;

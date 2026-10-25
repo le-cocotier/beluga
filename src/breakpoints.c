@@ -187,6 +187,23 @@ void breakpointsLinesInserted(const struct buffer_t *buf, const int at, const in
   gfree(path);
 }
 
+void breakpointsLineMoved(const struct buffer_t *buf, const int from, const int to) {
+  char *path;
+  Breakpoint *bp;
+  if (s_count == 0 || from == to)
+    return;
+  path = breakpointsBufferPath(buf);
+  if (!path)
+    return;
+  bp = breakpointAt(path, from);
+  if (bp && !breakpointAt(path, to)) {
+    bp->line = to;
+    sortBreakpoints();
+    notifyChanged(path);
+  }
+  gfree(path);
+}
+
 void breakpointsLinesRemoved(const struct buffer_t *buf, const int at, const int count) {
   char *path;
   int i;

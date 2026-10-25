@@ -69,6 +69,27 @@ static void testFollowsInsertedLines(void) {
   bufferFree(buf);
 }
 
+static void testEnterBeforeTheCode(void) {
+  Buffer *buf = fileBuffer("a\n  b\nc");
+  breakpointToggle("/src/main.c", 0); // "a"
+  breakpointToggle("/src/main.c", 1); // "  b"
+  // ENTER at the start of "a", and after the indent of "  b": both
+  // breakpoints go down with their code.
+  bufferApplyTextEdit(buf, 0, 0, 0, 0, "\n");
+  CHECK(breakpointAt("/src/main.c", 0) == NULL);
+  CHECK(breakpointAt("/src/main.c", 1) != NULL); // "a"
+  CHECK(breakpointAt("/src/main.c", 2) != NULL); // "  b"
+  bufferApplyTextEdit(buf, 2, 2, 2, 2, "\n\n");
+  CHECK(breakpointAt("/src/main.c", 2) == NULL);
+  CHECK(breakpointAt("/src/main.c", 4) != NULL);
+  // Undo takes the two lines out again: the breakpoint goes back up.
+  bufferUndo(buf);
+  CHECK(breakpointAt("/src/main.c", 2) != NULL);
+  CHECK(breakpointAt("/src/main.c", 4) == NULL);
+  breakpointsClear();
+  bufferFree(buf);
+}
+
 static void testFollowsRemovedLines(void) {
   Buffer *buf = fileBuffer("a\nb\nc\nd\ne");
   breakpointToggle("/src/main.c", 1); // "b"
@@ -101,6 +122,7 @@ int main(void) {
   testToggle();
   testCondition();
   testFollowsInsertedLines();
+  testEnterBeforeTheCode();
   testFollowsRemovedLines();
   testOtherFilesDontMove();
   breakpointsFree();

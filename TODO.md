@@ -93,9 +93,6 @@ src/breakpoints.c). What's left after the first step:
   program (it runs the program as soon as `launch` arrives, see the comment
   at the top of `src/dap.c`), so every session's output starts with "No
   source file named …" and a pending breakpoint, which then resolves.
-- [ ] **[debt]** A breakpoint stays on its row when ENTER is pressed at
-  the very start of that row, so it ends up on the new empty line above
-  the code (`breakpointsLinesInserted()` callers in `src/buffer.c`).
 - [ ] **[debt]** Not tried yet with debugpy, or lldb-dap on Windows.
   gdb 15 on Linux and lldb-dap on macOS are covered by
   `tools/pty_tests.py`.

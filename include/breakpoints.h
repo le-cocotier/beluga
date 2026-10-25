@@ -42,6 +42,10 @@ void breakpointsFree(void);
 // Breakpoints of `buf`'s file at or after row `at` move down `count` rows:
 // `count` rows were inserted before them.
 void breakpointsLinesInserted(const struct buffer_t *buf, int at, int count);
+// The breakpoint on row `from` of `buf`'s file moves to row `to` (unless
+// `to` has one already): the row's code moved there, as when ENTER is
+// pressed before it.
+void breakpointsLineMoved(const struct buffer_t *buf, int from, int to);
 // Rows [at, at + count) of `buf` were removed: the breakpoints after them
 // move up, and the ones on them land on the row their text joined (at - 1).
 void breakpointsLinesRemoved(const struct buffer_t *buf, int at, int count);
