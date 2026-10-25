@@ -22,6 +22,7 @@ int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, const int rows
     memset(&buf->term_state, 0, sizeof(TermParserState));
     buf->term_state.state = TPARSE_GROUND;
     buf->term_state.pane_height = splitScreenGetActivePane()->height;
+    buf->term_state.pane_width = cols;
     return 0;
 }
 

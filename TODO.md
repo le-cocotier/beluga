@@ -38,13 +38,6 @@ Nothing open right now.
   send `ESCAPE` to the program while it's on the alternate screen (vim,
   less, htop) and use another key to leave the pane there, or a double
   `ESCAPE`. A choice for the keymap, not a parser problem.
-- [ ] **[feature]** The terminal parser doesn't wrap: it doesn't know the
-  pane's width, so a line longer than the pane stays one row and is cut at
-  the pane's edge (`src/ansi_parser.c`, `putChar()`). Wrapping needs the
-  width in `TermParserState` (set where `pane_height` is) and xterm's
-  pending-wrap rule (the cursor stays on the last column until the next
-  character).
-
 ---
 
 ## Configuration and packages

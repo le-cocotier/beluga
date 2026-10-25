@@ -31,6 +31,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   buf->type = TERMINAL_BUFF;
   buf->state = READ_AND_WRITE;
   buf->term_state.pane_height = 1 + data[0] % 40;
+  // Most inputs also get a width, so the wrapping is fuzzed too.
+  buf->term_state.pane_width = data[0] % 4 ? 1 + (data[0] * 7) % 80 : 0;
   split = size > 1 ? (size_t)data[0] % size : 0;
   ansiParserFeed(buf, data + 1, split > 0 ? split - 1 : 0);
   ansiParserFeed(buf, data + (split > 0 ? split : 1), size - (split > 0 ? split : 1));
