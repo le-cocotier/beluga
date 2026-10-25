@@ -191,6 +191,15 @@ language package names its adapter, like it names its language server:
 (dap-adapter "c" "gdb" "-q" "-i" "dap")   ; packages/c does this (xcrun lldb-dap on macOS)
 ```
 
+An adapter that talks over TCP rather than stdio gets `{port}` where it is told which port to
+listen on; beluga picks a free one and connects to it. One that is already running is named by
+its address instead of a command:
+
+```lisp
+(dap-adapter "go" "dlv" "dap" "--listen=127.0.0.1:{port}")
+(dap-adapter "js" "tcp:127.0.0.1:8123")
+```
+
 An association list after the command gives launch arguments every session gets unless it sets
 them itself; on macOS packages/c uses it for lldb's `sourceMap`, so breakpoints in files under
 `/tmp` or `/var` (links into `/private`) are found.

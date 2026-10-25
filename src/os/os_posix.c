@@ -27,6 +27,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -997,6 +1000,98 @@ OsConn *os_conn_connect(const char *name, char *err, const size_t err_size) {
     return NULL;
   }
   return connFromFd(fd);
+}
+
+/**
+ * @brief connect() on a non-blocking socket, waiting at most `timeout_ms`.
+ * @return 0, or -1 with errno set.
+ */
+static int connectWithin(const int fd, const struct sockaddr *addr, const socklen_t len,
+                         const int timeout_ms) {
+  struct pollfd pfd;
+  int error = 0;
+  socklen_t error_len = sizeof(error);
+  int pr;
+  fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+  if (connect(fd, addr, len) == 0)
+    return 0;
+  if (errno != EINPROGRESS)
+    return -1;
+  pfd.fd = fd;
+  pfd.events = POLLOUT;
+  pfd.revents = 0;
+  do
+    pr = poll(&pfd, 1, timeout_ms);
+  while (pr < 0 && errno == EINTR);
+  if (pr == 0) {
+    errno = ETIMEDOUT;
+    return -1;
+  }
+  if (pr < 0 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &error_len) == -1)
+    return -1;
+  if (error != 0) {
+    errno = error;
+    return -1;
+  }
+  return 0;
+}
+
+OsConn *os_tcp_connect(const char *host, const int port, const int timeout_ms, char *err,
+                       const size_t err_size) {
+  struct addrinfo hints;
+  struct addrinfo *found = NULL;
+  struct addrinfo *a;
+  char service[16];
+  int one = 1;
+  int fd = -1;
+  int rc;
+
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  snprintf(service, sizeof(service), "%d", port);
+  rc = getaddrinfo(host, service, &hints, &found);
+  if (rc != 0) {
+    snprintf(err, err_size, "%s: %s", host, gai_strerror(rc));
+    return NULL;
+  }
+  errno = ECONNREFUSED;
+  for (a = found; a && fd == -1; a = a->ai_next) {
+    fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+    if (fd == -1)
+      continue;
+    if (connectWithin(fd, a->ai_addr, a->ai_addrlen, timeout_ms) == -1) {
+      rc = errno;
+      close(fd);
+      fd = -1;
+      errno = rc;
+    }
+  }
+  freeaddrinfo(found);
+  if (fd == -1) {
+    snprintf(err, err_size, "%s:%d: %s", host, port, strerror(errno));
+    return NULL;
+  }
+  setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+  return connFromFd(fd);
+}
+
+int os_tcp_free_port(void) {
+  struct sockaddr_in addr;
+  socklen_t len = sizeof(addr);
+  int port = -1;
+  const int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd == -1)
+    return -1;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = 0; // the system picks one
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
+      getsockname(fd, (struct sockaddr *)&addr, &len) == 0)
+    port = ntohs(addr.sin_port);
+  close(fd);
+  return port;
 }
 
 OsStream *os_conn_input(OsConn *c) { return c ? &c->in : NULL; }

@@ -32,6 +32,9 @@
 #include "../../include/galloc.h"
 #include "../../include/os.h"
 
+// Before windows.h, which would otherwise bring in the old winsock.h.
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -593,7 +596,7 @@ done:
  *
  **********************************************************************************************************************/
 
-typedef enum { STREAM_CONSOLE, STREAM_PIPE, STREAM_EMPTY, STREAM_LISTENER } StreamKind;
+typedef enum { STREAM_CONSOLE, STREAM_PIPE, STREAM_EMPTY, STREAM_LISTENER, STREAM_SOCKET } StreamKind;
 
 struct OsStream {
     StreamKind kind;
@@ -602,6 +605,7 @@ struct OsStream {
                         // a pseudoconsole's pipe stays open after it exits)
     int eof;
     int connected;      // STREAM_LISTENER: a client is waiting on h
+    SOCKET sock;        // STREAM_SOCKET: a TCP connection, read and written
 };
 
 static HANDLE consoleIn(void) { return GetStdHandle(STD_INPUT_HANDLE); }
@@ -627,6 +631,11 @@ static void streamClose(OsStream *s)
 {
     if (s->kind == STREAM_PIPE && s->h)
         CloseHandle(s->h);
+    if (s->kind == STREAM_SOCKET && s->sock != INVALID_SOCKET)
+    {
+        closesocket(s->sock);
+        s->sock = INVALID_SOCKET;
+    }
     s->h = NULL;
     s->eof = 1;
 }
@@ -658,6 +667,32 @@ static long pipeAvailable(OsStream *s)
     return 0;
 }
 
+/**
+ * @brief Bytes waiting on a socket stream: >0 available, 0 none yet, -1 its
+ * end (the other side closed, or an error).
+ */
+static long socketAvailable(OsStream *s)
+{
+    fd_set readable;
+    struct timeval now = { 0, 0 };
+    u_long avail = 0;
+    int r;
+    if (s->eof)
+        return -1;
+    FD_ZERO(&readable);
+    FD_SET(s->sock, &readable);
+    r = select(0, &readable, NULL, NULL, &now);
+    if (r == 0)
+        return 0;
+    if (r == SOCKET_ERROR || ioctlsocket(s->sock, FIONREAD, &avail) != 0 || avail == 0)
+    {
+        // Readable with nothing to read: the other side has closed.
+        s->eof = 1;
+        return -1;
+    }
+    return (long) avail;
+}
+
 static int consoleHasInput(void);
 static long consoleRead(void *buf, size_t n, int timeout_ms);
 static int listenerReady(OsStream *s);
@@ -672,6 +707,7 @@ static int streamReady(OsStream *s)
     case STREAM_CONSOLE: return consoleHasInput();
     case STREAM_PIPE:    return pipeAvailable(s) != 0;
     case STREAM_LISTENER: return listenerReady(s);
+    case STREAM_SOCKET:  return socketAvailable(s) != 0;
     default:             return 1;
     }
 }
@@ -692,7 +728,8 @@ int os_wait(OsStream *const *streams, const int n, const int timeout_ms, int *re
             continue;
         if (streams[i]->kind == STREAM_CONSOLE)
             watch_console = 1;
-        else if (streams[i]->kind == STREAM_PIPE || streams[i]->kind == STREAM_LISTENER)
+        else if (streams[i]->kind == STREAM_PIPE || streams[i]->kind == STREAM_LISTENER ||
+                 streams[i]->kind == STREAM_SOCKET)
             has_pipes = 1;
     }
 
@@ -738,6 +775,19 @@ long os_stream_read(OsStream *s, void *buf, const size_t n, const int timeout_ms
     one[0] = s;
     if (!os_wait(one, 1, timeout_ms, &ready))
         return 0;
+    if (s->kind == STREAM_SOCKET)
+    {
+        avail = socketAvailable(s);
+        if (avail <= 0)
+            return avail;
+        avail = recv(s->sock, buf, (int) ((size_t) avail < n ? (size_t) avail : n), 0);
+        if (avail <= 0)
+        {
+            s->eof = 1;
+            return -1;
+        }
+        return avail;
+    }
     avail = pipeAvailable(s);
     if (avail < 0)
         return -1;
@@ -2014,6 +2064,113 @@ OsConn *os_conn_connect(const char *name, char *err, const size_t err_size)
     return c;
 }
 
+static int winsockReady(void)
+{
+    static int s_started;
+    WSADATA data;
+    if (!s_started && WSAStartup(MAKEWORD(2, 2), &data) == 0)
+        s_started = 1;
+    return s_started;
+}
+
+OsConn *os_tcp_connect(const char *host, const int port, const int timeout_ms, char *err,
+                       const size_t err_size)
+{
+    struct addrinfo hints;
+    struct addrinfo *found = NULL;
+    struct addrinfo *a;
+    char service[16];
+    fd_set writable, failed;
+    struct timeval wait;
+    u_long nonblocking = 1;
+    u_long blocking = 0;
+    BOOL one = TRUE;
+    SOCKET sock = INVALID_SOCKET;
+    OsConn *c;
+    int rc;
+
+    if (!winsockReady())
+    {
+        snprintf(err, err_size, "Winsock didn't start");
+        return NULL;
+    }
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    snprintf(service, sizeof(service), "%d", port);
+    rc = getaddrinfo(host, service, &hints, &found);
+    if (rc != 0)
+    {
+        snprintf(err, err_size, "%s: can't find it (error %d)", host, rc);
+        return NULL;
+    }
+    for (a = found; a && sock == INVALID_SOCKET; a = a->ai_next)
+    {
+        sock = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+        if (sock == INVALID_SOCKET)
+            continue;
+        ioctlsocket(sock, FIONBIO, &nonblocking);
+        rc = connect(sock, a->ai_addr, (int) a->ai_addrlen);
+        if (rc == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK)
+        {
+            FD_ZERO(&writable);
+            FD_SET(sock, &writable);
+            FD_ZERO(&failed);
+            FD_SET(sock, &failed);
+            wait.tv_sec = timeout_ms / 1000;
+            wait.tv_usec = (timeout_ms % 1000) * 1000;
+            rc = select(0, NULL, &writable, &failed, &wait) == 1 && FD_ISSET(sock, &writable)
+                     ? 0
+                     : SOCKET_ERROR;
+        }
+        if (rc == SOCKET_ERROR)
+        {
+            closesocket(sock);
+            sock = INVALID_SOCKET;
+        }
+    }
+    freeaddrinfo(found);
+    if (sock == INVALID_SOCKET)
+    {
+        snprintf(err, err_size, "%s:%d: nothing answered", host, port);
+        return NULL;
+    }
+    ioctlsocket(sock, FIONBIO, &blocking);
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *) &one, sizeof(one));
+    c = gcalloc(1, sizeof(*c));
+    if (!c)
+    {
+        closesocket(sock);
+        return NULL;
+    }
+    c->in.kind = STREAM_SOCKET;
+    c->in.sock = sock;
+    c->in.eof = 0;
+    return c;
+}
+
+int os_tcp_free_port(void)
+{
+    struct sockaddr_in addr;
+    int len = sizeof(addr);
+    int port = -1;
+    SOCKET sock;
+    if (!winsockReady())
+        return -1;
+    sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET)
+        return -1;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(sock, (struct sockaddr *) &addr, sizeof(addr)) == 0 &&
+        getsockname(sock, (struct sockaddr *) &addr, &len) == 0)
+        port = ntohs(addr.sin_port);
+    closesocket(sock);
+    return port;
+}
+
 OsStream *os_conn_input(OsConn *c)
 {
     return c ? &c->in : NULL;
@@ -2026,6 +2183,18 @@ long os_conn_write(OsConn *c, const void *buf, const size_t n)
     DWORD written;
     ULONGLONG stalled_since = 0;
 
+    if (c && c->in.kind == STREAM_SOCKET)
+    {
+        while (left > 0 && !c->in.eof)
+        {
+            const int sent = send(c->in.sock, p, (int) (left > 65536 ? 65536 : left), 0);
+            if (sent == SOCKET_ERROR)
+                return -1;
+            p += sent;
+            left -= (size_t) sent;
+        }
+        return left == 0 ? (long) n : -1;
+    }
     if (!c || !c->in.h || c->in.eof)
         return -1;
     while (left > 0)

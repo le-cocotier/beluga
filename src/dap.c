@@ -86,7 +86,16 @@ static int s_adapter_count;
 
 static struct
 {
+    // The adapter's process (NULL for one reached at tcp:HOST:PORT) and,
+    // for an adapter that listens on a port, the connection to it. The
+    // protocol goes over `conn` when there is one, else over the
+    // process's stdin/stdout.
     OsProc *proc;
+    OsConn *conn;
+    char tcp_host[256];
+    int tcp_port;              // 0: stdio
+    long long connect_until;   // still trying to connect (ms), 0 otherwise
+    char adapter_id[16];       // for initialize, sent once connected
     JsonRpcStream recv;
     int seq;
     DapState state;
@@ -258,7 +267,15 @@ DapState dapState(void) { return s.state; }
 const char *dapStopReason(void) { return s.stop_reason; }
 const char *dapAdapterName(void) { return s.adapter; }
 int dapExitCode(void) { return s.exit_code; }
-OsStream *dapStream(void) { return s.proc ? os_proc_output(s.proc) : NULL; }
+// The session's protocol stream, when there is one to read.
+OsStream *dapStream(void) {
+  if (s.conn)
+    return os_conn_input(s.conn);
+  return s.proc && !s.tcp_port ? os_proc_output(s.proc) : NULL;
+}
+
+// A session is open and its adapter can be talked to.
+static int connected(void) { return s.conn || (s.proc && !s.tcp_port); }
 
 /***********************************************************************************************************************
  *
@@ -278,12 +295,26 @@ static void clearPending(void) {
  * none). `handler` gets the response, then `ctx` is freed.
  * @return the request's seq, or -1 if there's no session.
  */
+// Writes one message (Content-Length header, then the JSON).
+static void dapWrite(const char *json) {
+  char header[64];
+  const size_t len = strlen(json);
+  if (!s.conn) {
+    jsonRpcWrite(s.proc, json, "DAP");
+    return;
+  }
+  snprintf(header, sizeof(header), "Content-Length: %u\r\n\r\n", (unsigned)len);
+  appDebug("[DAP →] %s\n", json);
+  if (os_conn_write(s.conn, header, strlen(header)) == -1 || os_conn_write(s.conn, json, len) == -1)
+    appDebug("[DAP] the connection to the adapter is gone\n");
+}
+
 static int sendRequest(const char *command, cJSON *arguments, const DapHandler handler,
                        void *ctx) {
   cJSON *msg;
   char *text;
   int seq;
-  if (!s.proc) {
+  if (!connected()) {
     cJSON_Delete(arguments);
     gfree(ctx);
     return -1;
@@ -298,7 +329,7 @@ static int sendRequest(const char *command, cJSON *arguments, const DapHandler h
   text = cJSON_PrintUnformatted(msg);
   cJSON_Delete(msg);
   if (text) {
-    jsonRpcWrite(s.proc, text, "DAP");
+    dapWrite(text);
     gfree(text);
   }
   if (handler && s.pending_count < DAP_MAX_PENDING) {
@@ -352,6 +383,12 @@ static void endSession(const char *message, const int run_hook) {
   s.launch = NULL;
   gfree(s.root);
   s.root = NULL;
+  if (s.conn) {
+    os_conn_close(s.conn);
+    s.conn = NULL;
+  }
+  s.tcp_port = 0;
+  s.connect_until = 0;
   if (s.proc) {
     os_proc_free(s.proc);
     s.proc = NULL;
@@ -499,7 +536,7 @@ static int sendAllBreakpoints(void) {
 
 // breakpoints.c's listener: a file's breakpoints changed.
 static void onBreakpointsChanged(const char *path) {
-  if (s.proc && s.configured && (!s.root || utilPathIsUnder(path, s.root)))
+  if (connected() && s.configured && (!s.root || utilPathIsUnder(path, s.root)))
     sendBreakpoints(path);
 }
 
@@ -732,6 +769,7 @@ static void onLaunch(cJSON *response, void *ctx) {
 }
 
 #define LAUNCH_WAIT_MS 300 // for an "initialized" event before launch
+#define DAP_CONNECT_TIMEOUT_MS 10000 // for an adapter to listen on its port
 
 static void onInitialize(cJSON *response, void *ctx) {
   (void)ctx;
@@ -753,7 +791,38 @@ static void endTerminated(void) {
   endSession(message, 1);
 }
 
+static void sendInitialize(void);
+
+/**
+ * @brief An adapter reached over TCP: what its process prints goes to the
+ * output, and until it is connected, one more try each tick.
+ */
+static void tickTcp(void) {
+  char chunk[1024];
+  char err[300];
+  char message[400];
+  long n;
+  if (s.proc && s.tcp_port) {
+    while ((n = os_stream_read(os_proc_output(s.proc), chunk, sizeof(chunk) - 1, 0)) > 0) {
+      chunk[n] = '\0';
+      outputAppend(chunk);
+    }
+  }
+  if (!s.connect_until)
+    return;
+  s.conn = os_tcp_connect(s.tcp_host, s.tcp_port, 20, err, sizeof(err));
+  if (s.conn) {
+    s.connect_until = 0;
+    sendInitialize();
+  } else if (os_monotonic_ms() >= s.connect_until ||
+             (s.proc && os_proc_wait(s.proc, 0, NULL) == 1)) {
+    snprintf(message, sizeof(message), "Couldn't connect to the debug adapter: %s", err);
+    endSession(message, 1);
+  }
+}
+
 void dapTick(void) {
+  tickTcp();
   if (s.launch && s.launch_at && os_monotonic_ms() >= s.launch_at)
     sendLaunch();
   if (s.ending_at && os_monotonic_ms() >= s.ending_at) {
@@ -818,7 +887,7 @@ static void respond(cJSON *request, const int success, cJSON *body, const char *
   text = cJSON_PrintUnformatted(msg);
   cJSON_Delete(msg);
   if (text) {
-    jsonRpcWrite(s.proc, text, "DAP");
+    dapWrite(text);
     gfree(text);
   }
 }
@@ -1056,7 +1125,7 @@ static void handleMessage(const char *json) {
 static void onMessage(void *ctx, const char *body) {
   (void)ctx;
   appDebug("[DAP ←] %s\n", body);
-  if (s.proc) // what followed the end of a session
+  if (connected()) // not what followed the end of a session
     handleMessage(body);
 }
 
@@ -1066,22 +1135,26 @@ void dapFeed(const char *data, const size_t len) {
 
 void dapPoll(void) {
   char chunk[4096];
-  long n;
+  long n = 0;
   int code;
   char message[160];
-  if (!s.proc)
+  if (!dapStream())
     return;
-  while (s.proc && (n = os_stream_read(os_proc_output(s.proc), chunk, sizeof(chunk), 0)) > 0)
+  while (dapStream() && (n = os_stream_read(dapStream(), chunk, sizeof(chunk), 0)) > 0)
     dapFeed(chunk, (size_t)n);
-  if (s.proc && n < 0) {
-    // The adapter's output has ended: it exited (or crashed).
+  if (dapStream() && n < 0) {
+    // The adapter's output has ended: it exited (or crashed), or closed
+    // the connection.
     if (s.ending_at) {
       endTerminated();
       return;
     }
     code = -1;
-    os_proc_wait(s.proc, 100, &code);
-    if (code == 127)
+    if (s.proc)
+      os_proc_wait(s.proc, 100, &code);
+    if (s.conn)
+      snprintf(message, sizeof(message), "The debug adapter %s closed the connection", s.adapter);
+    else if (code == 127)
       snprintf(message, sizeof(message), "Couldn't run the debug adapter %s: is it installed?",
                s.adapter);
     else
@@ -1230,12 +1303,72 @@ static const DapAdapter *findAdapter(const char *ext) {
   return s_adapter_count > 0 ? &s_adapters[0] : NULL;
 }
 
+static void sendInitialize(void) {
+  cJSON *args = cJSON_CreateObject();
+  cJSON_AddStringToObject(args, "clientID", "beluga");
+  cJSON_AddStringToObject(args, "clientName", "beluga");
+  cJSON_AddStringToObject(args, "adapterID", s.adapter_id);
+  cJSON_AddStringToObject(args, "pathFormat", "path");
+  cJSON_AddBoolToObject(args, "linesStartAt1", 1);
+  cJSON_AddBoolToObject(args, "columnsStartAt1", 1);
+  cJSON_AddBoolToObject(args, "supportsVariableType", 1);
+  cJSON_AddBoolToObject(args, "supportsRunInTerminalRequest", 1);
+  sendRequest("initialize", args, onInitialize, NULL);
+}
+
+/**
+ * @brief "tcp:HOST:PORT" (an adapter already listening there) into
+ * s.tcp_host and s.tcp_port. @return 1 if `spec` is one.
+ */
+static int parseTcpAddress(const char *spec) {
+  const char *colon;
+  int port;
+  if (strncmp(spec, "tcp:", 4) != 0)
+    return 0;
+  colon = strrchr(spec + 4, ':');
+  if (!colon || colon == spec + 4 || (size_t)(colon - spec - 4) >= sizeof(s.tcp_host))
+    return 0;
+  port = atoi(colon + 1);
+  if (port <= 0 || port > 65535)
+    return 0;
+  memcpy(s.tcp_host, spec + 4, (size_t)(colon - spec - 4));
+  s.tcp_host[colon - spec - 4] = '\0';
+  s.tcp_port = port;
+  return 1;
+}
+
+/**
+ * @brief Replaces "{port}" in the arguments of `argv` by a free local port,
+ * for an adapter told where to listen (dlv dap --listen=127.0.0.1:{port}).
+ * The new strings go in `storage`. Sets s.tcp_host and s.tcp_port when
+ * there was one. @return 0, or -1 when no port could be found.
+ */
+static int substitutePort(const char **argv, char storage[][256]) {
+  const char *mark;
+  int port = 0;
+  int i;
+  for (i = 1; argv[i]; i++) {
+    mark = strstr(argv[i], "{port}");
+    if (!mark)
+      continue;
+    if (port == 0 && (port = os_tcp_free_port()) <= 0)
+      return -1;
+    snprintf(storage[i], 256, "%.*s%d%s", (int)(mark - argv[i]), argv[i], port, mark + 6);
+    argv[i] = storage[i];
+  }
+  if (port > 0) {
+    snprintf(s.tcp_host, sizeof(s.tcp_host), "127.0.0.1");
+    s.tcp_port = port;
+  }
+  return 0;
+}
+
 int dapStart(const char *ext, const char *launch_json) {
   const DapAdapter *adapter;
   cJSON *launch;
-  cJSON *args;
   OsSpawn spawn;
   const char *argv[DAP_MAX_ARGS + 2];
+  char port_args[DAP_MAX_ARGS + 2][256];
   char *root;
   const char *debug_log;
   Breakpoint *all;
@@ -1262,22 +1395,36 @@ int dapStart(const char *ext, const char *launch_json) {
   addLaunchDefaults(launch, adapter);
 
   // stdin/stdout carry the protocol; the adapter's stderr goes where the
-  // language servers' does (discarded, or the debug log).
-  memset(&spawn, 0, sizeof(spawn));
-  adapterArgv(adapter, launch, argv);
-  spawn.argv = argv;
-  spawn.cwd = root;
-  spawn.stdin_pipe = 1;
-  debug_log = appDebugLogPath();
-  spawn.stderr_mode = debug_log ? OS_STDERR_FILE : OS_STDERR_DISCARD;
-  spawn.stderr_file = debug_log;
-  spawn.no_prompt = 1;
-  s.proc = os_proc_spawn(&spawn);
-  if (!s.proc) {
-    gfree(root);
-    cJSON_Delete(launch);
-    editorSetStatusMessage("Couldn't start %s", adapter->argv[0]);
-    return -1;
+  // language servers' does (discarded, or the debug log). One that
+  // listens on a port is connected to instead (dapTick()), and what it
+  // prints goes to the output.
+  s.tcp_port = 0;
+  if (!parseTcpAddress(adapter->argv[0])) {
+    memset(&spawn, 0, sizeof(spawn));
+    adapterArgv(adapter, launch, argv);
+    if (substitutePort(argv, port_args) != 0) {
+      gfree(root);
+      cJSON_Delete(launch);
+      editorSetStatusMessage("No free port for %s to listen on", adapter->argv[0]);
+      return -1;
+    }
+    spawn.argv = argv;
+    spawn.cwd = root;
+    spawn.stdin_pipe = !s.tcp_port;
+    debug_log = appDebugLogPath();
+    spawn.stderr_mode = s.tcp_port ? OS_STDERR_MERGE
+                        : debug_log ? OS_STDERR_FILE
+                                    : OS_STDERR_DISCARD;
+    spawn.stderr_file = debug_log;
+    spawn.no_prompt = 1;
+    s.proc = os_proc_spawn(&spawn);
+    if (!s.proc) {
+      s.tcp_port = 0;
+      gfree(root);
+      cJSON_Delete(launch);
+      editorSetStatusMessage("Couldn't start %s", adapter->argv[0]);
+      return -1;
+    }
   }
 
   jsonRpcStreamFree(&s.recv);
@@ -1302,16 +1449,11 @@ int dapStart(const char *ext, const char *launch_json) {
     all[i].verified = 0;
   breakpointsSetListener(onBreakpointsChanged);
 
-  args = cJSON_CreateObject();
-  cJSON_AddStringToObject(args, "clientID", "beluga");
-  cJSON_AddStringToObject(args, "clientName", "beluga");
-  cJSON_AddStringToObject(args, "adapterID", adapter->ext);
-  cJSON_AddStringToObject(args, "pathFormat", "path");
-  cJSON_AddBoolToObject(args, "linesStartAt1", 1);
-  cJSON_AddBoolToObject(args, "columnsStartAt1", 1);
-  cJSON_AddBoolToObject(args, "supportsVariableType", 1);
-  cJSON_AddBoolToObject(args, "supportsRunInTerminalRequest", 1);
-  sendRequest("initialize", args, onInitialize, NULL);
+  snprintf(s.adapter_id, sizeof(s.adapter_id), "%s", adapter->ext);
+  if (s.tcp_port)
+    s.connect_until = os_monotonic_ms() + DAP_CONNECT_TIMEOUT_MS; // dapTick() connects
+  else
+    sendInitialize();
 
   debugUiOpenPanel();
   editorSetStatusMessage("Starting %s…", s.adapter);

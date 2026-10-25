@@ -303,6 +303,20 @@ void os_server_close(OsServer *s);
  */
 OsConn *os_conn_connect(const char *name, char *err, size_t err_size);
 
+/**
+ * @brief Connects over TCP to `host` (a name or an address) on `port`,
+ * waiting at most `timeout_ms` for the other end to answer. The
+ * connection is used like a daemon's: os_conn_input(), os_conn_write(),
+ * os_conn_close(). (Debug adapters that listen on a port: dlv dap,
+ * codelldb, js-debug.)
+ * @return NULL, with a one-line reason in `err`, if it can't.
+ */
+OsConn *os_tcp_connect(const char *host, int port, int timeout_ms, char *err, size_t err_size);
+
+// A TCP port on 127.0.0.1 nothing listens on right now (for an adapter to
+// be told to listen on), or -1.
+int os_tcp_free_port(void);
+
 // What the other end sends; ends when it disconnects.
 OsStream *os_conn_input(OsConn *c);
 

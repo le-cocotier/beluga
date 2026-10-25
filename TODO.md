@@ -62,8 +62,6 @@ left after the first step:
 The Debug Adapter Protocol client (src/dap.c, src/debug_ui.c,
 src/breakpoints.c). What's left after the first step:
 
-- [ ] **[feature]** Adapters reached over TCP (delve's `dlv dap`, codelldb,
-  js-debug) need a TCP connect in `os.h`; only stdio adapters work.
 - [ ] **[feature]** Attach to a running process (`attach` with a pid
   picked from a list), exception breakpoints, watch expressions, values
   inline after the code while paused (the inlay hint drawing could carry

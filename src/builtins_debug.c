@@ -188,6 +188,11 @@ static cJSON *lispToJson(Lisp v);
  * extension wins, like lsp-server. An association list at the end gives
  * launch arguments for every session that doesn't set them itself:
  *   (dap-adapter "c" "xcrun" "lldb-dap" '(("sourceMap" ("/tmp" . "/private/tmp"))))
+ * An adapter that listens on a port rather than on stdio gets "{port}" in
+ * its arguments, replaced by a free local port that is then connected to:
+ *   (dap-adapter "go" "dlv" "dap" "--listen=127.0.0.1:{port}")
+ * and one already running is named by its address: (dap-adapter "js"
+ * "tcp:127.0.0.1:8123").
  * @return lisp_null()
  */
 Lisp l_dapAdapter(Lisp args, LispError *e, LispContext ctx) {

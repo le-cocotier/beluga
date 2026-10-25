@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 
@@ -366,6 +367,57 @@ def debugger_python_in_terminal(binary, repo):
         ed.quit()
 
 
+def python_session(ed, adapter_lisp):
+    """A breakpoint, a stop, a variable, then the end, with debugpy reached
+    as `adapter_lisp` (the arguments of dap-adapter after "py")."""
+    with open(ed.path('t.py'), 'w') as f:
+        f.write("total = 0\n"
+                "for i in range(3):\n"
+                "    total += i\n"
+                "print('total', total)\n")
+    with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+        f.write('\n(dap-adapter "py" %s)\n'
+                '(define (debug-t) (debug-start \'(("program" . "%s"))))\n'
+                % (adapter_lisp, ed.path('t.py')))
+    ed.start('t.py')
+    ed.wait_for('total')
+    ed.keys(DOWN, DOWN, *DEBUG, 'b')
+    ed.keys('\x1bx', delay=0.4)
+    ed.keys(*'debug-t', delay=0.02)
+    ed.keys('\r', delay=0.3)
+    ed.wait_for('stopped (breakpoint)', 30)
+    ed.wait_for('total = 0')
+    ed.keys(*DEBUG, 'b')  # off again, so it runs to the end
+    ed.keys(*DEBUG, 'c')
+    ed.wait_for('exited with code 0', 20)
+    ed.keys(*DEBUG, 'o', delay=0.5)
+    ed.wait_for('total 3')
+    ed.quit()
+
+
+def debugger_over_tcp(binary, repo):
+    """An adapter that listens on a port: started by beluga with {port}
+    in its arguments, or already running and named as tcp:HOST:PORT."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        python_session(ed, '"%s" "-m" "debugpy.adapter" "--host" "127.0.0.1" "--port" "{port}"'
+                       % sys.executable)
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        adapter = subprocess.Popen([sys.executable, '-m', 'debugpy.adapter', '--host',
+                                    '127.0.0.1', '--port', str(port)],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            python_session(ed, '"tcp:127.0.0.1:%d"' % port)
+        finally:
+            adapter.kill()
+            adapter.wait()
+
+
 def terminal_app_shift_function_keys(binary, repo):
     """Terminal.app sends Shift+F5-F12 as the VT220's F13-F20 codes
     (ESC [25~ ... ESC [34~); xterm and iTerm2 send ESC [15;2~."""
@@ -489,6 +541,7 @@ TESTS = [
     ('debugger-gdb', debugger_gdb),
     ('debugger-lldb', debugger_lldb),
     ('debugger-python-in-terminal', debugger_python_in_terminal),
+    ('debugger-over-tcp', debugger_over_tcp),
     ('terminal-app-shift-function-keys', terminal_app_shift_function_keys),
     ('tab-completion-list', tab_completion_list),
     ('terminal-alternate-screen', terminal_alternate_screen),
