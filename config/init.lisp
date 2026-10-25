@@ -105,6 +105,8 @@
 ;;                          ; instead of "nodejs", not alongside it — both
 ;;                          ; register "ts" and only the first one wins it.
 ;; (add-package "lisp")     ; no server needed — highlighting + comment toggle only
+;; (add-package "markdown") ; marksman optional — highlighting, heading outline,
+;;                          ; list continuation on ENTER work without it
 ;;
 ;; Note on CTRL-d: c/python/rust/php/lisp bind it only for their own file
 ;; types (map-key's optional last argument, e.g. "py" or (list "c" "h")),
