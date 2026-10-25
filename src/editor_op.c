@@ -147,11 +147,9 @@ void editorWatchStreams(RunLoopWatch *w, OsStream **streams, int *n_streams,
     }
   }
 
-  w->dap_index = -1;
-  if (dapStream() && *n_streams < max) {
-    w->dap_index = *n_streams;
-    streams[(*n_streams)++] = dapStream();
-  }
+  w->dap_first = *n_streams;
+  w->dap_count = dapStreams(streams + *n_streams, max - *n_streams);
+  *n_streams += w->dap_count;
 
   *n_streams += asyncProcessStreams(streams + *n_streams, max - *n_streams);
 }
@@ -183,8 +181,11 @@ void editorHandleStreams(const RunLoopWatch *w, const int *ready) {
     if (w->lsp_index[i] >= 0 && ready[w->lsp_index[i]])
       lspPoll(E.lsp_clients[i]);
 
-  if (w->dap_index >= 0 && ready[w->dap_index])
-    dapPoll();
+  for (i = 0; i < w->dap_count; i++)
+    if (ready[w->dap_first + i]) {
+      dapPoll(); // reads every session that has something
+      break;
+    }
 
   // Before keys: a finished process's callback (e.g. a refresh after
   // a push) should land before the next keystroke acts on its buffer.

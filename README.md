@@ -175,8 +175,9 @@ its terminal, or SIGTERM, stops it at once. Either way the unsaved changes are k
 
 Every window shares the daemon's buffers, Lisp config, language servers and terminal panes,
 and has its own splits, popups, status line and working directory (where its `beluga -c` ran:
-the open-file prompt and new terminal panes start there). Ctrl-x Ctrl-c in a window closes only that
-window. Several daemons can run side by side: `--daemon=work`, then `beluga -c --name=work`
+the open-file prompt and new terminal panes start there). Each project has its own debug
+session, so two projects can be debugged at once; a session's stops and output go to the window
+that last drove it. Ctrl-x Ctrl-c in a window closes only that window. Several daemons can run side by side: `--daemon=work`, then `beluga -c --name=work`
 and `beluga --kill=work`. On Unix the windows reach the daemon through a socket in a private
 directory (`$XDG_RUNTIME_DIR/beluga/`, else `/tmp/beluga-<uid>/`); on Windows through a named
 pipe only the current user can open.

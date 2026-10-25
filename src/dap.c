@@ -24,7 +24,7 @@
  * Answers can arrive after the state they were asked about is gone (the
  * program was continued, another frame selected): every request that
  * fills the stack or the variables carries the generation it was sent
- * in, and s.gen moves on whenever that state is thrown away, so a late
+ * in, and s->gen moves on whenever that state is thrown away, so a late
  * answer is dropped instead of landing in freed memory.
  */
 
@@ -57,6 +57,7 @@ extern EditorConfig E;
 #define DAP_MAX_PENDING 64
 #define DAP_STACK_LEVELS 64
 #define DAP_OUTPUT_LINES 2000
+#define DAP_MAX_SESSIONS 8
 
 typedef void (*DapHandler)(cJSON *response, void *ctx);
 
@@ -84,7 +85,10 @@ typedef struct
 static DapAdapter s_adapters[DAP_MAX_ADAPTERS];
 static int s_adapter_count;
 
-static struct
+// One debug session per project (its root, or the working directory
+// without one): in daemon mode each project can be debugged at once, each
+// from the window that started it.
+typedef struct
 {
     // The adapter's process (NULL for one reached at tcp:HOST:PORT) and,
     // for an adapter that listens on a port, the connection to it. The
@@ -127,12 +131,97 @@ static struct
     int scope_count;
     char stop_reason[64];
     int exit_code;
-} s = {.exit_code = -1};
+    // Output, oldest line first; a line still being written waits in
+    // partial. Kept after the session ends, until the next one starts.
+    char *output[DAP_OUTPUT_LINES];
+    int output_count;
+    char *partial;
+    // The project it was last started for: its output and exit code stay
+    // that project's after the session ends.
+    char last_root[OS_PATH_MAX];
+    int owner; // the daemon window it reports to (dapSetWindowHooks()), 0: none
+} DapSession;
 
-// Output, oldest line first; a line still being written waits in partial.
-static char *s_output[DAP_OUTPUT_LINES];
-static int s_output_count;
-static char *s_partial;
+static DapSession s_sessions[DAP_MAX_SESSIONS];
+// The session being acted on: the current project's for commands and the
+// panel (pickCurrent()), each in turn while the run loop reads them.
+static DapSession *s = &s_sessions[0];
+
+static int (*s_window_current)(void);
+static int (*s_window_enter)(int id);
+static void (*s_window_leave)(void);
+
+/**
+ * @brief The current project's session (its root, or the working
+ * directory): the one running for it, else the last one that ran for it
+ * (its output stays readable), else a free one.
+ */
+static DapSession *currentSession(void) {
+  static int initialised;
+  char *root = projectRootOrCwd();
+  DapSession *found = NULL;
+  DapSession *last = NULL;
+  DapSession *blank = NULL;
+  DapSession *idle = NULL;
+  DapSession *x;
+  int i;
+  if (!initialised) {
+    for (i = 0; i < DAP_MAX_SESSIONS; i++)
+      s_sessions[i].exit_code = -1;
+    initialised = 1;
+  }
+  for (i = 0; i < DAP_MAX_SESSIONS && !found; i++) {
+    x = &s_sessions[i];
+    if (x->state != DAP_OFF) {
+      if (root && x->root && os_path_equal(x->root, root))
+        found = x;
+    } else if (root && x->last_root[0] && os_path_equal(x->last_root, root)) {
+      last = x;
+    } else if (!x->last_root[0] && !blank) {
+      blank = x;
+    } else if (!idle) {
+      idle = x;
+    }
+  }
+  gfree(root);
+  if (found)
+    return found;
+  if (last)
+    return last;
+  if (blank)
+    return blank;
+  // Every slot is taken: an idle one is reused, else the first (which is
+  // running, so dapStart() refuses).
+  return idle ? idle : &s_sessions[0];
+}
+
+// currentSession(), for a command typed in a window: the session reports to
+// that window from now on (daemon mode: the window that started it may be
+// gone, or the user moved to another one).
+static DapSession *drivenSession(void) {
+  DapSession *x = currentSession();
+  if (x->state != DAP_OFF && s_window_current)
+    x->owner = s_window_current();
+  return x;
+}
+
+// Makes `x` the session acted on, and its window the current one (daemon
+// mode, when it still exists). leave() goes back.
+static int enter(DapSession *x) {
+  s = x;
+  return x->owner && s_window_enter ? s_window_enter(x->owner) : 0;
+}
+
+static void leave(const int entered) {
+  if (entered && s_window_leave)
+    s_window_leave();
+}
+
+void dapSetWindowHooks(int (*current)(void), int (*enter_window)(int id), void (*leave_window)(void)) {
+  s_window_current = current;
+  s_window_enter = enter_window;
+  s_window_leave = leave_window;
+}
 
 /***********************************************************************************************************************
  *
@@ -144,19 +233,19 @@ static void outputPushLine(const char *text, const size_t len) {
   char *line = utilStrndup(text, len);
   if (!line)
     return;
-  if (s_output_count == DAP_OUTPUT_LINES) {
-    gfree(s_output[0]);
-    memmove(s_output, s_output + 1, sizeof(char *) * (DAP_OUTPUT_LINES - 1));
-    s_output_count--;
+  if (s->output_count == DAP_OUTPUT_LINES) {
+    gfree(s->output[0]);
+    memmove(s->output, s->output + 1, sizeof(char *) * (DAP_OUTPUT_LINES - 1));
+    s->output_count--;
   }
-  s_output[s_output_count++] = line;
+  s->output[s->output_count++] = line;
 }
 
 static void outputFlushPartial(void) {
-  if (s_partial && *s_partial)
-    outputPushLine(s_partial, strlen(s_partial));
-  gfree(s_partial);
-  s_partial = NULL;
+  if (s->partial && *s->partial)
+    outputPushLine(s->partial, strlen(s->partial));
+  gfree(s->partial);
+  s->partial = NULL;
 }
 
 /**
@@ -168,9 +257,9 @@ static void outputAppend(const char *text) {
   char *p;
   char *start;
   char *nl;
-  joined = utilFormat("%s%s", s_partial ? s_partial : "", text);
-  gfree(s_partial);
-  s_partial = NULL;
+  joined = utilFormat("%s%s", s->partial ? s->partial : "", text);
+  gfree(s->partial);
+  s->partial = NULL;
   if (!joined)
     return;
   for (p = start = joined; *p; p++)
@@ -183,22 +272,23 @@ static void outputAppend(const char *text) {
     start = nl + 1;
   }
   if (*start)
-    s_partial = utilStrdup(start);
+    s->partial = utilStrdup(start);
   gfree(joined);
 }
 
 static void outputClear(void) {
   int i;
-  for (i = 0; i < s_output_count; i++)
-    gfree(s_output[i]);
-  s_output_count = 0;
-  gfree(s_partial);
-  s_partial = NULL;
+  for (i = 0; i < s->output_count; i++)
+    gfree(s->output[i]);
+  s->output_count = 0;
+  gfree(s->partial);
+  s->partial = NULL;
 }
 
 const char *const *dapOutputTail(int *count) {
-  *count = s_output_count;
-  return (const char *const *)s_output;
+  DapSession *c = currentSession();
+  *count = c->output_count;
+  return (const char *const *)c->output;
 }
 
 /***********************************************************************************************************************
@@ -219,63 +309,76 @@ static void freeVars(DapVar *vars, const int count) {
 }
 
 static void clearScopes(void) {
-  freeVars(s.scopes, s.scope_count);
-  s.scopes = NULL;
-  s.scope_count = 0;
+  freeVars(s->scopes, s->scope_count);
+  s->scopes = NULL;
+  s->scope_count = 0;
 }
 
 static void clearFrames(void) {
   int i;
-  for (i = 0; i < s.frame_count; i++) {
-    gfree(s.frames[i].name);
-    gfree(s.frames[i].path);
+  for (i = 0; i < s->frame_count; i++) {
+    gfree(s->frames[i].name);
+    gfree(s->frames[i].path);
   }
-  gfree(s.frames);
-  s.frames = NULL;
-  s.frame_count = 0;
-  s.selected = 0;
+  gfree(s->frames);
+  s->frames = NULL;
+  s->frame_count = 0;
+  s->selected = 0;
 }
 
 // The stack and variables no longer describe the program: drop them, and
 // any answer still on its way about them.
 static void forgetStoppedState(void) {
-  s.gen++;
+  s->gen++;
   clearScopes();
   clearFrames();
 }
 
 const DapFrame *dapFrames(int *count, int *selected) {
-  *count = s.frame_count;
-  *selected = s.selected;
-  return s.frames;
+  DapSession *c = currentSession();
+  *count = c->frame_count;
+  *selected = c->selected;
+  return c->frames;
 }
 
 DapVar *dapScopes(int *count) {
-  *count = s.scope_count;
-  return s.scopes;
+  DapSession *c = currentSession();
+  *count = c->scope_count;
+  return c->scopes;
 }
 
 int dapCurrentLine(const char **path, int *line) {
-  if (s.state != DAP_STOPPED || s.selected >= s.frame_count || !s.frames[s.selected].path)
+  DapSession *c = currentSession();
+  if (c->state != DAP_STOPPED || c->selected >= c->frame_count || !c->frames[c->selected].path)
     return 0;
-  *path = s.frames[s.selected].path;
-  *line = s.frames[s.selected].line;
+  *path = c->frames[c->selected].path;
+  *line = c->frames[c->selected].line;
   return 1;
 }
 
-DapState dapState(void) { return s.state; }
-const char *dapStopReason(void) { return s.stop_reason; }
-const char *dapAdapterName(void) { return s.adapter; }
-int dapExitCode(void) { return s.exit_code; }
-// The session's protocol stream, when there is one to read.
-OsStream *dapStream(void) {
-  if (s.conn)
-    return os_conn_input(s.conn);
-  return s.proc && !s.tcp_port ? os_proc_output(s.proc) : NULL;
+DapState dapState(void) { return currentSession()->state; }
+const char *dapStopReason(void) { return currentSession()->stop_reason; }
+const char *dapAdapterName(void) { return currentSession()->adapter; }
+int dapExitCode(void) { return currentSession()->exit_code; }
+
+// Session `x`'s protocol stream, when there is one to read.
+static OsStream *sessionStream(DapSession *x) {
+  if (x->conn)
+    return os_conn_input(x->conn);
+  return x->proc && !x->tcp_port ? os_proc_output(x->proc) : NULL;
+}
+
+int dapStreams(OsStream **streams, const int max) {
+  int n = 0;
+  int i;
+  for (i = 0; i < DAP_MAX_SESSIONS && n < max; i++)
+    if (sessionStream(&s_sessions[i]))
+      streams[n++] = sessionStream(&s_sessions[i]);
+  return n;
 }
 
 // A session is open and its adapter can be talked to.
-static int connected(void) { return s.conn || (s.proc && !s.tcp_port); }
+static int connected(void) { return s->conn || (s->proc && !s->tcp_port); }
 
 /***********************************************************************************************************************
  *
@@ -285,9 +388,9 @@ static int connected(void) { return s.conn || (s.proc && !s.tcp_port); }
 
 static void clearPending(void) {
   int i;
-  for (i = 0; i < s.pending_count; i++)
-    gfree(s.pending[i].ctx);
-  s.pending_count = 0;
+  for (i = 0; i < s->pending_count; i++)
+    gfree(s->pending[i].ctx);
+  s->pending_count = 0;
 }
 
 /**
@@ -299,13 +402,13 @@ static void clearPending(void) {
 static void dapWrite(const char *json) {
   char header[64];
   const size_t len = strlen(json);
-  if (!s.conn) {
-    jsonRpcWrite(s.proc, json, "DAP");
+  if (!s->conn) {
+    jsonRpcWrite(s->proc, json, "DAP");
     return;
   }
   snprintf(header, sizeof(header), "Content-Length: %u\r\n\r\n", (unsigned)len);
   appDebug("[DAP →] %s\n", json);
-  if (os_conn_write(s.conn, header, strlen(header)) == -1 || os_conn_write(s.conn, json, len) == -1)
+  if (os_conn_write(s->conn, header, strlen(header)) == -1 || os_conn_write(s->conn, json, len) == -1)
     appDebug("[DAP] the connection to the adapter is gone\n");
 }
 
@@ -319,7 +422,7 @@ static int sendRequest(const char *command, cJSON *arguments, const DapHandler h
     gfree(ctx);
     return -1;
   }
-  seq = ++s.seq;
+  seq = ++s->seq;
   msg = cJSON_CreateObject();
   cJSON_AddNumberToObject(msg, "seq", seq);
   cJSON_AddStringToObject(msg, "type", "request");
@@ -332,11 +435,11 @@ static int sendRequest(const char *command, cJSON *arguments, const DapHandler h
     dapWrite(text);
     gfree(text);
   }
-  if (handler && s.pending_count < DAP_MAX_PENDING) {
-    s.pending[s.pending_count].seq = seq;
-    s.pending[s.pending_count].handler = handler;
-    s.pending[s.pending_count].ctx = ctx;
-    s.pending_count++;
+  if (handler && s->pending_count < DAP_MAX_PENDING) {
+    s->pending[s->pending_count].seq = seq;
+    s->pending[s->pending_count].handler = handler;
+    s->pending[s->pending_count].ctx = ctx;
+    s->pending_count++;
   } else {
     gfree(ctx);
   }
@@ -345,7 +448,7 @@ static int sendRequest(const char *command, cJSON *arguments, const DapHandler h
 
 static cJSON *threadArguments(void) {
   cJSON *args = cJSON_CreateObject();
-  cJSON_AddNumberToObject(args, "threadId", s.thread_id);
+  cJSON_AddNumberToObject(args, "threadId", s->thread_id);
   return args;
 }
 
@@ -373,35 +476,35 @@ static const char *responseMessage(cJSON *response) {
  * read after the program is gone.
  */
 static void endSession(const char *message, const int run_hook) {
-  const int had_session = s.state != DAP_OFF;
+  const int had_session = s->state != DAP_OFF;
   outputFlushPartial();
   forgetStoppedState();
   clearPending();
-  // s.recv stays: this may run from inside dapFeed(), which is still
+  // s->recv stays: this may run from inside dapFeed(), which is still
   // reading it. It's emptied when the next session starts.
-  cJSON_Delete(s.launch);
-  s.launch = NULL;
-  gfree(s.root);
-  s.root = NULL;
-  if (s.conn) {
-    os_conn_close(s.conn);
-    s.conn = NULL;
+  cJSON_Delete(s->launch);
+  s->launch = NULL;
+  gfree(s->root);
+  s->root = NULL;
+  if (s->conn) {
+    os_conn_close(s->conn);
+    s->conn = NULL;
   }
-  s.tcp_port = 0;
-  s.connect_until = 0;
-  if (s.proc) {
-    os_proc_free(s.proc);
-    s.proc = NULL;
+  s->tcp_port = 0;
+  s->connect_until = 0;
+  if (s->proc) {
+    os_proc_free(s->proc);
+    s->proc = NULL;
   }
-  s.state = DAP_OFF;
-  s.configured = 0;
-  s.ending_at = 0;
-  s.disconnected = 0;
+  s->state = DAP_OFF;
+  s->configured = 0;
+  s->ending_at = 0;
+  s->disconnected = 0;
   if (message)
     editorSetStatusMessage("%s", message);
   debugUiRefresh();
   if (had_session && run_hook && E.initialized)
-    runHooks("debug-exited", lisp_cons(lisp_make_int(s.exit_code), lisp_null(), E.ctx));
+    runHooks("debug-exited", lisp_cons(lisp_make_int(s->exit_code), lisp_null(), E.ctx));
 }
 
 /**
@@ -410,19 +513,24 @@ static void endSession(const char *message, const int run_hook) {
  */
 static void stopSession(const int run_hook) {
   cJSON *args;
-  if (s.state == DAP_OFF)
+  if (s->state == DAP_OFF)
     return;
   args = cJSON_CreateObject();
   cJSON_AddBoolToObject(args, "terminateDebuggee", 1);
   sendRequest("disconnect", args, NULL, NULL);
   // Give it a moment to end the program and exit on its own;
   // os_proc_free() kills whatever is left.
-  if (s.proc)
-    os_proc_wait(s.proc, 1000, NULL);
+  if (s->proc)
+    os_proc_wait(s->proc, 1000, NULL);
   endSession("Debug session ended", run_hook);
 }
 
-void dapStop(void) { stopSession(1); }
+void dapStop(void) {
+  DapSession *saved = s;
+  s = drivenSession();
+  stopSession(1);
+  s = saved;
+}
 
 /***********************************************************************************************************************
  *
@@ -433,8 +541,8 @@ void dapStop(void) { stopSession(1); }
 static void onLaunch(cJSON *response, void *ctx);
 
 static void sendLaunch(void) {
-  cJSON *launch = s.launch;
-  s.launch = NULL;
+  cJSON *launch = s->launch;
+  s->launch = NULL;
   if (launch)
     sendRequest("launch", launch, onLaunch, NULL);
 }
@@ -445,19 +553,19 @@ static void onConfigurationDone(cJSON *response, void *ctx) {
   // program on launch; gdb 16 answers "launch or attach not specified"
   // and only runs it on a configurationDone after launch, which has gone
   // out by now.
-  if (s.config_early && !responseOk(response) && s.state != DAP_OFF)
+  if (s->config_early && !responseOk(response) && s->state != DAP_OFF)
     sendRequest("configurationDone", NULL, NULL, NULL);
-  s.config_early = 0;
+  s->config_early = 0;
 }
 
 // The program may run once the adapter has every breakpoint.
 static void configurationDone(void) {
-  s.config_waiting = -1;
-  s.config_early = s.launch != NULL;
+  s->config_waiting = -1;
+  s->config_early = s->launch != NULL;
   sendRequest("configurationDone", NULL, onConfigurationDone, NULL);
   sendLaunch(); // if it waited for this
-  if (s.state == DAP_STARTING)
-    s.state = DAP_RUNNING;
+  if (s->state == DAP_STARTING)
+    s->state = DAP_RUNNING;
 }
 
 static void onSetBreakpoints(cJSON *response, void *ctx) {
@@ -468,7 +576,7 @@ static void onSetBreakpoints(cJSON *response, void *ctx) {
   Breakpoint *all;
   int count;
   int i;
-  if (s.config_waiting > 0 && --s.config_waiting == 0)
+  if (s->config_waiting > 0 && --s->config_waiting == 0)
     configurationDone();
   if (!responseOk(response)) {
     editorSetStatusMessage("Breakpoints in %s: %s", path, responseMessage(response));
@@ -527,7 +635,7 @@ static int sendAllBreakpoints(void) {
   all = breakpointsAll(&count);
   for (i = 0; i < count; i++)
     if ((i == 0 || strcmp(all[i].path, all[i - 1].path) != 0) &&
-        (!s.root || utilPathIsUnder(all[i].path, s.root))) {
+        (!s->root || utilPathIsUnder(all[i].path, s->root))) {
       sendBreakpoints(all[i].path);
       sent++;
     }
@@ -536,8 +644,14 @@ static int sendAllBreakpoints(void) {
 
 // breakpoints.c's listener: a file's breakpoints changed.
 static void onBreakpointsChanged(const char *path) {
-  if (connected() && s.configured && (!s.root || utilPathIsUnder(path, s.root)))
-    sendBreakpoints(path);
+  DapSession *saved = s;
+  int i;
+  for (i = 0; i < DAP_MAX_SESSIONS; i++) {
+    s = &s_sessions[i];
+    if (connected() && s->configured && (!s->root || utilPathIsUnder(path, s->root)))
+      sendBreakpoints(path);
+  }
+  s = saved;
 }
 
 static void onBreakpointEvent(cJSON *body) {
@@ -573,7 +687,7 @@ static void onVariables(cJSON *response, void *ctx) {
   DapVar *children;
   int n;
   int i;
-  if (req->gen != s.gen)
+  if (req->gen != s->gen)
     return; // about a stop that's gone
   var = req->var;
   var->loaded = 1;
@@ -609,7 +723,7 @@ static void requestVariables(DapVar *var) {
   VarRequest *req = galloc(sizeof(VarRequest));
   if (!req)
     return;
-  req->gen = s.gen;
+  req->gen = s->gen;
   req->var = var;
   args = cJSON_CreateObject();
   cJSON_AddNumberToObject(args, "variablesReference", var->ref);
@@ -625,13 +739,16 @@ static int varInTree(const DapVar *var, const DapVar *vars, const int count) {
 }
 
 void dapToggleVar(DapVar *var) {
+  DapSession *saved = s;
+  s = drivenSession();
   // The panel's row may be older than the tree; only a node still in it.
-  if (!var || !varInTree(var, s.scopes, s.scope_count) || var->ref <= 0)
-    return;
-  var->expanded = !var->expanded;
-  if (var->expanded && !var->loaded)
-    requestVariables(var);
-  debugUiRefresh();
+  if (var && varInTree(var, s->scopes, s->scope_count) && var->ref > 0) {
+    var->expanded = !var->expanded;
+    if (var->expanded && !var->loaded)
+      requestVariables(var);
+    debugUiRefresh();
+  }
+  s = saved;
 }
 
 static void onScopes(cJSON *response, void *ctx) {
@@ -641,14 +758,14 @@ static void onScopes(cJSON *response, void *ctx) {
   const char *hint;
   int n;
   int i;
-  if (gen != s.gen || !responseOk(response))
+  if (gen != s->gen || !responseOk(response))
     return;
   list = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(response, "body"),
                                           "scopes");
   n = cJSON_GetArraySize(list);
   clearScopes();
-  s.scopes = n > 0 ? gcalloc((size_t)n, sizeof(DapVar)) : NULL;
-  if (!s.scopes) {
+  s->scopes = n > 0 ? gcalloc((size_t)n, sizeof(DapVar)) : NULL;
+  if (!s->scopes) {
     debugUiRefresh();
     return;
   }
@@ -656,44 +773,53 @@ static void onScopes(cJSON *response, void *ctx) {
   cJSON_ArrayForEach(item, list) {
     if (i >= n)
       break;
-    s.scopes[i].name = jsonString(item, "name");
-    s.scopes[i].ref = (int)cJSON_GetNumberValue(
+    s->scopes[i].name = jsonString(item, "name");
+    s->scopes[i].ref = (int)cJSON_GetNumberValue(
         cJSON_GetObjectItemCaseSensitive(item, "variablesReference"));
     i++;
   }
-  s.scope_count = i;
+  s->scope_count = i;
   // Open the cheap ones (locals, arguments); "expensive" ones (globals)
   // and the registers wait to be opened from the panel.
   i = 0;
   cJSON_ArrayForEach(item, list) {
-    if (i >= s.scope_count)
+    if (i >= s->scope_count)
       break;
     hint = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "presentationHint"));
     if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item, "expensive")) &&
-        !(hint && !strcmp(hint, "registers")) && s.scopes[i].ref > 0) {
-      s.scopes[i].expanded = 1;
-      requestVariables(&s.scopes[i]);
+        !(hint && !strcmp(hint, "registers")) && s->scopes[i].ref > 0) {
+      s->scopes[i].expanded = 1;
+      requestVariables(&s->scopes[i]);
     }
     i++;
   }
   debugUiRefresh();
 }
 
+static void selectFrame(int index);
+
 void dapSelectFrame(const int index) {
+  DapSession *saved = s;
+  s = drivenSession();
+  selectFrame(index);
+  s = saved;
+}
+
+static void selectFrame(const int index) {
   cJSON *args;
   int *gen;
-  if (s.state != DAP_STOPPED || index < 0 || index >= s.frame_count)
+  if (s->state != DAP_STOPPED || index < 0 || index >= s->frame_count)
     return;
-  s.gen++;
+  s->gen++;
   clearScopes();
-  s.selected = index;
-  if (s.frames[index].path)
-    debugUiShowLocation(s.frames[index].path, s.frames[index].line);
+  s->selected = index;
+  if (s->frames[index].path)
+    debugUiShowLocation(s->frames[index].path, s->frames[index].line);
   gen = galloc(sizeof(int));
   if (gen)
-    *gen = s.gen;
+    *gen = s->gen;
   args = cJSON_CreateObject();
-  cJSON_AddNumberToObject(args, "frameId", s.frames[index].id);
+  cJSON_AddNumberToObject(args, "frameId", s->frames[index].id);
   sendRequest("scopes", args, onScopes, gen);
   debugUiRefresh();
 }
@@ -707,7 +833,7 @@ static void onStackTrace(cJSON *response, void *ctx) {
   int i;
   int first_with_source;
   const char *path;
-  if (gen != s.gen)
+  if (gen != s->gen)
     return;
   if (!responseOk(response)) {
     editorSetStatusMessage("Call stack: %s", responseMessage(response));
@@ -717,41 +843,41 @@ static void onStackTrace(cJSON *response, void *ctx) {
                                           "stackFrames");
   n = cJSON_GetArraySize(list);
   clearFrames();
-  s.frames = n > 0 ? gcalloc((size_t)n, sizeof(DapFrame)) : NULL;
+  s->frames = n > 0 ? gcalloc((size_t)n, sizeof(DapFrame)) : NULL;
   first_with_source = -1;
   i = 0;
   cJSON_ArrayForEach(item, list) {
-    if (!s.frames || i >= n)
+    if (!s->frames || i >= n)
       break;
-    s.frames[i].id = (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(item, "id"));
-    s.frames[i].name = jsonString(item, "name");
+    s->frames[i].id = (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(item, "id"));
+    s->frames[i].name = jsonString(item, "name");
     source = cJSON_GetObjectItemCaseSensitive(item, "source");
     // A source with a sourceReference only exists inside the adapter
     // (lldb-dap's disassembly, "/usr/lib/dyld`start"): no file to open.
     if (cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(source, "sourceReference")) > 0)
-      s.frames[i].path = NULL;
+      s->frames[i].path = NULL;
     else
-      s.frames[i].path = jsonString(source, "path");
-    s.frames[i].line =
+      s->frames[i].path = jsonString(source, "path");
+    s->frames[i].line =
         (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(item, "line")) - 1;
-    if (s.frames[i].line < 0)
-      s.frames[i].line = 0;
-    if (first_with_source < 0 && s.frames[i].path)
+    if (s->frames[i].line < 0)
+      s->frames[i].line = 0;
+    if (first_with_source < 0 && s->frames[i].path)
       first_with_source = i;
     i++;
   }
-  s.frame_count = i;
+  s->frame_count = i;
   // Stopped inside code without debug info (a library): show the first
   // frame that has a source file.
-  dapSelectFrame(first_with_source >= 0 ? first_with_source : 0);
+  selectFrame(first_with_source >= 0 ? first_with_source : 0);
   debugUiRefresh();
 
   if (E.initialized) {
-    path = s.frame_count > 0 ? s.frames[s.selected].path : NULL;
+    path = s->frame_count > 0 ? s->frames[s->selected].path : NULL;
     runHooks("debug-stopped",
              lisp_cons(path ? lisp_make_string2(path, E.ctx) : lisp_false(),
-                       lisp_cons(lisp_make_int(s.frame_count > 0 ? s.frames[s.selected].line + 1 : 0),
-                                 lisp_cons(lisp_make_string2(s.stop_reason, E.ctx), lisp_null(), E.ctx),
+                       lisp_cons(lisp_make_int(s->frame_count > 0 ? s->frames[s->selected].line + 1 : 0),
+                                 lisp_cons(lisp_make_string2(s->stop_reason, E.ctx), lisp_null(), E.ctx),
                                  E.ctx),
                        E.ctx));
   }
@@ -778,7 +904,7 @@ static void onInitialize(cJSON *response, void *ctx) {
     editorSetStatusMessage("The debug adapter refused to start: %s", responseMessage(response));
     return;
   }
-  s.launch_at = os_monotonic_ms() + LAUNCH_WAIT_MS;
+  s->launch_at = os_monotonic_ms() + LAUNCH_WAIT_MS;
 }
 
 #define TERMINATED_WAIT_MS 300  // for the program's last output after "terminated"
@@ -787,7 +913,7 @@ static void onInitialize(cJSON *response, void *ctx) {
 // The program is gone: ends the session, saying how it exited.
 static void endTerminated(void) {
   char message[64];
-  snprintf(message, sizeof(message), "The program exited with code %d", s.exit_code);
+  snprintf(message, sizeof(message), "The program exited with code %d", s->exit_code);
   endSession(message, 1);
 }
 
@@ -802,38 +928,52 @@ static void tickTcp(void) {
   char err[300];
   char message[400];
   long n;
-  if (s.proc && s.tcp_port) {
-    while ((n = os_stream_read(os_proc_output(s.proc), chunk, sizeof(chunk) - 1, 0)) > 0) {
+  if (s->proc && s->tcp_port) {
+    while ((n = os_stream_read(os_proc_output(s->proc), chunk, sizeof(chunk) - 1, 0)) > 0) {
       chunk[n] = '\0';
       outputAppend(chunk);
     }
   }
-  if (!s.connect_until)
+  if (!s->connect_until)
     return;
-  s.conn = os_tcp_connect(s.tcp_host, s.tcp_port, 20, err, sizeof(err));
-  if (s.conn) {
-    s.connect_until = 0;
+  s->conn = os_tcp_connect(s->tcp_host, s->tcp_port, 20, err, sizeof(err));
+  if (s->conn) {
+    s->connect_until = 0;
     sendInitialize();
-  } else if (os_monotonic_ms() >= s.connect_until ||
-             (s.proc && os_proc_wait(s.proc, 0, NULL) == 1)) {
+  } else if (os_monotonic_ms() >= s->connect_until ||
+             (s->proc && os_proc_wait(s->proc, 0, NULL) == 1)) {
     snprintf(message, sizeof(message), "Couldn't connect to the debug adapter: %s", err);
     endSession(message, 1);
   }
 }
 
-void dapTick(void) {
+static void tickSession(void) {
   tickTcp();
-  if (s.launch && s.launch_at && os_monotonic_ms() >= s.launch_at)
+  if (s->launch && s->launch_at && os_monotonic_ms() >= s->launch_at)
     sendLaunch();
-  if (s.ending_at && os_monotonic_ms() >= s.ending_at) {
-    if (s.disconnected) {
+  if (s->ending_at && os_monotonic_ms() >= s->ending_at) {
+    if (s->disconnected) {
       endTerminated();
     } else {
       sendRequest("disconnect", NULL, NULL, NULL);
-      s.disconnected = 1;
-      s.ending_at = os_monotonic_ms() + DISCONNECT_WAIT_MS;
+      s->disconnected = 1;
+      s->ending_at = os_monotonic_ms() + DISCONNECT_WAIT_MS;
     }
   }
+}
+
+void dapTick(void) {
+  DapSession *saved = s;
+  int entered;
+  int i;
+  for (i = 0; i < DAP_MAX_SESSIONS; i++) {
+    if (s_sessions[i].state == DAP_OFF)
+      continue;
+    entered = enter(&s_sessions[i]);
+    tickSession();
+    leave(entered);
+  }
+  s = saved;
 }
 
 static void onEvaluate(cJSON *response, void *ctx) {
@@ -875,7 +1015,7 @@ static void respond(cJSON *request, const int success, cJSON *body, const char *
   cJSON *seq = cJSON_GetObjectItemCaseSensitive(request, "seq");
   const char *command = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(request, "command"));
   msg = cJSON_CreateObject();
-  cJSON_AddNumberToObject(msg, "seq", ++s.seq);
+  cJSON_AddNumberToObject(msg, "seq", ++s->seq);
   cJSON_AddStringToObject(msg, "type", "response");
   cJSON_AddNumberToObject(msg, "request_seq", cJSON_GetNumberValue(seq));
   cJSON_AddStringToObject(msg, "command", command ? command : "");
@@ -1027,24 +1167,24 @@ static void onStopped(cJSON *body) {
   cJSON *args;
   int *gen;
   if (cJSON_IsNumber(thread))
-    s.thread_id = thread->valueint;
+    s->thread_id = thread->valueint;
   // An "exception" says more in its description: lldb's crashes
   // ("EXC_BAD_ACCESS (code=1, address=0x0)"), and its pauses, which are a
   // "signal SIGSTOP".
   if (reason && !strcmp(reason, "exception") && description && *description)
     reason = description;
-  snprintf(s.stop_reason, sizeof(s.stop_reason), "%s", reason ? reason : "paused");
-  s.state = DAP_STOPPED;
+  snprintf(s->stop_reason, sizeof(s->stop_reason), "%s", reason ? reason : "paused");
+  s->state = DAP_STOPPED;
   outputFlushPartial();
   forgetStoppedState();
   gen = galloc(sizeof(int));
   if (gen)
-    *gen = s.gen;
+    *gen = s->gen;
   args = threadArguments();
   cJSON_AddNumberToObject(args, "startFrame", 0);
   cJSON_AddNumberToObject(args, "levels", DAP_STACK_LEVELS);
   sendRequest("stackTrace", args, onStackTrace, gen);
-  editorSetStatusMessage("Stopped: %s", s.stop_reason);
+  editorSetStatusMessage("Stopped: %s", s->stop_reason);
   debugUiRefresh();
 }
 
@@ -1054,14 +1194,14 @@ static void onEvent(const char *event, cJSON *body) {
     // The adapter is ready for the breakpoints; configurationDone, once
     // they're all answered, lets the program run. (gdb answers it with an
     // error, "notStopped", and runs the program anyway.)
-    s.configured = 1;
-    s.config_waiting = sendAllBreakpoints();
-    if (s.config_waiting == 0)
+    s->configured = 1;
+    s->config_waiting = sendAllBreakpoints();
+    if (s->config_waiting == 0)
       configurationDone();
   } else if (!strcmp(event, "stopped")) {
     onStopped(body);
   } else if (!strcmp(event, "continued")) {
-    s.state = DAP_RUNNING;
+    s->state = DAP_RUNNING;
     forgetStoppedState();
   } else if (!strcmp(event, "output")) {
     item = cJSON_GetObjectItemCaseSensitive(body, "category");
@@ -1072,19 +1212,19 @@ static void onEvent(const char *event, cJSON *body) {
       outputAppend(cJSON_GetStringValue(item));
   } else if (!strcmp(event, "thread")) {
     item = cJSON_GetObjectItemCaseSensitive(body, "threadId");
-    if (s.thread_id == 0 && cJSON_IsNumber(item))
-      s.thread_id = item->valueint;
+    if (s->thread_id == 0 && cJSON_IsNumber(item))
+      s->thread_id = item->valueint;
   } else if (!strcmp(event, "breakpoint")) {
     onBreakpointEvent(body);
   } else if (!strcmp(event, "exited")) {
-    s.exit_code = (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(body, "exitCode"));
+    s->exit_code = (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(body, "exitCode"));
   } else if (!strcmp(event, "terminated")) {
     // gdb 16 can send the program's last output after this, and drops it
     // if disconnect comes first: disconnect waits a moment (dapTick()).
     // Most adapters exit on their own instead; the session ends when the
     // adapter does (dapPoll()).
-    if (!s.ending_at)
-      s.ending_at = os_monotonic_ms() + TERMINATED_WAIT_MS;
+    if (!s->ending_at)
+      s->ending_at = os_monotonic_ms() + TERMINATED_WAIT_MS;
     return;
   }
   debugUiRefresh();
@@ -1103,12 +1243,12 @@ static void handleMessage(const char *json) {
   type = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(msg, "type"));
   if (type && !strcmp(type, "response")) {
     seq = (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(msg, "request_seq"));
-    for (i = 0; i < s.pending_count; i++) {
-      if (s.pending[i].seq != seq)
+    for (i = 0; i < s->pending_count; i++) {
+      if (s->pending[i].seq != seq)
         continue;
-      handler = s.pending[i].handler;
-      ctx = s.pending[i].ctx;
-      s.pending[i] = s.pending[--s.pending_count];
+      handler = s->pending[i].handler;
+      ctx = s->pending[i].ctx;
+      s->pending[i] = s->pending[--s->pending_count];
       handler(msg, ctx);
       gfree(ctx);
       break;
@@ -1130,37 +1270,54 @@ static void onMessage(void *ctx, const char *body) {
 }
 
 void dapFeed(const char *data, const size_t len) {
-  jsonRpcStreamFeed(&s.recv, data, len, onMessage, NULL);
+  DapSession *saved = s;
+  s = currentSession();
+  jsonRpcStreamFeed(&s->recv, data, len, onMessage, NULL);
+  s = saved;
 }
 
-void dapPoll(void) {
+static void pollSession(void) {
   char chunk[4096];
   long n = 0;
   int code;
   char message[160];
-  if (!dapStream())
+  if (!sessionStream(s))
     return;
-  while (dapStream() && (n = os_stream_read(dapStream(), chunk, sizeof(chunk), 0)) > 0)
-    dapFeed(chunk, (size_t)n);
-  if (dapStream() && n < 0) {
+  while (sessionStream(s) && (n = os_stream_read(sessionStream(s), chunk, sizeof(chunk), 0)) > 0)
+    jsonRpcStreamFeed(&s->recv, chunk, (size_t)n, onMessage, NULL);
+  if (sessionStream(s) && n < 0) {
     // The adapter's output has ended: it exited (or crashed), or closed
     // the connection.
-    if (s.ending_at) {
+    if (s->ending_at) {
       endTerminated();
       return;
     }
     code = -1;
-    if (s.proc)
-      os_proc_wait(s.proc, 100, &code);
-    if (s.conn)
-      snprintf(message, sizeof(message), "The debug adapter %s closed the connection", s.adapter);
+    if (s->proc)
+      os_proc_wait(s->proc, 100, &code);
+    if (s->conn)
+      snprintf(message, sizeof(message), "The debug adapter %s closed the connection", s->adapter);
     else if (code == 127)
       snprintf(message, sizeof(message), "Couldn't run the debug adapter %s: is it installed?",
-               s.adapter);
+               s->adapter);
     else
-      snprintf(message, sizeof(message), "The debug adapter %s exited (code %d)", s.adapter, code);
+      snprintf(message, sizeof(message), "The debug adapter %s exited (code %d)", s->adapter, code);
     endSession(message, 1);
   }
+}
+
+void dapPoll(void) {
+  DapSession *saved = s;
+  int entered;
+  int i;
+  for (i = 0; i < DAP_MAX_SESSIONS; i++) {
+    if (!sessionStream(&s_sessions[i]))
+      continue;
+    entered = enter(&s_sessions[i]);
+    pollSession();
+    leave(entered);
+  }
+  s = saved;
 }
 
 /***********************************************************************************************************************
@@ -1170,20 +1327,23 @@ void dapPoll(void) {
  **********************************************************************************************************************/
 
 static int requireStopped(void) {
-  if (s.state == DAP_STOPPED)
+  if (s->state == DAP_STOPPED)
     return 1;
-  editorSetStatusMessage(s.state == DAP_OFF ? "No debug session (CTRL-x B c starts one)"
+  editorSetStatusMessage(s->state == DAP_OFF ? "No debug session (CTRL-x B c starts one)"
                                             : "The program is running (CTRL-x B p pauses it)");
   return 0;
 }
 
 static void resume(const char *command) {
-  if (!requireStopped())
-    return;
-  sendRequest(command, threadArguments(), NULL, NULL);
-  s.state = DAP_RUNNING;
-  forgetStoppedState();
-  debugUiRefresh();
+  DapSession *saved = s;
+  s = drivenSession();
+  if (requireStopped()) {
+    sendRequest(command, threadArguments(), NULL, NULL);
+    s->state = DAP_RUNNING;
+    forgetStoppedState();
+    debugUiRefresh();
+  }
+  s = saved;
 }
 
 void dapContinue(void) { resume("continue"); }
@@ -1192,26 +1352,31 @@ void dapStepIn(void) { resume("stepIn"); }
 void dapStepOut(void) { resume("stepOut"); }
 
 void dapPause(void) {
-  if (s.state != DAP_RUNNING) {
-    editorSetStatusMessage(s.state == DAP_STOPPED ? "The program is already paused"
+  DapSession *saved = s;
+  s = drivenSession();
+  if (s->state != DAP_RUNNING)
+    editorSetStatusMessage(s->state == DAP_STOPPED ? "The program is already paused"
                                                   : "No debug session");
-    return;
-  }
-  sendRequest("pause", threadArguments(), NULL, NULL);
+  else
+    sendRequest("pause", threadArguments(), NULL, NULL);
+  s = saved;
 }
 
 void dapEvaluate(const char *expression, const int repl) {
+  DapSession *saved = s;
   cJSON *args;
-  if (s.state == DAP_OFF) {
+  s = drivenSession();
+  if (s->state == DAP_OFF) {
     editorSetStatusMessage("No debug session (CTRL-x B c starts one)");
-    return;
+  } else {
+    args = cJSON_CreateObject();
+    cJSON_AddStringToObject(args, "expression", expression);
+    cJSON_AddStringToObject(args, "context", repl ? "repl" : "watch");
+    if (s->state == DAP_STOPPED && s->selected < s->frame_count)
+      cJSON_AddNumberToObject(args, "frameId", s->frames[s->selected].id);
+    sendRequest("evaluate", args, onEvaluate, utilStrdup(expression));
   }
-  args = cJSON_CreateObject();
-  cJSON_AddStringToObject(args, "expression", expression);
-  cJSON_AddStringToObject(args, "context", repl ? "repl" : "watch");
-  if (s.state == DAP_STOPPED && s.selected < s.frame_count)
-    cJSON_AddNumberToObject(args, "frameId", s.frames[s.selected].id);
-  sendRequest("evaluate", args, onEvaluate, utilStrdup(expression));
+  s = saved;
 }
 
 /***********************************************************************************************************************
@@ -1307,7 +1472,7 @@ static void sendInitialize(void) {
   cJSON *args = cJSON_CreateObject();
   cJSON_AddStringToObject(args, "clientID", "beluga");
   cJSON_AddStringToObject(args, "clientName", "beluga");
-  cJSON_AddStringToObject(args, "adapterID", s.adapter_id);
+  cJSON_AddStringToObject(args, "adapterID", s->adapter_id);
   cJSON_AddStringToObject(args, "pathFormat", "path");
   cJSON_AddBoolToObject(args, "linesStartAt1", 1);
   cJSON_AddBoolToObject(args, "columnsStartAt1", 1);
@@ -1318,7 +1483,7 @@ static void sendInitialize(void) {
 
 /**
  * @brief "tcp:HOST:PORT" (an adapter already listening there) into
- * s.tcp_host and s.tcp_port. @return 1 if `spec` is one.
+ * s->tcp_host and s->tcp_port. @return 1 if `spec` is one.
  */
 static int parseTcpAddress(const char *spec) {
   const char *colon;
@@ -1326,21 +1491,21 @@ static int parseTcpAddress(const char *spec) {
   if (strncmp(spec, "tcp:", 4) != 0)
     return 0;
   colon = strrchr(spec + 4, ':');
-  if (!colon || colon == spec + 4 || (size_t)(colon - spec - 4) >= sizeof(s.tcp_host))
+  if (!colon || colon == spec + 4 || (size_t)(colon - spec - 4) >= sizeof(s->tcp_host))
     return 0;
   port = atoi(colon + 1);
   if (port <= 0 || port > 65535)
     return 0;
-  memcpy(s.tcp_host, spec + 4, (size_t)(colon - spec - 4));
-  s.tcp_host[colon - spec - 4] = '\0';
-  s.tcp_port = port;
+  memcpy(s->tcp_host, spec + 4, (size_t)(colon - spec - 4));
+  s->tcp_host[colon - spec - 4] = '\0';
+  s->tcp_port = port;
   return 1;
 }
 
 /**
  * @brief Replaces "{port}" in the arguments of `argv` by a free local port,
  * for an adapter told where to listen (dlv dap --listen=127.0.0.1:{port}).
- * The new strings go in `storage`. Sets s.tcp_host and s.tcp_port when
+ * The new strings go in `storage`. Sets s->tcp_host and s->tcp_port when
  * there was one. @return 0, or -1 when no port could be found.
  */
 static int substitutePort(const char **argv, char storage[][256]) {
@@ -1357,13 +1522,24 @@ static int substitutePort(const char **argv, char storage[][256]) {
     argv[i] = storage[i];
   }
   if (port > 0) {
-    snprintf(s.tcp_host, sizeof(s.tcp_host), "127.0.0.1");
-    s.tcp_port = port;
+    snprintf(s->tcp_host, sizeof(s->tcp_host), "127.0.0.1");
+    s->tcp_port = port;
   }
   return 0;
 }
 
+static int startSession(const char *ext, const char *launch_json);
+
 int dapStart(const char *ext, const char *launch_json) {
+  DapSession *saved = s;
+  int rc;
+  s = currentSession();
+  rc = startSession(ext, launch_json);
+  s = saved;
+  return rc;
+}
+
+static int startSession(const char *ext, const char *launch_json) {
   const DapAdapter *adapter;
   cJSON *launch;
   OsSpawn spawn;
@@ -1374,8 +1550,8 @@ int dapStart(const char *ext, const char *launch_json) {
   Breakpoint *all;
   int count;
   int i;
-  if (s.state != DAP_OFF) {
-    editorSetStatusMessage("A debug session is already running (CTRL-x B q stops it)");
+  if (s->state != DAP_OFF) {
+    editorSetStatusMessage("This project's debug session is already running (CTRL-x B q stops it)");
     return -1;
   }
   adapter = findAdapter(ext);
@@ -1398,7 +1574,7 @@ int dapStart(const char *ext, const char *launch_json) {
   // language servers' does (discarded, or the debug log). One that
   // listens on a port is connected to instead (dapTick()), and what it
   // prints goes to the output.
-  s.tcp_port = 0;
+  s->tcp_port = 0;
   if (!parseTcpAddress(adapter->argv[0])) {
     memset(&spawn, 0, sizeof(spawn));
     adapterArgv(adapter, launch, argv);
@@ -1410,16 +1586,16 @@ int dapStart(const char *ext, const char *launch_json) {
     }
     spawn.argv = argv;
     spawn.cwd = root;
-    spawn.stdin_pipe = !s.tcp_port;
+    spawn.stdin_pipe = !s->tcp_port;
     debug_log = appDebugLogPath();
-    spawn.stderr_mode = s.tcp_port ? OS_STDERR_MERGE
+    spawn.stderr_mode = s->tcp_port ? OS_STDERR_MERGE
                         : debug_log ? OS_STDERR_FILE
                                     : OS_STDERR_DISCARD;
     spawn.stderr_file = debug_log;
     spawn.no_prompt = 1;
-    s.proc = os_proc_spawn(&spawn);
-    if (!s.proc) {
-      s.tcp_port = 0;
+    s->proc = os_proc_spawn(&spawn);
+    if (!s->proc) {
+      s->tcp_port = 0;
       gfree(root);
       cJSON_Delete(launch);
       editorSetStatusMessage("Couldn't start %s", adapter->argv[0]);
@@ -1427,47 +1603,57 @@ int dapStart(const char *ext, const char *launch_json) {
     }
   }
 
-  jsonRpcStreamFree(&s.recv);
-  s.seq = 0;
-  s.gen++;
-  s.thread_id = 0;
-  s.exit_code = -1;
-  s.configured = 0;
-  s.config_waiting = 0;
-  s.config_early = 0;
-  s.ending_at = 0;
-  s.disconnected = 0;
-  s.stop_reason[0] = '\0';
-  s.launch = launch;
-  s.root = root;
-  s.launch_at = 0;
-  s.state = DAP_STARTING;
-  snprintf(s.adapter, sizeof(s.adapter), "%s", adapterName(adapter));
+  jsonRpcStreamFree(&s->recv);
+  s->seq = 0;
+  s->gen++;
+  s->thread_id = 0;
+  s->exit_code = -1;
+  s->configured = 0;
+  s->config_waiting = 0;
+  s->config_early = 0;
+  s->ending_at = 0;
+  s->disconnected = 0;
+  s->stop_reason[0] = '\0';
+  s->launch = launch;
+  s->root = root;
+  snprintf(s->last_root, sizeof(s->last_root), "%s", root ? root : "");
+  s->owner = s_window_current ? s_window_current() : 0;
+  s->launch_at = 0;
+  s->state = DAP_STARTING;
+  snprintf(s->adapter, sizeof(s->adapter), "%s", adapterName(adapter));
   outputClear();
   all = breakpointsAll(&count);
   for (i = 0; i < count; i++)
     all[i].verified = 0;
   breakpointsSetListener(onBreakpointsChanged);
 
-  snprintf(s.adapter_id, sizeof(s.adapter_id), "%s", adapter->ext);
-  if (s.tcp_port)
-    s.connect_until = os_monotonic_ms() + DAP_CONNECT_TIMEOUT_MS; // dapTick() connects
+  snprintf(s->adapter_id, sizeof(s->adapter_id), "%s", adapter->ext);
+  if (s->tcp_port)
+    s->connect_until = os_monotonic_ms() + DAP_CONNECT_TIMEOUT_MS; // dapTick() connects
   else
     sendInitialize();
 
   debugUiOpenPanel();
-  editorSetStatusMessage("Starting %s…", s.adapter);
+  editorSetStatusMessage("Starting %s…", s->adapter);
   return 0;
 }
 
 void dapFree(void) {
   int i;
   int j;
-  // On the way out: no hook, the Lisp side is being torn down.
-  if (s.state != DAP_OFF)
-    stopSession(0);
-  outputClear();
-  jsonRpcStreamFree(&s.recv);
+  for (i = 0; i < DAP_MAX_SESSIONS; i++) {
+    s = &s_sessions[i];
+    // On the way out: no hook, the Lisp side is being torn down.
+    if (s->state != DAP_OFF)
+      stopSession(0);
+    outputClear();
+    jsonRpcStreamFree(&s->recv);
+    s->last_root[0] = '\0';
+  }
+  s = &s_sessions[0];
+  s_window_current = NULL;
+  s_window_enter = NULL;
+  s_window_leave = NULL;
   breakpointsSetListener(NULL);
   for (i = 0; i < s_adapter_count; i++) {
     for (j = 0; j < DAP_MAX_ARGS && s_adapters[i].argv[j]; j++)

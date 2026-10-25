@@ -6,9 +6,11 @@
 #include "os.h"
 
 // ─── The debugger: a Debug Adapter Protocol client ───────────────────────────
-// One debug session at a time, talking to a debug adapter (gdb -i dap,
-// lldb-dap, debugpy, ...) over its stdin/stdout with the same framing as
-// LSP. Which adapter a file type uses is set from Lisp, like lsp-server:
+// One debug session per project (its root, or the working directory
+// outside any), talking to a debug adapter (gdb -i dap, lldb-dap,
+// debugpy, ...) over its stdin/stdout, or a TCP connection, with the same
+// framing as LSP. The commands and what the panel shows are the current
+// project's session. Which adapter a file type uses is set from Lisp, like lsp-server:
 //   (dap-adapter "c" "gdb" "-i" "dap")
 // The launch arguments are handed to the adapter as they are (a JSON
 // object), so beluga needs no knowledge of each adapter's own options.
@@ -99,17 +101,23 @@ int dapCurrentLine(const char **path, int *line);
 const char *const *dapOutputTail(int *count);
 
 // ── Run loop ────────────────────────────────────────────────────────────────
-// The adapter's output stream while a session runs, else NULL.
-OsStream *dapStream(void);
-// Reads what the adapter sent and handles every complete message.
+// The adapters' output streams (one per running session), into streams[0..max).
+// @return how many.
+int dapStreams(OsStream **streams, int max);
+// Reads what the adapters sent and handles every complete message.
 void dapPoll(void);
-// Feeds bytes as if the adapter had sent them (dapPoll()'s reader, and
-// the tests).
+// Feeds bytes as if the current project's adapter had sent them (tests).
 void dapFeed(const char *data, size_t len);
 // Time-driven work (sending launch when the adapter didn't ask first,
 // disconnecting after the program ended), once per run loop tick.
 void dapTick(void);
-// Ends any session and frees the adapter table. Called on shutdown.
+// Ends every session and frees the adapter table. Called on shutdown.
 void dapFree(void);
+
+// Daemon mode: a session reports to the window it was started from.
+// `current` names the window acting now (0: none); `enter` makes window
+// `id` current while a session's messages are handled (0 if it is gone:
+// they are handled where the daemon is) and `leave` goes back.
+void dapSetWindowHooks(int (*current)(void), int (*enter)(int id), void (*leave)(void));
 
 #endif // BELUGA_DAP_H

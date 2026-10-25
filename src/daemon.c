@@ -37,6 +37,7 @@
 #include "../include/builtins.h"
 #include "../include/config_load.h"
 #include "../include/daemon_frame.h"
+#include "../include/dap.h"
 #include "../include/data.h"
 #include "../include/define.h"
 #include "../include/editor_op.h"
@@ -100,6 +101,7 @@ typedef struct daemon_client_t
 {
     OsConn *conn;
     FrameReader reader;
+    int id;            // > 0, never reused: debug sessions name their window by it
     int greeted;       // the hello arrived and the window is open
     int hello_pending; // the hello arrived; the window opens next tick
     int gone;          // the connection has ended
@@ -125,6 +127,8 @@ static DaemonClient *s_focused = NULL; // the window that last sent keys
 static ClientView s_idle;              // E's view while no window is current
 static int s_running = 0;
 static int s_stop = 0; // beluga --kill was accepted
+static int s_next_id = 1;
+static DaemonClient *s_entered_from = NULL; // windowLeave() goes back there
 
 /***********************************************************************************************************************
  *
@@ -504,6 +508,8 @@ static void acceptClients(void) {
       continue;
     }
     c = gcalloc(1, sizeof(*c));
+    if (c)
+      c->id = s_next_id++;
     if (!c) {
       os_conn_close(conn);
       continue;
@@ -698,6 +704,30 @@ static void daemonRunLoop(void) {
 
 int daemonIsRunning(void) { return s_running; }
 
+/*
+ * Debug sessions belong to the window that started them: their events
+ * (stopped, output, a program's terminal pane) land in that window's view,
+ * whichever window is current when they arrive.
+ */
+static int windowCurrent(void) { return s_current ? s_current->id : 0; }
+
+static int windowEnter(const int id) {
+  DaemonClient *c;
+  for (c = s_clients; c; c = c->next)
+    if (c->id == id && c->greeted && !c->closing)
+      break;
+  if (!c || c == s_current)
+    return 0;
+  s_entered_from = s_current;
+  clientSwitchTo(c);
+  return 1;
+}
+
+static void windowLeave(void) {
+  clientSwitchTo(s_entered_from);
+  s_entered_from = NULL;
+}
+
 int daemonMain(const char *name) {
   char err[512];
   Utf8Char *splash_screen;
@@ -711,6 +741,7 @@ int daemonMain(const char *name) {
   // Ctrl-C, a closed terminal, SIGTERM: stop the way --kill does, rather
   // than dying with the socket left behind (handleStopSignal()).
   os_catch_stop_signals();
+  dapSetWindowHooks(windowCurrent, windowEnter, windowLeave);
   // No window yet: no size (80x24 is assumed), nothing drawn, prompts end.
   screenSetDriver(&s_daemon_driver);
   s_running = 1;

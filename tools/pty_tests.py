@@ -536,6 +536,52 @@ def daemon_stop_signals(binary, repo):
             daemon.run('--kill', '--force', '--name=' + name)
 
 
+def daemon_debug_per_project(binary, repo):
+    """In a daemon, each project has its own debug session: one paused in
+    project a doesn't stop project b from debugging, and a window opened on
+    a later finds a's session where it was left."""
+    if subprocess.run([sys.executable, '-c', 'import debugpy'],
+                      capture_output=True).returncode != 0:
+        raise Skip('no debugpy (pip install debugpy)')
+    name = daemon_name('dbg')
+    with Beluga(binary, repo, rows=30, cols=120) as ed:
+        for proj in ('a', 'b'):
+            os.makedirs(ed.path(proj + '/.git'))
+            with open(ed.path(proj + '/t.py'), 'w') as f:
+                f.write("total = 0\n"
+                        "for i in range(3):\n"
+                        "    total += i\n"
+                        "print('%s total', total)\n" % proj)
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(dap-adapter "py" "%s" "-m" "debugpy.adapter")\n' % sys.executable)
+            for proj in ('a', 'b'):
+                f.write('(define (debug-%s) (debug-start \'(("program" . "%s"))))\n'
+                        % (proj, ed.path(proj + '/t.py')))
+        try:
+            rc, out = ed.run('--daemon=' + name)
+            assert rc == 0, out
+            for proj in ('a', 'b'):
+                ed.start('-c', '--name=' + name, 't.py', cwd=proj)
+                ed.wait_for('%s total' % proj)
+                ed.keys(DOWN, DOWN, *DEBUG, 'b')
+                ed.keys('\x1bx', delay=0.4)
+                ed.keys(*('debug-' + proj), delay=0.02)
+                ed.keys('\r', delay=0.3)
+                ed.wait_for('stopped (breakpoint)', 30)
+                ed.quit()
+            ed.start('-c', '--name=' + name, 't.py', cwd='a')
+            ed.wait_for('a total')
+            ed.keys(DOWN, DOWN, *DEBUG, 'b')  # off again, so it runs to the end
+            ed.keys(*DEBUG, 'c')
+            ed.wait_for('exited with code 0', 20)
+            ed.keys(*DEBUG, 'o', delay=0.5)
+            ed.wait_for('a total 3')
+            assert not any('b total 3' in line for line in ed.text())
+            ed.quit()
+        finally:
+            ed.run('--kill', '--force', '--name=' + name)
+
+
 TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
     ('debugger-gdb', debugger_gdb),
@@ -554,6 +600,7 @@ TESTS = [
     ('daemon-started-by-client', daemon_started_by_client),
     ('daemon-window-directory', daemon_window_directory),
     ('daemon-stop-signals', daemon_stop_signals),
+    ('daemon-debug-per-project', daemon_debug_per_project),
     ('terminal-long-burst', terminal_long_burst),
 ]
 
