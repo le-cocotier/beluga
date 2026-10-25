@@ -13,7 +13,8 @@
 #define DAEMON_DEFAULT_NAME "server"
 
 /**
- * @brief Runs the daemon until it is stopped. The editor is initialised
+ * @brief Runs the daemon until it is stopped, in the foreground
+ * (--foreground; clientStartDaemon() runs it that way in the background). The editor is initialised
  * here; the caller tears it down (deInitEditor(), bFree_structs()) after a
  * return of 0.
  * @return 0, or 1 if it couldn't start (already running, no socket).
@@ -23,6 +24,15 @@ int daemonMain(const char *name);
 // 1 inside a running daemon: CTRL-x CTRL-c then closes the window it was
 // typed in, not the editor.
 int daemonIsRunning(void);
+
+/**
+ * @brief Starts the daemon called `name` in the background (detached from
+ * the terminal, its output in <beluga dir>/daemon-NAME.log) and waits
+ * until it takes connections. `beluga --daemon` without --foreground, and
+ * `beluga -c` when none is running.
+ * @return 0, or 1 with the reason on stderr.
+ */
+int clientStartDaemon(const char *name);
 
 /**
  * @brief Runs a client window (beluga -c) on the daemon called `name`,

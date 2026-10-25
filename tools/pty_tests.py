@@ -11,6 +11,7 @@ machine doesn't have (less, vim) is skipped on its own.
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 
@@ -340,6 +341,85 @@ def terminal_app_shift_function_keys(binary, repo):
         ed.quit()
 
 
+def daemon_name(tag):
+    return 'test-%s-%d' % (tag, os.getpid())
+
+
+def daemon_in_background(binary, repo):
+    """beluga --daemon returns at once, the daemon going on in the
+    background; a second one is refused; -c opens a window on it."""
+    name = daemon_name('bg')
+    with Beluga(binary, repo) as ed:
+        try:
+            rc, out = ed.run('--daemon=' + name)
+            assert rc == 0 and 'started' in out, (rc, out)
+            rc, out = ed.run('--daemon=' + name)
+            assert rc == 1 and 'already running' in out, (rc, out)
+            with open(ed.path('a.txt'), 'w') as f:
+                f.write('alpha\n')
+            ed.start('-c', '--name=' + name, 'a.txt')
+            ed.wait_for('alpha')
+            ed.quit()
+        finally:
+            rc, out = ed.run('--kill', '--force', '--name=' + name)
+        assert rc == 0, out
+
+
+def daemon_started_by_client(binary, repo):
+    """beluga -c with no daemon running starts one."""
+    name = daemon_name('auto')
+    with Beluga(binary, repo) as ed:
+        try:
+            ed.start('-c', '--name=' + name)
+            ed.wait_for('closes this window')
+            ed.quit()
+            rc, out = ed.run('--kill', '--name=' + name)
+            assert rc == 0, out
+        finally:
+            ed.run('--kill', '--force', '--name=' + name)
+
+
+def daemon_stop_signals(binary, repo):
+    """Ctrl-C on a daemon with an unsaved buffer warns; a second one stops
+    it, keeping the changes in autosave and taking the socket away. A
+    closed terminal (SIGHUP) stops one at once."""
+    name = daemon_name('sig')
+    with Beluga(binary, repo) as daemon:
+        try:
+            with open(daemon.path('u.txt'), 'w') as f:
+                f.write('text\n')
+            daemon.start('--daemon=' + name, '--foreground')
+            daemon.wait_for('daemon "%s" running' % name)
+            with Beluga(binary, repo, home=daemon.home) as window:
+                window.start('-c', '--name=' + name, 'u.txt')
+                window.wait_for('text')
+                window.keys('X', delay=0.3)  # unsaved now
+                window.quit()                # the window only
+            os.kill(daemon.pid, signal.SIGINT)
+            daemon.wait_for('press Ctrl-C again')
+            assert daemon.status is None and os.waitpid(daemon.pid, os.WNOHANG)[0] == 0, \
+                'one Ctrl-C stopped it'
+            os.kill(daemon.pid, signal.SIGINT)
+            status = daemon.wait_exit(10)
+            assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, status
+            daemon.wait_for('~/.beluga/autosave')
+            saved = os.listdir(daemon.path('.beluga/autosave'))
+            assert any(entry.endswith('u.txt') for entry in saved), saved
+            rc, out = daemon.run('--kill', '--name=' + name)
+            assert rc == 1, 'still reachable: ' + out
+        finally:
+            daemon.run('--kill', '--force', '--name=' + name)
+    with Beluga(binary, repo) as daemon:
+        try:
+            daemon.start('--daemon=' + name, '--foreground')
+            daemon.wait_for('running')
+            os.kill(daemon.pid, signal.SIGHUP)
+            status = daemon.wait_exit(10)
+            assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, status
+        finally:
+            daemon.run('--kill', '--force', '--name=' + name)
+
+
 TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
     ('debugger-gdb', debugger_gdb),
@@ -352,6 +432,9 @@ TESTS = [
     ('terminal-wide-characters', terminal_wide_characters),
     ('terminal-wrap', terminal_wrap),
     ('terminal-fast-typing', terminal_fast_typing),
+    ('daemon-in-background', daemon_in_background),
+    ('daemon-started-by-client', daemon_started_by_client),
+    ('daemon-stop-signals', daemon_stop_signals),
     ('terminal-long-burst', terminal_long_burst),
 ]
 

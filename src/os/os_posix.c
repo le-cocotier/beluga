@@ -36,6 +36,7 @@
 #include <time.h>
 #include <unistd.h>
 #ifdef __APPLE__
+#include <mach-o/dyld.h> // _NSGetExecutablePath
 #include <malloc/malloc.h> // malloc_zone_statistics
 #include <util.h> // forkpty
 #else
@@ -68,6 +69,129 @@ const char *os_name(void) {
 }
 
 long os_getpid(void) { return (long)getpid(); }
+
+static void setCloexec(int fd);
+
+static volatile sig_atomic_t s_interrupted;
+static volatile sig_atomic_t s_hung_up;
+
+static void onStopSignal(const int sig) {
+  if (sig == SIGINT)
+    s_interrupted = 1;
+  else
+    s_hung_up = 1;
+}
+
+void os_catch_stop_signals(void) {
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = onStopSignal;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);
+  sigaction(SIGHUP, &sa, NULL);
+}
+
+int os_take_stop_signal(void) {
+  if (s_hung_up) {
+    s_hung_up = 0;
+    s_interrupted = 0;
+    return OS_STOP_HANGUP;
+  }
+  if (s_interrupted) {
+    s_interrupted = 0;
+    return OS_STOP_INTERRUPT;
+  }
+  return OS_STOP_NONE;
+}
+
+char *os_exe_path(void) {
+  char path[OS_PATH_MAX];
+#ifdef __APPLE__
+  uint32_t size = sizeof(path);
+  char *real;
+  if (_NSGetExecutablePath(path, &size) != 0)
+    return NULL;
+  real = os_realpath(path);
+  return real ? real : gstrdup(path);
+#else
+  const ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
+  if (n <= 0)
+    return NULL;
+  path[n] = '\0';
+  return gstrdup(path);
+#endif
+}
+
+int os_spawn_detached(const char *const *argv, const char *log_file, char *err,
+                      const size_t err_size) {
+  int report[2]; // the grandchild's errno if exec fails; EOF once it ran
+  int child_errno = 0;
+  int status;
+  int fd;
+  pid_t pid;
+  ssize_t n;
+
+  if (!argv || !argv[0]) {
+    snprintf(err, err_size, "nothing to start");
+    return -1;
+  }
+  if (pipe(report) == -1) {
+    snprintf(err, err_size, "pipe: %s", strerror(errno));
+    return -1;
+  }
+  setCloexec(report[0]);
+  setCloexec(report[1]);
+  pid = fork();
+  if (pid == -1) {
+    snprintf(err, err_size, "fork: %s", strerror(errno));
+    close(report[0]);
+    close(report[1]);
+    return -1;
+  }
+  if (pid == 0) {
+    // A session of its own, then a second fork so it isn't a session
+    // leader either: no terminal can ever become its controlling one.
+    close(report[0]);
+    setsid();
+    if (fork() != 0)
+      _exit(0);
+    fd = open("/dev/null", O_RDONLY);
+    if (fd >= 0) {
+      dup2(fd, 0);
+      if (fd > 2)
+        close(fd);
+    }
+    fd = log_file ? open(log_file, O_WRONLY | O_CREAT | O_APPEND, 0600) : -1;
+    if (fd < 0)
+      fd = open("/dev/null", O_WRONLY);
+    if (fd >= 0) {
+      dup2(fd, 1);
+      dup2(fd, 2);
+      if (fd > 2)
+        close(fd);
+    }
+    signal(SIGHUP, SIG_DFL);
+    signal(SIGINT, SIG_DFL);
+    execv(argv[0], (char *const *)argv);
+    child_errno = errno;
+    if (write(report[1], &child_errno, sizeof(child_errno)) < 0)
+      _exit(127);
+    _exit(127);
+  }
+  close(report[1]);
+  waitpid(pid, &status, 0); // the first child, which exits at once
+  do
+    n = read(report[0], &child_errno, sizeof(child_errno));
+  while (n < 0 && errno == EINTR);
+  close(report[0]);
+  if (n == (ssize_t)sizeof(child_errno)) {
+    snprintf(err, err_size, "%s: %s", argv[0], strerror(child_errno));
+    return -1;
+  }
+  return 0;
+}
 
 /***********************************************************************************************************************
  *

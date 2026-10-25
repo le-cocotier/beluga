@@ -51,6 +51,38 @@ const char *os_name(void);
 // This process's id (the LSP initialize request reports it).
 long os_getpid(void);
 
+// What a stop signal asked for (os_take_stop_signal()).
+enum {
+    OS_STOP_NONE,
+    OS_STOP_INTERRUPT, // Ctrl-C: SIGINT; CTRL_C / CTRL_BREAK on Windows
+    // The terminal closed, or the process was told to end: SIGHUP,
+    // SIGTERM; the console window closing, logoff or shutdown on Windows,
+    // which leaves the process a few seconds before it is ended anyway.
+    OS_STOP_HANGUP
+};
+
+// From now on the stop signals above no longer end the process: each is
+// remembered for os_take_stop_signal(). The daemon uses it to save what it
+// can and remove its socket before it goes.
+void os_catch_stop_signals(void);
+
+// The stop signal that came since the last call (OS_STOP_HANGUP first when
+// both did), or OS_STOP_NONE.
+int os_take_stop_signal(void);
+
+// The running program's own path (galloc'd), or NULL where it can't be told.
+char *os_exe_path(void);
+
+/**
+ * @brief Starts `argv` (argv[0] a path) as a background process of its own,
+ * detached from the terminal: a new session on Unix, no console on
+ * Windows. It doesn't end with this process or with the terminal, and its
+ * stdin is the null device. Its stdout and stderr are appended to
+ * `log_file`, or go to the null device when that is NULL.
+ * @return 0 once it is started, or -1 with a one-line reason in `err`.
+ */
+int os_spawn_detached(const char *const *argv, const char *log_file, char *err, size_t err_size);
+
 /***********************************************************************************************************************
  *
  *                                                 Time

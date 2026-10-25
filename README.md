@@ -162,10 +162,16 @@ Here is some few command that you will need :
 ### Daemon mode: several windows on one editor
 
 ```
-beluga --daemon          # start the daemon (in its own terminal, or in the background)
-beluga -c [file]         # open a window on it, from any terminal
+beluga --daemon          # start the daemon in the background (--foreground: in this terminal)
+beluga -c [file]         # open a window on it, from any terminal (starts one if none runs)
 beluga --kill            # stop it (refused while a buffer is unsaved; --force to insist)
 ```
+
+A daemon in the background writes what it has to say to `~/.beluga/daemon-server.log`
+(`daemon-NAME.log` for a named one). One in the foreground stops on Ctrl-C, but asks
+first when a buffer is unsaved: a second Ctrl-C within a few seconds stops it anyway. Closing
+its terminal, or SIGTERM, stops it at once. Either way the unsaved changes are kept in
+`~/.beluga/autosave` and offered back when the file is opened again.
 
 Every window shares the daemon's buffers, Lisp config, language servers and terminal panes,
 and has its own splits, popups and status line. Ctrl-x Ctrl-c in a window closes only that

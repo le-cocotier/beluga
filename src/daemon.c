@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../include/autosave.h"
 #include "../include/buffer.h"
 #include "../include/builtins.h"
 #include "../include/config_load.h"
@@ -56,6 +57,10 @@ extern EditorConfig E;
 // Clients beyond this are turned away: the run loop waits on one stream per
 // client inside RUN_LOOP_MAX_STREAMS.
 #define DAEMON_MAX_CLIENTS 16
+
+// A second Ctrl-C this soon after the first stops a daemon with unsaved
+// buffers anyway.
+#define DAEMON_INTERRUPT_AGAIN_MS 3000
 
 /**
  * @brief The part of E that belongs to one window.
@@ -333,16 +338,21 @@ static int handleHello(DaemonClient *c, const unsigned char *payload, const size
  * @brief beluga --kill: the daemon stops after this tick, unless a file
  * buffer has unsaved changes and the kill isn't forced.
  */
-static void handleKill(DaemonClient *c, const int force) {
-  char message[160];
-  struct buffer_t *b;
+// How many file buffers have unsaved changes.
+static int unsavedBuffers(void) {
+  struct buffer_t *b = E.buffers;
   int unsaved = 0;
   int i;
-
-  b = E.buffers;
   for (i = 0; b && i < E.number_of_buffer; i++, b = b->next)
     if (b->type == FILE_BUFF && b->dirty)
       unsaved++;
+  return unsaved;
+}
+
+static void handleKill(DaemonClient *c, const int force) {
+  char message[160];
+  const int unsaved = unsavedBuffers();
+
   if (unsaved > 0 && !force) {
     snprintf(message, sizeof(message),
              "beluga: %d buffer%s unsaved changes; save them, or use beluga --kill --force",
@@ -560,6 +570,45 @@ static const ScreenDriver s_daemon_driver = {daemonWrite, daemonReadKeys, daemon
  *
  **********************************************************************************************************************/
 
+/**
+ * @brief Acts on a Ctrl-C, a closed terminal or a SIGTERM (os_take_stop_signal()).
+ * @details Nothing unsaved: the daemon stops. A closed terminal or SIGTERM
+ * can't be asked anything, so the unsaved buffers get their autosave copy
+ * (offered back when the file is opened again) and the daemon stops. Ctrl-C
+ * with unsaved buffers only warns; a second one within a few seconds stops
+ * it the same way. Stopping goes through the end of the run loop, which
+ * closes the windows and removes the socket.
+ */
+static void handleStopSignal(void) {
+  static long long s_interrupted_at = -1;
+  const int sig = os_take_stop_signal();
+  const long long now = os_monotonic_ms();
+  struct buffer_t *b;
+  int unsaved;
+  int i;
+
+  if (sig == OS_STOP_NONE)
+    return;
+  unsaved = unsavedBuffers();
+  if (sig == OS_STOP_INTERRUPT && unsaved > 0 &&
+      (s_interrupted_at < 0 || now - s_interrupted_at > DAEMON_INTERRUPT_AGAIN_MS)) {
+    s_interrupted_at = now;
+    fprintf(stderr,
+            "\nbeluga: %d buffer%s unsaved changes. Save them, or press Ctrl-C again to "
+            "stop anyway (autosave keeps a copy).\n",
+            unsaved, unsaved == 1 ? " has" : "s have");
+    return;
+  }
+  b = E.buffers;
+  for (i = 0; b && i < E.number_of_buffer; i++, b = b->next)
+    if (b->type == FILE_BUFF && b->dirty)
+      autosaveWrite(b);
+  if (unsaved > 0)
+    fprintf(stderr, "beluga: stopped; the unsaved changes of %d buffer%s are in ~/.beluga/autosave\n",
+            unsaved, unsaved == 1 ? "" : "s");
+  s_stop = 1;
+}
+
 static void daemonRunLoop(void) {
   OsStream *streams[RUN_LOOP_MAX_STREAMS];
   int ready[RUN_LOOP_MAX_STREAMS];
@@ -596,6 +645,9 @@ static void daemonRunLoop(void) {
           clientPump(by_stream[i], 0);
     }
     editorTick();
+    handleStopSignal();
+    if (s_stop)
+      break;
 
     for (c = s_clients; c; c = next) {
       next = c->next;
@@ -646,6 +698,9 @@ int daemonMain(const char *name) {
     fprintf(stderr, "beluga: %s\n", err);
     return 1;
   }
+  // Ctrl-C, a closed terminal, SIGTERM: stop the way --kill does, rather
+  // than dying with the socket left behind (handleStopSignal()).
+  os_catch_stop_signals();
   // No window yet: no size (80x24 is assumed), nothing drawn, prompts end.
   screenSetDriver(&s_daemon_driver);
   s_running = 1;

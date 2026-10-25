@@ -20,6 +20,7 @@ import select
 import shutil
 import signal
 import struct
+import subprocess
 import tempfile
 import termios
 import time
@@ -57,13 +58,16 @@ def install_config(repo, home):
 
 class Beluga:
     def __init__(self, binary, repo, args=(), rows=30, cols=100,
-                 timeout=60, env=None):
+                 timeout=60, env=None, home=None):
         self.binary = os.path.abspath(binary)
         self.repo = os.path.abspath(repo)
         self.args = list(args)
         self.rows, self.cols = rows, cols
         self.timeout = timeout
         self.extra_env = env or {}
+        # Another Beluga's HOME, to run a second program next to it (a
+        # daemon window); it is left for that one to remove.
+        self.shared_home = home
         self.home = None
         self.pid = None
         self.fd = None
@@ -74,6 +78,10 @@ class Beluga:
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     def __enter__(self):
+        if self.shared_home:
+            self.home = self.shared_home
+            self.previous_alarm = None
+            return self
         self.home = tempfile.mkdtemp(prefix='beluga-test-')
         install_config(self.repo, self.home)
         self.previous_alarm = signal.signal(signal.SIGALRM, _on_alarm)
@@ -110,8 +118,9 @@ class Beluga:
         return self
 
     def __exit__(self, kind, value, tb):
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, self.previous_alarm)
+        if not self.shared_home:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, self.previous_alarm)
         if self.pid and self.status is None:
             try:
                 os.kill(self.pid, signal.SIGKILL)
@@ -120,11 +129,21 @@ class Beluga:
                 pass
         if self.fd is not None:
             os.close(self.fd)
-        shutil.rmtree(self.home, ignore_errors=True)
+        if not self.shared_home:
+            shutil.rmtree(self.home, ignore_errors=True)
         return False
 
     def path(self, name):
         return os.path.join(self.home, name)
+
+    def run(self, *args):
+        """Runs beluga with `args` to the end, outside the pty, with this
+        HOME; (exit code, stdout + stderr)."""
+        env = dict(os.environ, HOME=self.home, **self.extra_env)
+        result = subprocess.run([self.binary] + list(args), cwd=self.home, env=env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=20)
+        return result.returncode, result.stdout.decode(errors='replace')
 
     # ── Talking to it ──────────────────────────────────────────────────
 

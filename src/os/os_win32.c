@@ -144,6 +144,60 @@ long os_getpid(void)
     return (long) GetCurrentProcessId();
 }
 
+static volatile LONG s_interrupted;
+static volatile LONG s_hung_up;
+
+static BOOL WINAPI onConsoleEvent(DWORD type)
+{
+    switch (type)
+    {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+        InterlockedExchange(&s_interrupted, 1);
+        return TRUE;
+    case CTRL_CLOSE_EVENT:
+    case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
+        // Windows ends the process as soon as this returns: wait here
+        // while the main thread saves and exits (which ends this thread
+        // too), up to the few seconds Windows allows.
+        InterlockedExchange(&s_hung_up, 1);
+        Sleep(4500);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+void os_catch_stop_signals(void)
+{
+    SetConsoleCtrlHandler(onConsoleEvent, TRUE);
+}
+
+int os_take_stop_signal(void)
+{
+    if (InterlockedExchange(&s_hung_up, 0))
+    {
+        InterlockedExchange(&s_interrupted, 0);
+        return OS_STOP_HANGUP;
+    }
+    if (InterlockedExchange(&s_interrupted, 0))
+        return OS_STOP_INTERRUPT;
+    return OS_STOP_NONE;
+}
+
+char *os_exe_path(void)
+{
+    wchar_t path[MAX_PATH * 2];
+    char *utf8;
+    const DWORD n = GetModuleFileNameW(NULL, path, sizeof(path) / sizeof(path[0]));
+    if (n == 0 || n >= sizeof(path) / sizeof(path[0]))
+        return NULL;
+    utf8 = toUtf8(path);
+    backslashesToSlashes(utf8);
+    return utf8;
+}
+
 /***********************************************************************************************************************
  *
  *                                                 Time
@@ -1136,6 +1190,81 @@ fail:
         return NULL;
     }
     return p;
+}
+
+int os_spawn_detached(const char *const *argv, const char *log_file, char *err,
+                      const size_t err_size)
+{
+    STARTUPINFOEXW si;
+    PROCESS_INFORMATION pi;
+    HANDLE in_h, out_h;
+    HANDLE handles[2];
+    SIZE_T attr_size = 0;
+    LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
+    wchar_t app[MAX_PATH * 2];
+    WBuf cmd = { NULL, 0, 0 };
+    DWORD flags;
+    BOOL created = FALSE;
+
+    if (!argv || !argv[0])
+    {
+        snprintf(err, err_size, "nothing to start");
+        return -1;
+    }
+    if (!buildCommandLine((char *const *) argv, app, sizeof(app) / sizeof(app[0]), &cmd))
+    {
+        gfree(cmd.s);
+        snprintf(err, err_size, "%s: %s", argv[0], strerror(errno));
+        return -1;
+    }
+    in_h = openNul(0);
+    out_h = log_file ? openAppend(log_file) : INVALID_HANDLE_VALUE;
+    if (out_h == INVALID_HANDLE_VALUE)
+        out_h = openNul(1);
+    handles[0] = in_h;
+    handles[1] = out_h;
+    InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
+    attrs = galloc(attr_size);
+    if (in_h != INVALID_HANDLE_VALUE && out_h != INVALID_HANDLE_VALUE && attrs &&
+        InitializeProcThreadAttributeList(attrs, 1, 0, &attr_size) &&
+        UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
+                                  sizeof(handles), NULL, NULL))
+    {
+        memset(&si, 0, sizeof(si));
+        si.StartupInfo.cb = sizeof(si);
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdInput = in_h;
+        si.StartupInfo.hStdOutput = out_h;
+        si.StartupInfo.hStdError = out_h;
+        si.lpAttributeList = attrs;
+        // No console, its own process group (Ctrl-C in this console doesn't
+        // reach it), and out of this process's job when it is in one that
+        // kills its processes when it closes.
+        flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT |
+                EXTENDED_STARTUPINFO_PRESENT;
+        created = CreateProcessW(app, cmd.s, NULL, NULL, TRUE, flags | CREATE_BREAKAWAY_FROM_JOB,
+                                 NULL, NULL, &si.StartupInfo, &pi);
+        if (!created)
+            created = CreateProcessW(app, cmd.s, NULL, NULL, TRUE, flags, NULL, NULL,
+                                     &si.StartupInfo, &pi);
+    }
+    if (created)
+    {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    else
+        snprintf(err, err_size, "%s: couldn't start it (error %lu)", argv[0],
+                 (unsigned long) GetLastError());
+    if (attrs)
+    {
+        DeleteProcThreadAttributeList(attrs);
+        gfree(attrs);
+    }
+    if (in_h != INVALID_HANDLE_VALUE) CloseHandle(in_h);
+    if (out_h != INVALID_HANDLE_VALUE) CloseHandle(out_h);
+    gfree(cmd.s);
+    return created ? 0 : -1;
 }
 
 OsStream *os_proc_output(OsProc *p)
