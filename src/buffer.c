@@ -1211,6 +1211,10 @@ int bufferClose(int buff_id) {
     editorSetStatusMessage("Can't kill the only buffer");
     return -1;
   }
+  if (buf->prompt_holds > 0) {
+    editorSetStatusMessage("Another window has a prompt open on this buffer");
+    return -1;
+  }
   if (!bufferConfirmKill(buf))
     return -1;
   // Confirmed: the unsaved changes are meant to go, copy included.

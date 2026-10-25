@@ -178,7 +178,10 @@ and has its own splits (each pane with its own cursor, even on a file another wi
 popups, status line and working directory (where its `beluga -c` ran:
 the open-file prompt and new terminal panes start there). Each project has its own debug
 session, so two projects can be debugged at once; a session's stops and output go to the window
-that last drove it. Ctrl-x Ctrl-c in a window closes only that window. Several daemons can run side by side: `--daemon=work`, then `beluga -c --name=work`
+that last drove it. A prompt open in one window (open-file, M-x, a y/n question) doesn't stop
+the others; they just can't kill or edit the buffer it was asked about until it closes. Ctrl-x
+Ctrl-c in a window closes only that window. Several daemons can run side by side:
+`--daemon=work`, then `beluga -c --name=work`
 and `beluga --kill=work`. On Unix the windows reach the daemon through a socket in a private
 directory (`$XDG_RUNTIME_DIR/beluga/`, else `/tmp/beluga-<uid>/`); on Windows through a named
 pipe only the current user can open.

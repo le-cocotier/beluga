@@ -714,6 +714,60 @@ def daemon_window_directory(binary, repo):
             ed.run('--kill', '--force', '--name=' + name)
 
 
+def daemon_prompt_other_windows(binary, repo):
+    """While one window has a prompt open, another goes on: it takes keys
+    and redraws, but can't kill or edit the buffer the prompt's command
+    holds. A second prompt opened in it closes first; then the first
+    window's keys are read again."""
+    name = daemon_name('prompt')
+    with Beluga(binary, repo) as a:
+        try:
+            with open(a.path('a.txt'), 'w') as f:
+                f.write('alpha\n')
+            with open(a.path('b.txt'), 'w') as f:
+                f.write('beta\n')
+            rc, out = a.run('--daemon=' + name)
+            assert rc == 0, out
+            a.start('-c', '--name=' + name, 'a.txt')
+            a.wait_for('alpha')
+            with Beluga(binary, repo, home=a.home) as b:
+                b.start('-c', '--name=' + name, 'b.txt')
+                b.wait_for('beta')
+                a.keys(CTRL_X, 'f', delay=0.5)       # A: the open-file prompt
+                a.wait_for('Open :')
+                b.keys(*'xyz', delay=0.1)            # B goes on
+                b.wait_for('xyzbeta')
+                a.pump(0.3)
+                # A's buffer is held by its prompt: B can't kill or edit it.
+                for _ in range(3):                   # to a.txt
+                    if any('alpha' in line for line in b.text()[:2]):
+                        break
+                    b.keys(CTRL_X, '\x1b[C', delay=0.4)
+                b.wait_for('alpha')
+                b.keys(CTRL_X, 'k', delay=0.4)
+                b.wait_for('Another window has a prompt open on this buffer')
+                b.keys('Q', delay=0.3)
+                assert not any('Qalpha' in line for line in b.text()), b.text()[:3]
+                for _ in range(3):                   # back to b.txt
+                    if any('xyzbeta' in line for line in b.text()):
+                        break
+                    b.keys(CTRL_X, '\x1b[C', delay=0.4)
+                b.wait_for('xyzbeta')
+                a.pump(0.3)
+                b.keys('\x1bx', delay=0.4)          # B: a prompt of its own
+                b.wait_for('M-x:')
+                a.keys('\x1b', delay=0.5)           # read once B's is closed
+                assert not any('Aborted' in line for line in a.text()), a.text()[-2:]
+                b.keys('\x1b', delay=0.4)
+                b.wait_for('Aborted')
+                a.wait_for('Aborted', 5)
+                for _ in range(3):
+                    b.keys(CTRL_X, 'u', delay=0.2)
+                b.quit()
+            a.quit()
+        finally:
+            a.run('--kill', '--force', '--name=' + name)
+
 def daemon_stop_signals(binary, repo):
     """Ctrl-C on a daemon with an unsaved buffer warns; a second one stops
     it, keeping the changes in autosave and taking the socket away. A
@@ -824,6 +878,7 @@ TESTS = [
     ('daemon-started-by-client', daemon_started_by_client),
     ('daemon-window-directory', daemon_window_directory),
     ('daemon-stop-signals', daemon_stop_signals),
+    ('daemon-prompt-other-windows', daemon_prompt_other_windows),
     ('daemon-debug-per-project', daemon_debug_per_project),
     ('terminal-long-burst', terminal_long_burst),
 ]

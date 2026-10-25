@@ -47,10 +47,11 @@ Nothing open right now.
 `beluga --daemon` / `beluga -c` (src/daemon.c, src/daemon_client.c). What's
 left after the first step:
 
-- [ ] **[debt]** Prompts block: while one window has an `editorPrompt()`
-  open (open-file, M-x, search, kill-buffer confirmation), the other windows
-  don't redraw or take keys until it closes. Make the prompt a per-window
-  state driven by the run loop instead of a nested key loop.
+- [ ] **[debt]** Prompts still nest on one stack: the other windows are
+  served while a window waits in its `editorPrompt()`, but when a second
+  window opens a prompt meanwhile, the first one's keys wait until the
+  second prompt closes. Making the prompt a per-window state driven by the
+  run loop (its ~35 callers continuing in a callback) would lift that.
 
 ---
 

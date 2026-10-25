@@ -636,6 +636,9 @@ typedef struct buffer_t
     // cursor somewhere on purpose (a jump), which the next pane keeps.
     int cursor_pane;
     int cursor_left_x, cursor_left_y;
+    // Daemon mode: windows waiting in a prompt with this buffer active,
+    // while other windows are served. It can't be killed meanwhile.
+    int prompt_holds;
     Row* row;
     int numrows;
     int b_has_changed;

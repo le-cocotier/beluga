@@ -21,10 +21,15 @@
  * window's keys with that window current, then draw every window. An edit
  * in one window shows in the others on the next tick.
  *
- * A prompt (editorPrompt(): open-file, M-x, search, ...) is a nested loop
- * that reads keys until ENTER; while one window has a prompt open, the
- * others wait (emacs has the same rule for the minibuffer across
- * terminals). If that window disconnects, its prompt reads ESC and ends.
+ * A prompt (editorPrompt(): open-file, M-x, search, a y/n question) is a
+ * nested loop that reads keys until ENTER. While it waits for its window's
+ * keys, the other windows are served from inside it (serveOtherWindows()):
+ * they redraw and handle their keys as usual. The buffer the prompt's
+ * window has active is read-only for them meanwhile and can't be killed,
+ * since the command that asked still holds it. The prompts nest on one
+ * stack, though: when a second window opens a prompt while the first one's
+ * is open, the first takes its keys again once the second one's closes. If
+ * a window disconnects, its prompt reads ESC and ends.
  */
 
 #include "../include/daemon.h"
@@ -94,6 +99,10 @@ typedef struct
     int current_project;
     struct const_t constantes;
     int project_last_buffer;
+    // An open path prompt's TAB matches (borrowed from editorPrompt()).
+    char **prompt_matches;
+    int prompt_match_count;
+    int prompt_match_selected;
     ScreenCache cache;
 } ClientView;
 
@@ -128,6 +137,10 @@ static ClientView s_idle;              // E's view while no window is current
 static int s_running = 0;
 static int s_stop = 0; // beluga --kill was accepted
 static int s_next_id = 1;
+// The windows whose key is being handled, outermost first: more than one
+// when a window's prompt serves the others (serveOtherWindows()).
+static DaemonClient *s_handling[DAEMON_MAX_CLIENTS + 1];
+static int s_handling_depth = 0;
 static DaemonClient *s_entered_from = NULL; // windowLeave() goes back there
 
 /***********************************************************************************************************************
@@ -152,6 +165,9 @@ static void viewSave(ClientView *v) {
   v->prefix_state = E.prefix_state;
   v->prompt_input = E.prompt_input;
   v->prompt_is_command = E.prompt_is_command;
+  v->prompt_matches = E.prompt_matches;
+  v->prompt_match_count = E.prompt_match_count;
+  v->prompt_match_selected = E.prompt_match_selected;
   v->quit_times_buffer = E.quit_times_buffer;
   v->which_key_prefix = E.which_key_prefix;
   v->which_key_since = E.which_key_since;
@@ -177,6 +193,9 @@ static void viewLoad(ClientView *v) {
   E.prefix_state = v->prefix_state;
   E.prompt_input = v->prompt_input;
   E.prompt_is_command = v->prompt_is_command;
+  E.prompt_matches = v->prompt_matches;
+  E.prompt_match_count = v->prompt_match_count;
+  E.prompt_match_selected = v->prompt_match_selected;
   E.quit_times_buffer = v->quit_times_buffer;
   E.which_key_prefix = v->which_key_prefix;
   E.which_key_since = v->which_key_since;
@@ -539,6 +558,94 @@ static void daemonWrite(const void *buf, const size_t n) {
   }
 }
 
+// How long a window waiting in a prompt waits for its own keys before the
+// others are served again.
+#define SERVE_SLICE_MS 50
+
+static int isHandling(const DaemonClient *c) {
+  int i;
+  for (i = 0; i < s_handling_depth; i++)
+    if (s_handling[i] == c)
+      return 1;
+  return 0;
+}
+
+// Handles `c`'s pending keys with its view current (it stays current).
+static void handleKeys(DaemonClient *c) {
+  while (c->greeted && keysPending(c) && !c->closing && s_handling_depth < DAEMON_MAX_CLIENTS) {
+    clientSwitchTo(c);
+    s_focused = c;
+    s_handling[s_handling_depth++] = c;
+    editorProcessKeypress();
+    s_handling_depth--;
+    if (E.exit_requested) { // CTRL-x CTRL-c: this window only
+      E.exit_requested = 0;
+      c->closing = 1;
+    }
+  }
+}
+
+// The buffer active in `c`'s view (current or saved), or NULL.
+static struct buffer_t *activeBufferOf(const DaemonClient *c) {
+  const ScreenLayout *layout = c == s_current ? &E.layout : &c->view.layout;
+  if (!layout->panes || layout->num_panes == 0)
+    return NULL;
+  return bufferFindById(layout->panes[layout->active_pane].buffer_id);
+}
+
+/**
+ * @brief While `waiting` (whose view is current) waits in a prompt: the
+ * other windows read what their clients sent, handle their keys and
+ * redraw, then `waiting` is current again. Windows with a key of their own
+ * still being handled (further up the stack) only redraw.
+ */
+static void serveOtherWindows(DaemonClient *waiting) {
+  int held_ids[DAEMON_MAX_CLIENTS + 1];
+  int held_states[DAEMON_MAX_CLIENTS + 1];
+  DaemonClient *focused = s_focused;
+  DaemonClient *c;
+  struct buffer_t *b;
+  int held = 0;
+  int i;
+
+  acceptClients();
+  for (c = s_clients; c; c = c->next)
+    if (c != waiting && !c->gone)
+      clientPump(c, 0);
+  // The buffers the waiting commands hold: read-only, and not killed,
+  // until they go on.
+  for (i = 0; i < s_handling_depth && held < DAEMON_MAX_CLIENTS + 1; i++) {
+    b = activeBufferOf(s_handling[i]);
+    if (!b)
+      continue;
+    held_ids[held] = b->buffer_id;
+    held_states[held++] = b->state;
+    b->state = READ_ONLY;
+    b->prompt_holds++;
+  }
+  for (c = s_clients; c; c = c->next) {
+    if (c->hello_pending && !c->closing)
+      clientOpen(c);
+    if (c != waiting && !isHandling(c))
+      handleKeys(c);
+  }
+  for (c = s_clients; c; c = c->next)
+    if (c != waiting && c->greeted && !c->closing) {
+      clientSwitchTo(c);
+      projectSyncActive();
+      editorRefreshScreen();
+    }
+  clientSwitchTo(waiting);
+  for (i = held - 1; i >= 0; i--) {
+    b = bufferFindById(held_ids[i]);
+    if (b) {
+      b->state = held_states[i];
+      b->prompt_holds--;
+    }
+  }
+  s_focused = focused;
+}
+
 /**
  * @brief Key bytes for the current window, waiting up to `timeout_ms` for
  * the client to send some. A window that has gone (or no window at all)
@@ -556,7 +663,19 @@ static long daemonReadKeys(void *buf, const size_t n, const int timeout_ms) {
     left = deadline - os_monotonic_ms();
     if (timeout_ms >= 0 && left <= 0)
       break;
-    clientPump(c, timeout_ms < 0 ? 1000 : (int)left);
+    // A loop of its own (a prompt) waiting for this window's keys: the
+    // other windows go on meanwhile.
+    if (isHandling(c)) {
+      serveOtherWindows(c);
+      if (keysPending(c) || c->gone)
+        break;
+      left = deadline - os_monotonic_ms();
+      if (left > SERVE_SLICE_MS || timeout_ms < 0)
+        left = SERVE_SLICE_MS;
+    } else if (timeout_ms < 0) {
+      left = 1000;
+    }
+    clientPump(c, left > 0 ? (int)left : 0);
   }
   if (c && keysPending(c)) {
     avail = c->keys_len - c->keys_head;
@@ -672,15 +791,7 @@ static void daemonRunLoop(void) {
       next = c->next;
       if (c->hello_pending && !c->closing)
         clientOpen(c);
-      while (c->greeted && keysPending(c) && !c->closing) {
-        clientSwitchTo(c);
-        s_focused = c;
-        editorProcessKeypress();
-        if (E.exit_requested) { // CTRL-x CTRL-c: this window only
-          E.exit_requested = 0;
-          c->closing = 1;
-        }
-      }
+      handleKeys(c);
     }
 
     for (c = s_clients; c; c = next) {
