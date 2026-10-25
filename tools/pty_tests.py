@@ -379,6 +379,28 @@ def daemon_started_by_client(binary, repo):
             ed.run('--kill', '--force', '--name=' + name)
 
 
+def daemon_window_directory(binary, repo):
+    """Each daemon window works from the directory its beluga -c ran in:
+    the open-file prompt starts there, and so does a terminal pane."""
+    name = daemon_name('cwd')
+    with Beluga(binary, repo) as ed:
+        try:
+            os.makedirs(ed.path('proj/sub'))
+            rc, out = ed.run('--daemon=' + name)
+            assert rc == 0, out
+            ed.start('-c', '--name=' + name, cwd='proj/sub')
+            ed.wait_for('closes this window')
+            ed.keys(CTRL_X, 'f', delay=0.4)
+            ed.wait_for('proj/sub/')
+            ed.keys('\x1b', delay=0.3)  # no file after all
+            open_terminal(ed)
+            shell(ed, 'pwd')
+            ed.wait_for(ed.path('proj/sub'))
+            ed.quit()
+        finally:
+            ed.run('--kill', '--force', '--name=' + name)
+
+
 def daemon_stop_signals(binary, repo):
     """Ctrl-C on a daemon with an unsaved buffer warns; a second one stops
     it, keeping the changes in autosave and taking the socket away. A
@@ -434,6 +456,7 @@ TESTS = [
     ('terminal-fast-typing', terminal_fast_typing),
     ('daemon-in-background', daemon_in_background),
     ('daemon-started-by-client', daemon_started_by_client),
+    ('daemon-window-directory', daemon_window_directory),
     ('daemon-stop-signals', daemon_stop_signals),
     ('terminal-long-burst', terminal_long_burst),
 ]

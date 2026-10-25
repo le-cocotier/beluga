@@ -7,8 +7,9 @@
  * terminal panes and background processes.
  *
  * Per window (a ClientView): the screen size, the pane layout, the pending
- * key prefix, the popups, the status message, the quit counter and the
- * last frame drawn.
+ * key prefix (and which-key's timer for it), the popups, the status
+ * message, the quit counter and the last frame drawn. The working
+ * directory is the client's (E.cwd).
  *
  * The editor reads all of that from the global E, so rather than threading
  * a client through every function, the daemon swaps a window's view into E
@@ -85,6 +86,8 @@ typedef struct
     Utf8Char *prompt_input;
     int prompt_is_command;
     int quit_times_buffer;
+    int which_key_prefix;
+    long which_key_since;
     // The window's current project: from its active pane's buffer, or
     // picked with project-switch (project.c).
     int current_project;
@@ -146,6 +149,8 @@ static void viewSave(ClientView *v) {
   v->prompt_input = E.prompt_input;
   v->prompt_is_command = E.prompt_is_command;
   v->quit_times_buffer = E.quit_times_buffer;
+  v->which_key_prefix = E.which_key_prefix;
+  v->which_key_since = E.which_key_since;
   v->current_project = E.current_project;
   v->constantes = E.constantes;
   projectSwapLastBuffer(&v->project_last_buffer);
@@ -169,6 +174,8 @@ static void viewLoad(ClientView *v) {
   E.prompt_input = v->prompt_input;
   E.prompt_is_command = v->prompt_is_command;
   E.quit_times_buffer = v->quit_times_buffer;
+  E.which_key_prefix = v->which_key_prefix;
+  E.which_key_since = v->which_key_since;
   E.current_project = v->current_project;
   E.constantes = v->constantes;
   projectSwapLastBuffer(&v->project_last_buffer);
@@ -239,6 +246,9 @@ static void clientSwitchTo(DaemonClient *c) {
   viewSave(s_current ? &s_current->view : &s_idle);
   viewLoad(c ? &c->view : &s_idle);
   s_current = c;
+  // Relative paths, the open-file prompt, new terminals: from where this
+  // window's `beluga -c` ran.
+  E.cwd = c ? c->cwd : NULL;
   if (!c)
     return;
   if (c->view.fresh) {

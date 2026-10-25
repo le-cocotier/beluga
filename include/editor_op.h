@@ -6,6 +6,9 @@
 #include "os.h"
 
 void editorSetStatusMessage(const char *fmt, ...);
+// The working directory (E.cwd, else the process's), galloc'd; NULL only
+// when it can't be told.
+char *editorGetCwd(void);
 int editorRowCharCount(Row *row, int x);
 int editorRowCxToByte(const Row *row, int cursor_x);
 char *editorGetClipboard(void);

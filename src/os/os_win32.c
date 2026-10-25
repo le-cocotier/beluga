@@ -1472,7 +1472,7 @@ static DWORD WINAPI closePseudoConsoleThread(LPVOID console)
     return 0;
 }
 
-OsPty *os_pty_open(const char *shell, const int rows, const int cols)
+OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int cols)
 {
     HANDLE in_read = NULL, in_write = NULL, out_read = NULL, out_write = NULL;
     HPCON console = NULL;
@@ -1484,6 +1484,8 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
     WBuf cmd = { NULL, 0, 0 };
     wchar_t *wshell;
     wchar_t *env = NULL;
+    wchar_t *wcwd = NULL;
+    DWORD attrs_of_cwd;
     OsPty *p = gcalloc(1, sizeof(*p));
 
     if (!p)
@@ -1527,9 +1529,20 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
     si.lpAttributeList = attrs;
 
     env = environmentWith(L"TERM=xterm-256color"); // as a Unix pane gets
+    if (cwd && *cwd)
+    {
+        wcwd = toWide(cwd);
+        // Not there any more: the editor's directory, as before.
+        attrs_of_cwd = wcwd ? GetFileAttributesW(wcwd) : INVALID_FILE_ATTRIBUTES;
+        if (attrs_of_cwd == INVALID_FILE_ATTRIBUTES || !(attrs_of_cwd & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            gfree(wcwd);
+            wcwd = NULL;
+        }
+    }
     if (!CreateProcessW(NULL, cmd.s, NULL, NULL, FALSE,
                         CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-                        env, NULL, &si.StartupInfo, &pi))
+                        env, wcwd, &si.StartupInfo, &pi))
         goto fail;
 
     p->process = pi.hProcess;
@@ -1543,6 +1556,7 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols)
     DeleteProcThreadAttributeList(attrs);
     gfree(attrs);
     gfree(env);
+    gfree(wcwd);
     gfree(cmd.s);
     return p;
 
@@ -1553,6 +1567,7 @@ fail:
         gfree(attrs);
     }
     gfree(env);
+    gfree(wcwd);
     gfree(cmd.s);
     if (console) ClosePseudoConsole(console);
     if (in_read) CloseHandle(in_read);

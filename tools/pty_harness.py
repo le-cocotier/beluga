@@ -88,8 +88,9 @@ class Beluga:
         signal.alarm(self.timeout)
         return self
 
-    def start(self, *args):
-        """Starts beluga with `args` (paths relative to HOME)."""
+    def start(self, *args, cwd=None):
+        """Starts beluga with `args` (paths relative to HOME, or to `cwd`,
+        a directory under HOME, when given)."""
         master, slave = pty.openpty()
         # Sized before the editor exists: it reads the size once at startup.
         fcntl.ioctl(slave, termios.TIOCSWINSZ,
@@ -107,7 +108,7 @@ class Beluga:
                 os.environ.update({'HOME': self.home, 'TERM': 'xterm-256color',
                                    'SHELL': '/bin/sh', 'PS1': '$ '})
                 os.environ.update(self.extra_env)
-                os.chdir(self.home)
+                os.chdir(os.path.join(self.home, cwd) if cwd else self.home)
                 argv = [self.binary] + self.args + list(args)
                 os.execv(self.binary, argv)
             finally:
@@ -139,7 +140,10 @@ class Beluga:
     def run(self, *args):
         """Runs beluga with `args` to the end, outside the pty, with this
         HOME; (exit code, stdout + stderr)."""
-        env = dict(os.environ, HOME=self.home, **self.extra_env)
+        # The environment start() gives, which a daemon started here
+        # passes on to its terminal panes.
+        env = dict(os.environ, HOME=self.home, TERM='xterm-256color',
+                   SHELL='/bin/sh', PS1='$ ', **self.extra_env)
         result = subprocess.run([self.binary] + list(args), cwd=self.home, env=env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, timeout=20)

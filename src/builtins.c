@@ -600,7 +600,7 @@ Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
   appDebug("[EDITOR OPEN FILE]\n");
   // The working directory as the starting point (getcwd, not $PWD, which
   // Windows shells don't set).
-  cwd = os_getcwd();
+  cwd = editorGetCwd();
   // With a trailing slash, so typing a name right away completes inside
   // the directory instead of appending to its name.
   slashed = utilFormat("%s%s", cwd ? cwd : "",
@@ -726,7 +726,7 @@ Lisp editorOpenFilePath(const Lisp args, LispError *e, LispContext ctx) {
  * @return Lisp string, or "" if getcwd() fails
  */
 Lisp editorPwd(Lisp args, LispError *e, LispContext ctx) {
-  char *cwd = os_getcwd();
+  char *cwd = editorGetCwd();
   Lisp result = lisp_make_string2(cwd ? cwd : "", ctx);
   (void)args;
   (void)e;
@@ -2553,7 +2553,7 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
     snprintf(joined, sizeof(joined), "%s", path);
   } else {
     if (!base || base[0] == '\0') {
-      cwd = os_getcwd();
+      cwd = editorGetCwd();
       base = cwd ? cwd : "/";
     }
     snprintf(joined, sizeof(joined), "%s/%s", base, path);

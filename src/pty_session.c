@@ -5,6 +5,8 @@
  */
 
 #include "../include/pty_session.h"
+#include "../include/editor_op.h"
+#include "../include/galloc.h"
 #include "../include/terminal.h"
 #include "../include/split_screen.h"
 
@@ -12,7 +14,9 @@
 
 int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, const int rows, const int cols)
 {
-    buf->pty = os_pty_open(shell_path, rows, cols);
+    char* cwd = editorGetCwd();
+    buf->pty = os_pty_open(shell_path, cwd, rows, cols);
+    gfree(cwd);
     if (!buf->pty)
     {
         appDebug("couldn't start a shell for the terminal buffer");

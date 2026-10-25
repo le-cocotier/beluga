@@ -234,7 +234,8 @@ typedef struct OsPty OsPty;
  * $BELUGA_SHELL, then pwsh, then Windows PowerShell, then cmd.exe on
  * Windows).
  */
-OsPty *os_pty_open(const char *shell, int rows, int cols);
+// `cwd`: the directory it starts in; NULL: the editor's.
+OsPty *os_pty_open(const char *shell, const char *cwd, int rows, int cols);
 
 // What the shell writes (VT escape sequences included); ends once it exits.
 OsStream *os_pty_output(OsPty *p);

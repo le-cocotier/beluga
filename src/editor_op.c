@@ -291,3 +291,9 @@ void editorRunLoop(void) {
   editorCloseTerminals();
   terminalRestore();
 }
+
+char *editorGetCwd(void) {
+  if (E.cwd && E.cwd[0])
+    return gstrdup(E.cwd);
+  return os_getcwd();
+}

@@ -54,12 +54,6 @@ left after the first step:
   open (open-file, M-x, search, kill-buffer confirmation), the other windows
   don't redraw or take keys until it closes. Make the prompt a per-window
   state driven by the run loop instead of a nested key loop.
-- [ ] **[debt]** A per-window working directory. The client sends its own
-  in the hello (used for the files on its command line), but the open-file
-  prompt, find-file, project search and new terminal panes still use the
-  daemon's (`os_getcwd()`).
-- [ ] **[debt]** which-key's pending-prefix timer (`whichKeyDraw()`'s
-  statics) is shared between windows.
 
 ---
 

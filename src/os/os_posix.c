@@ -672,7 +672,7 @@ struct OsPty {
   int exited;
 };
 
-OsPty *os_pty_open(const char *shell, const int rows, const int cols) {
+OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int cols) {
   struct winsize ws;
   OsPty *p;
   pid_t pid;
@@ -693,6 +693,9 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols) {
   }
   if (pid == 0) {
     // The child: become the shell.
+    if (cwd && *cwd && chdir(cwd) != 0) {
+      // Not there any more: the editor's directory, as before.
+    }
     sh = (shell && *shell) ? shell : getenv("SHELL");
     if (!sh || !*sh)
       sh = access("/bin/zsh", X_OK) == 0 ? "/bin/zsh" : "/bin/sh";

@@ -793,6 +793,15 @@ typedef struct editor_config_t
     struct const_t constantes;
     int quit_times_buffer;
 
+    // The working directory relative paths, the open-file prompt and new
+    // terminal panes start from (editorGetCwd()). NULL: the process's. In
+    // the daemon, the current window's (from its client).
+    const char* cwd;
+    // which-key (which_key.c): the prefix it last saw pending, and since
+    // when (ms), so the panel shows only once a chord has settled.
+    int which_key_prefix;
+    long which_key_since;
+
     // ── Projects (project.c) ────────────────────────────────────────────
     // constantes is the current project's copy of the settings;
     // global_constantes is what init.lisp alone set, for projects
