@@ -230,9 +230,14 @@ def terminal_long_burst(binary, repo):
         open_terminal(ed)
         line = ''.join(chr(ord('a') + i % 26) for i in range(2000))
         shell(ed, 'echo ' + line + ' > long.txt')
-        ed.pump(2.0)
-        with open(ed.path('long.txt')) as f:
-            got = f.read()
+        got = ''
+        for _ in range(100):  # slower under a sanitizer, or a busy machine
+            ed.pump(0.1)
+            if os.path.exists(ed.path('long.txt')):
+                with open(ed.path('long.txt')) as f:
+                    got = f.read()
+                if got.endswith('\n'):
+                    break
         assert got == line + '\n', '%d bytes: %r' % (len(got), got[:80])
         ed.quit()
 
