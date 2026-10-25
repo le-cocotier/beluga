@@ -31,6 +31,19 @@ Nothing open right now.
   - `tools/pty_tests.py` (`meson test`, the `pty` test) now types into a
     terminal pane in one burst and 2 ms apart, so the Linux case is
     checked on every run.
+  - Doesn't reproduce on macOS in a scripted pty either: zsh (bare, and the
+    real oh-my-zsh + powerlevel10k config) and bash; bursts up to 2000
+    bytes at the prompt; keys 0-5 ms apart; typing right after CTRL-x t;
+    typeahead during `sleep 1`; typing during `seq 1 200000`; all of
+    printable ASCII, every control key but CTRL-g/CTRL-x/ESC, and UTF-8
+    (è à € 日). Two things that do lose input there and look like it: a
+    canonical-mode line (into `cat`, or typed while a command runs) longer
+    than 1024 bytes is discarded by the macOS tty itself, editor or not;
+    and CTRL-g or ESC drop the pane out of the "term" keymap, after which
+    ENTER, TAB, BACKSPACE, CTRL-a/e/k/... run editor commands that ignore
+    a terminal buffer, while letters still reach the shell. Next step: a
+    repro in the real terminal app (which one, what was typed, what the
+    status line's prefix showed).
 - [ ] **[feature]** `ESCAPE` in a terminal pane always goes back to the
   editor (`config/init.lisp`, the `term` prefix), so it never reaches a
   program: in vim, only CTRL-c leaves insert mode (CTRL-[ is the same
@@ -38,13 +51,6 @@ Nothing open right now.
   send `ESCAPE` to the program while it's on the alternate screen (vim,
   less, htop) and use another key to leave the pane there, or a double
   `ESCAPE`. A choice for the keymap, not a parser problem.
-- [ ] **[feature]** The terminal parser doesn't wrap: it doesn't know the
-  pane's width, so a line longer than the pane stays one row and is cut at
-  the pane's edge (`src/ansi_parser.c`, `putChar()`). Wrapping needs the
-  width in `TermParserState` (set where `pane_height` is) and xterm's
-  pending-wrap rule (the cursor stays on the last column until the next
-  character).
-
 ---
 
 ## Configuration and packages

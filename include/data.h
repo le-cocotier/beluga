@@ -529,6 +529,11 @@ typedef struct term_parser_state_t
     TermCellAttr saved_attr;
     int screen_top_row;
     int pane_height;
+    // The pane's width, for wrapping (0: not known, lines don't wrap), and
+    // xterm's pending wrap: a character went in the last column, and the
+    // cursor stays there until the next one goes to the next line.
+    int pane_width;
+    int wrap_pending;
     // Scroll region (DECSTBM): its first screen row counted from 0, its
     // last counted from 1, 0 meaning the screen's last row whatever the
     // pane's height (so a zeroed state has no region).

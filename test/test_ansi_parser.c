@@ -257,6 +257,50 @@ static void testScrollbackOnNormalScreen(void) {
   bufferFree(buf);
 }
 
+static void testWrap(void) {
+  // At the pane's width a line goes on to the next row, xterm style: the
+  // cursor waits on the last column until the next character.
+  Buffer *buf = terminalBuffer();
+  buf->term_state.pane_width = 5;
+  feed(buf, "abcde");
+  CHECK_INT(buf->numrows, 1);
+  CHECK_INT(buf->term_state.cursor_x, 4);
+  feed(buf, "fg");
+  CHECK_ROW(buf, 0, "abcde");
+  CHECK_ROW(buf, 1, "fg");
+  // Filling the last column then CR LF leaves no blank line between.
+  feed(buf, "\r\nhijkl\r\nm");
+  CHECK_ROW(buf, 2, "hijkl");
+  CHECK_ROW(buf, 3, "m");
+  // A cursor move drops the pending wrap; colours don't.
+  feed(buf, "\r\nnopqr\x1b[1Gs");
+  CHECK_ROW(buf, 4, "sopqr");
+  feed(buf, "\r\ntuvwx\x1b[31my");
+  CHECK_ROW(buf, 5, "tuvwx");
+  CHECK_ROW(buf, 6, "y");
+  // A wide character that doesn't fit in the last column wraps whole.
+  feed(buf, "\r\nabcd\xe4\xb8\xad");
+  CHECK_ROW(buf, 7, "abcd");
+  CHECK_ROW(buf, 8, "\xe4\xb8\xad");
+  CHECK_INT(buf->term_state.cursor_x, 2);
+  // Cursor moves stop at the last column.
+  feed(buf, "\x1b[99C");
+  CHECK_INT(buf->term_state.cursor_x, 4);
+  bufferFree(buf);
+}
+
+static void testWrapScrolls(void) {
+  // Wrapping on the bottom row scrolls, like a line feed.
+  Buffer *buf = terminalBuffer();
+  buf->term_state.pane_width = 3;
+  buf->term_state.pane_height = 2;
+  feed(buf, "abcdefgh");
+  CHECK_ROW(buf, 0, "abc");
+  CHECK_ROW(buf, 2, "gh");
+  CHECK_INT(buf->term_state.screen_top_row, 1);
+  bufferFree(buf);
+}
+
 int main(void) {
   testInit();
   testLines();
@@ -277,5 +321,7 @@ int main(void) {
   testScrollRegion();
   testInsertDeleteLines();
   testScrollbackOnNormalScreen();
+  testWrap();
+  testWrapScrolls();
   return testDone();
 }

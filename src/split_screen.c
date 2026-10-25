@@ -282,6 +282,7 @@ void splitScreenSyncTerminalSizes(void) {
             continue;
         ptySessionResize(buf, pane->height, pane->width);
         buf->term_state.pane_height = pane->height;
+        buf->term_state.pane_width = pane->width;
     }
 }
 

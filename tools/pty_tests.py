@@ -167,6 +167,23 @@ def terminal_colors(binary, repo):
         ed.quit()
 
 
+def terminal_wrap(binary, repo):
+    """Output wider than the pane wraps onto the next line instead of
+    being cut at the pane's edge, and a line that exactly fills it leaves
+    no blank line after it."""
+    with Beluga(binary, repo) as ed:
+        ed.start()
+        open_terminal(ed)
+        shell(ed, "printf 'W%.0s' $(seq 1 130); echo; "
+                  "printf 'F%.0s' $(seq 1 100); echo; echo end")
+        ed.wait_for('end')
+        lines = ed.text()
+        y = next(i for i, line in enumerate(lines) if line.startswith('WWW'))
+        assert lines[y] == 'W' * 100 and lines[y + 1] == 'W' * 30, lines[y:y + 2]
+        assert lines[y + 2] == 'F' * 100 and lines[y + 3] == 'end', lines[y + 2:y + 4]
+        ed.quit()
+
+
 def terminal_wide_characters(binary, repo):
     """The shell moving the cursor on a line with wide characters lands
     where the terminal shows it."""
@@ -198,6 +215,23 @@ def terminal_fast_typing(binary, repo):
         with open(ed.path('typed.txt')) as f:
             got = f.read()
         assert got == line + '\n' + line[:40] + '\n', repr(got)
+        ed.quit()
+
+
+def terminal_long_burst(binary, repo):
+    """A 2000-character command line sent in one write reaches the shell
+    whole: more than macOS's ~1 KB pty input queue between the harness and
+    the editor. (Not into `cat`: a canonical-mode line longer than 1024
+    bytes is discarded by the macOS tty itself, editor or not.)"""
+    with Beluga(binary, repo) as ed:
+        ed.start()
+        open_terminal(ed)
+        line = ''.join(chr(ord('a') + i % 26) for i in range(2000))
+        shell(ed, 'echo ' + line + ' > long.txt')
+        ed.pump(2.0)
+        with open(ed.path('long.txt')) as f:
+            got = f.read()
+        assert got == line + '\n', '%d bytes: %r' % (len(got), got[:80])
         ed.quit()
 
 
@@ -316,7 +350,9 @@ TESTS = [
     ('terminal-vim', terminal_vim),
     ('terminal-colors', terminal_colors),
     ('terminal-wide-characters', terminal_wide_characters),
+    ('terminal-wrap', terminal_wrap),
     ('terminal-fast-typing', terminal_fast_typing),
+    ('terminal-long-burst', terminal_long_burst),
 ]
 
 

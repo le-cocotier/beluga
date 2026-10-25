@@ -154,8 +154,22 @@ class Beluga:
             self.pump(delay)
 
     def write(self, data):
-        """Sends `data` in one write, as a paste or a fast typist would."""
-        os.write(self.fd, data.encode() if isinstance(data, str) else data)
+        """Sends `data` in one go, as a paste or a fast typist would. The
+        editor's output is read while the write waits: macOS's pty input
+        queue holds about 1 KB, and a blocking write of more stalled until
+        the editor read its keys, while the editor stalled drawing to a
+        harness that wasn't reading."""
+        data = data.encode() if isinstance(data, str) else data
+        flags = fcntl.fcntl(self.fd, fcntl.F_GETFL)
+        fcntl.fcntl(self.fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        try:
+            while data:
+                try:
+                    data = data[os.write(self.fd, data):]
+                except BlockingIOError:
+                    self.pump(0.01)
+        finally:
+            fcntl.fcntl(self.fd, fcntl.F_SETFL, flags)
 
     def text(self):
         """The screen's lines (needs pyte)."""
