@@ -84,8 +84,6 @@ src/breakpoints.c). What's left after the first step:
   picked from a list), exception breakpoints, watch expressions, values
   inline after the code while paused (the inlay hint drawing could carry
   them), logpoints and hit counts (gdb supports both).
-- [ ] **[feature]** Keep breakpoints across restarts, per project. Today
-  they last until beluga exits.
 - [ ] **[debt]** Daemon mode: one session for the whole daemon, and the
   stopped line moves whichever window last typed. Give each project its
   own session.

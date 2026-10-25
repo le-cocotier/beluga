@@ -21,8 +21,14 @@ static Breakpoint *s_breakpoints;
 static int s_count;
 static int s_cap;
 static void (*s_listener)(const char *path);
+static char *s_store; // the file they are kept in across runs, or NULL
+static int s_loading; // breakpointsLoad() adding: nothing to tell or save
 
 static void notifyChanged(const char *path) {
+  if (s_loading)
+    return;
+  if (s_store)
+    breakpointsSave(s_store);
   if (s_listener)
     s_listener(path);
 }
@@ -151,6 +157,8 @@ int breakpointsClear(void) {
 
 void breakpointsFree(void) {
   int i;
+  gfree(s_store);
+  s_store = NULL;
   for (i = 0; i < s_count; i++) {
     gfree(s_breakpoints[i].path);
     gfree(s_breakpoints[i].condition);
@@ -236,4 +244,84 @@ void breakpointsLinesRemoved(const struct buffer_t *buf, const int at, const int
     notifyChanged(path);
   }
   gfree(path);
+}
+
+// ─── Kept across runs ────────────────────────────────────────────────────────
+// One line per breakpoint: "<line>\t<path>\t<condition>", the line 1-based
+// as a person reads it, the condition possibly empty. Paths can't hold a
+// tab or a newline here; a condition's newlines become spaces.
+
+int breakpointsSave(const char *file) {
+  char tmp[OS_PATH_MAX];
+  char err[256];
+  FILE *f;
+  int i;
+  const char *c;
+  if (snprintf(tmp, sizeof(tmp), "%s.tmp", file) >= (int)sizeof(tmp))
+    return -1;
+  f = fopen(tmp, "w");
+  if (!f)
+    return -1;
+  for (i = 0; i < s_count; i++) {
+    fprintf(f, "%d\t%s\t", s_breakpoints[i].line + 1, s_breakpoints[i].path);
+    for (c = s_breakpoints[i].condition; c && *c; c++)
+      fputc((*c == '\n' || *c == '\r' || *c == '\t') ? ' ' : *c, f);
+    fputc('\n', f);
+  }
+  if (os_file_flush(f) != 0) {
+    fclose(f);
+    remove(tmp);
+    return -1;
+  }
+  fclose(f);
+  if (os_replace_file(tmp, file, err, sizeof(err)) != 0) {
+    remove(tmp);
+    return -1;
+  }
+  return 0;
+}
+
+int breakpointsLoad(const char *file) {
+  char line[OS_PATH_MAX + 1024];
+  OsFileInfo info;
+  FILE *f;
+  char *path;
+  char *condition;
+  char *end;
+  size_t len;
+  long n;
+  int added = 0;
+  f = fopen(file, "r");
+  if (!f)
+    return 0;
+  s_loading = 1;
+  while (fgets(line, sizeof(line), f)) {
+    len = strlen(line);
+    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+      line[--len] = '\0';
+    n = strtol(line, &end, 10);
+    if (end == line || *end != '\t' || n < 1)
+      continue;
+    path = end + 1;
+    condition = strchr(path, '\t');
+    if (condition)
+      *condition++ = '\0';
+    // A file that's gone (deleted, renamed) takes its breakpoints with it.
+    if (!*path || breakpointAt(path, (int)n - 1) || os_file_info(path, &info) != 0)
+      continue;
+    if (breakpointSetCondition(path, (int)n - 1, condition) == 0)
+      added++;
+  }
+  s_loading = 0;
+  fclose(f);
+  return added;
+}
+
+void breakpointsSetStore(const char *file) {
+  gfree(s_store);
+  s_store = NULL;
+  if (!file)
+    return;
+  breakpointsLoad(file);
+  s_store = utilStrdup(file);
 }

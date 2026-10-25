@@ -208,7 +208,9 @@ is media keys, and F11 is Show Desktop); bind them in personal-config if you lik
 
 While the program is paused, the `*debug*` panel shows the call stack, the variables (ENTER
 selects a frame or opens a struct) and the end of the output; the gutter shows `▶` on the
-current line and `●` on breakpoints, which follow the code as you edit. For anything the
+current line and `●` on breakpoints, which follow the code as you edit. Breakpoints are kept
+in `~/.beluga/breakpoints` from one run to the next, and a session only gets those in its own
+project (the files under its root, or under the working directory). For anything the
 Ctrl-x B c prompt doesn't cover, hand the adapter its own launch arguments, e.g. in a project's
 `.beluga/init.lisp`:
 

@@ -8,6 +8,7 @@
 #include "../include/breakpoints.h"
 #include "../include/buffer.h"
 #include "../include/galloc.h"
+#include "../include/os.h"
 #include "../include/utf8.h"
 
 static int s_notified;
@@ -116,6 +117,45 @@ static void testOtherFilesDontMove(void) {
   bufferFree(buf);
 }
 
+static void testKeptAcrossRuns(void) {
+  const char *file = "test_breakpoints.store";
+  char self[OS_PATH_MAX];
+  char *cwd = os_getcwd();
+  FILE *f;
+  snprintf(self, sizeof(self), "%s/%s", cwd, file);
+  gfree(cwd);
+  f = fopen(self, "w"); // a file that exists, for the breakpoints to be in
+  CHECK(f != NULL);
+  fprintf(f, "x\n");
+  fclose(f);
+  breakpointToggle(self, 3);
+  breakpointSetCondition(self, 7, "i\t== 2");
+  breakpointToggle("/no/such/file.c", 1);
+  CHECK_INT(breakpointsSave(file), 0);
+  breakpointsClear();
+  // The gone file's breakpoint isn't brought back; the others are, with
+  // the condition (its tab now a space), and loading tells nobody.
+  s_notified = 0;
+  CHECK_INT(breakpointsLoad(file), 2);
+  CHECK_INT(s_notified, 0);
+  CHECK(breakpointAt(self, 3) != NULL);
+  CHECK_STR(breakpointAt(self, 7)->condition, "i == 2");
+  CHECK(breakpointAt("/no/such/file.c", 1) == NULL);
+  // Setting a store loads it (the clear above, without one, saved
+  // nothing), then every change is written at once.
+  breakpointsClear();
+  breakpointsSetStore(file);
+  CHECK_INT(breakpointsInFile(self), 2);
+  breakpointToggle(self, 9);
+  breakpointsSetStore(NULL);
+  breakpointsClear();
+  CHECK_INT(breakpointsLoad(file), 3);
+  CHECK(breakpointAt(self, 9) != NULL);
+  breakpointsClear();
+  remove(file);
+  remove(self);
+}
+
 int main(void) {
   testInit();
   breakpointsSetListener(onChange);
@@ -125,6 +165,7 @@ int main(void) {
   testEnterBeforeTheCode();
   testFollowsRemovedLines();
   testOtherFilesDontMove();
+  testKeptAcrossRuns();
   breakpointsFree();
   return testDone();
 }

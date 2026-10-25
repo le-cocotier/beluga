@@ -86,6 +86,9 @@ static struct
     int seq;
     DapState state;
     char adapter[64];
+    // The project it debugs (or the working directory): only breakpoints
+    // in files under it are sent, not every project's kept ones.
+    char *root;
     cJSON *launch;         // launch arguments, until launch is sent
     long long launch_at;   // when launch goes anyway (ms), 0 before initialize
     int configured;        // breakpoints sent: changes go out as they happen
@@ -342,6 +345,8 @@ static void endSession(const char *message, const int run_hook) {
   // reading it. It's emptied when the next session starts.
   cJSON_Delete(s.launch);
   s.launch = NULL;
+  gfree(s.root);
+  s.root = NULL;
   if (s.proc) {
     os_proc_free(s.proc);
     s.proc = NULL;
@@ -479,7 +484,8 @@ static int sendAllBreakpoints(void) {
   int sent = 0;
   all = breakpointsAll(&count);
   for (i = 0; i < count; i++)
-    if (i == 0 || strcmp(all[i].path, all[i - 1].path) != 0) {
+    if ((i == 0 || strcmp(all[i].path, all[i - 1].path) != 0) &&
+        (!s.root || utilPathIsUnder(all[i].path, s.root))) {
       sendBreakpoints(all[i].path);
       sent++;
     }
@@ -488,7 +494,7 @@ static int sendAllBreakpoints(void) {
 
 // breakpoints.c's listener: a file's breakpoints changed.
 static void onBreakpointsChanged(const char *path) {
-  if (s.proc && s.configured)
+  if (s.proc && s.configured && (!s.root || utilPathIsUnder(path, s.root)))
     sendBreakpoints(path);
 }
 
@@ -1117,8 +1123,8 @@ int dapStart(const char *ext, const char *launch_json) {
   spawn.stderr_file = debug_log;
   spawn.no_prompt = 1;
   s.proc = os_proc_spawn(&spawn);
-  gfree(root);
   if (!s.proc) {
+    gfree(root);
     cJSON_Delete(launch);
     editorSetStatusMessage("Couldn't start %s", adapter->argv[0]);
     return -1;
@@ -1136,6 +1142,7 @@ int dapStart(const char *ext, const char *launch_json) {
   s.disconnected = 0;
   s.stop_reason[0] = '\0';
   s.launch = launch;
+  s.root = root;
   s.launch_at = 0;
   s.state = DAP_STARTING;
   snprintf(s.adapter, sizeof(s.adapter), "%s", adapterName(adapter));

@@ -139,3 +139,23 @@ const char *utilBelugaDir(void)
     os_path_to_slashes(dir);
     return dir;
 }
+
+int utilPathIsUnder(const char *path, const char *dir) {
+  char head[OS_PATH_MAX];
+  char root[OS_PATH_MAX];
+  size_t len;
+  if (!path || !dir)
+    return 0;
+  len = strlen(dir);
+  while (len > 0 && dir[len - 1] == '/')
+    len--; // "/" and "C:/" become "" and "C:": every path goes on with '/'
+  if (len >= sizeof(head) || strlen(path) < len)
+    return 0;
+  if (path[len] != '\0' && path[len] != '/')
+    return 0;
+  memcpy(head, path, len);
+  head[len] = '\0';
+  memcpy(root, dir, len);
+  root[len] = '\0';
+  return os_path_equal(head, root);
+}

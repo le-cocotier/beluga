@@ -55,6 +55,15 @@ void breakpointsLinesRemoved(const struct buffer_t *buf, int at, int count);
 // sends them again. NULL: nobody is told.
 void breakpointsSetListener(void (*listener)(const char *path));
 
+// Writes every breakpoint to `file` (replacing it in one step). 0 or -1.
+int breakpointsSave(const char *file);
+// Adds the breakpoints `file` holds, skipping those of files that no longer
+// exist. Nobody is told. @return how many were added (0 without the file).
+int breakpointsLoad(const char *file);
+// Loads `file` and, from then on, saves to it whenever the list changes,
+// so breakpoints outlive the editor. NULL stops saving.
+void breakpointsSetStore(const char *file);
+
 // The absolute path of `buf`'s file, galloc'd, or NULL when it isn't a file
 // buffer.
 char *breakpointsBufferPath(const struct buffer_t *buf);

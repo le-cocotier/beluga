@@ -389,6 +389,19 @@ static char *themeColor(const char *ansi) {
  *   - E.prefix
  *   - E.panes.layout (via SplitScreenInit)
  */
+/**
+ * @brief Breakpoints outlive the editor: ~/.beluga/breakpoints holds every
+ * project's, and each debug session gets those of its own project.
+ */
+static void initBreakpointStore(void) {
+  char path[OS_PATH_MAX];
+  const char *dir = utilBelugaDir();
+  if (!dir)
+    return;
+  snprintf(path, sizeof(path), "%s/breakpoints", dir);
+  breakpointsSetStore(path);
+}
+
 void initEditor() {
   char *home;
   EditorPane *active = NULL;
@@ -529,6 +542,7 @@ void initEditor() {
   // After init.lisp (which may add project markers) and its settings,
   // which projects without a config of their own keep.
   projectInit();
+  initBreakpointStore();
   // Clients are created per server, the first time a matching file is
   // opened (bufferMaybeStartLsp()).
   E.number_of_lsp_clients = 0;
