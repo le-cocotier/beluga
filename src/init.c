@@ -2,6 +2,7 @@
 #include "../include/breakpoints.h"
 #include "../include/builtins.h"
 #include "../include/dap.h"
+#include "../include/debug_ui.h"
 #include "../include/color.h"
 #include "../include/cJSON.h"
 #include "../include/completion.h"
@@ -582,6 +583,7 @@ void deInitEditor() {
   dapFree();
   debugBuiltinsFree();
   breakpointsFree();
+  debugUiFree();
 
   // write back ~/.beluga/projects, then free the list
   projectFree();
