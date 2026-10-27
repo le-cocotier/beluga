@@ -52,5 +52,7 @@ void debugUiPanelSelect(void);
 // Shows "*debug-output*", everything the program and the adapter wrote,
 // in the active pane.
 void debugUiShowOutput(void);
+// Frees the panel's row table, at exit.
+void debugUiFree(void);
 
 #endif // BELUGA_DEBUG_UI_H

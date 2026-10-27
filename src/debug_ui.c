@@ -590,3 +590,10 @@ void debugUiShowOutput(void) {
   active->buffer_id = s_output_id;
   active->shown_buffer_id = -1;
 }
+
+void debugUiFree(void) {
+  gfree(s_rows);
+  s_rows = NULL;
+  s_row_count = 0;
+  s_row_cap = 0;
+}

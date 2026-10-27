@@ -99,7 +99,11 @@ static int findRoot(const char *start_dir, char *out, size_t out_size) {
   char dir[OS_PATH_MAX];
   char parent[OS_PATH_MAX];
   char home[OS_PATH_MAX];
-  canonicalDir(os_home_dir(), home, sizeof(home));
+  char *home_dir = os_home_dir();
+  if (!home_dir)
+    return 0;
+  canonicalDir(home_dir, home, sizeof(home));
+  gfree(home_dir);
   snprintf(dir, sizeof(dir), "%s", start_dir);
   for (;;) {
     if (os_path_equal(dir, home))
@@ -149,7 +153,9 @@ static int addProject(const char *root, int trusted, long last_used) {
 }
 
 static void projectsFilePath(char *out, size_t out_size) {
-  snprintf(out, out_size, "%s/.beluga/projects", os_home_dir());
+  char *home = os_home_dir();
+  snprintf(out, out_size, "%s/.beluga/projects", home ? home : ".");
+  gfree(home);
 }
 
 /**
