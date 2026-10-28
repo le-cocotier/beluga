@@ -20,6 +20,13 @@ Install
 Re-running install.ps1 (from a newer release, say) updates beluga and the
 bundled packages; your configuration is never overwritten without asking.
 
+To uninstall, run from PowerShell in the folder:
+
+    powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
+
+It removes beluga.exe and its PATH entry and keeps %USERPROFILE%\.beluga;
+add -Purge to delete that too.
+
 If Windows warns about the files
 --------------------------------
 

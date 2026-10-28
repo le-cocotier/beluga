@@ -16,8 +16,15 @@ The executable file will be `build/beluga`. Feel free to add it to your path.
 
 ### From installation script ( prefered )
 
-Just clone the repo and execute the script `install.sh`. It will automatically add beluga to your path.
+Just clone the repo and execute the script `install.sh`. It builds beluga, installs it to
+`/usr/local/bin` (`--bindir DIR` for somewhere else; it tells you if that isn't on your PATH)
+and sets up `~/.beluga`. It offers to install anything missing (meson, ninja, git, a C compiler)
+with your package manager: Homebrew, apt, dnf, pacman, zypper or apk.
 Run `./install.sh --help` to see its options (custom install location, non-interactive mode, skipping packages, debug builds, ...).
+
+- `./install.sh --update` pulls the latest version of your clone and installs it.
+- `./install.sh --uninstall` removes the binary but keeps your config and packages in
+  `~/.beluga`; add `--purge` to delete those too.
 
 ### Windows
 
@@ -40,7 +47,8 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 install what's missing with `winget`: [Meson](https://mesonbuild.com) (Ninja included) and
 MinGW-w64 gcc ([WinLibs](https://winlibs.com); MSYS2's UCRT64 gcc works too — MSVC isn't
 supported). Already have a `beluga.exe`, e.g. from CI? `.\install.ps1 -Binary path\to\beluga.exe`
-installs it without compiling anything.
+installs it without compiling anything. `-Update` and `-Uninstall` (plus `-Purge`) work as
+they do with `install.sh`.
 
 Things that work differently on Windows:
 

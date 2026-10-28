@@ -8,7 +8,8 @@
     bundled packages) exactly as install.sh does.
 
     Safe to re-run: an existing build/ is reconfigured, and your config is
-    never touched without asking first. Bundled packages are replaced to
+    never touched without asking first. Nothing in ~/.beluga changes until
+    the build has succeeded. Bundled packages are replaced to
     match this checkout; one with local edits is moved to
     ~/.beluga/packages.bak/ first, never deleted. Packages that aren't
     bundled are never touched.
@@ -40,6 +41,14 @@
     Install this prebuilt beluga.exe (e.g. from a CI artifact) instead of
     building one. No compiler needed then. Run from an unzipped release
     package, the script does this by itself with the beluga.exe next to it.
+.PARAMETER Update
+    git pull this clone first, then install the new version (with the other
+    options given).
+.PARAMETER Uninstall
+    Remove beluga.exe and its PATH entry. ~/.beluga (your config and
+    packages) is kept unless you also pass -Purge.
+.PARAMETER Purge
+    With -Uninstall: delete ~/.beluga as well.
 #>
 [CmdletBinding()]
 param(
@@ -48,7 +57,10 @@ param(
     [switch]$SkipPackages,
     [switch]$Dev,
     [switch]$DebugBuild,
-    [string]$Binary
+    [string]$Binary,
+    [switch]$Update,
+    [switch]$Uninstall,
+    [switch]$Purge
 )
 
 # This file is deliberately plain ASCII: Windows PowerShell 5.1 reads a
@@ -85,6 +97,9 @@ function Test-Command($name) {
 
 # --- sanity checks ----------------------------------------------------------
 
+if ($Update -and $Uninstall) { Die '-Update and -Uninstall don''t go together' }
+if ($Purge -and -not $Uninstall) { Die '-Purge only makes sense with -Uninstall' }
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
@@ -104,12 +119,95 @@ if ($Binary -and -not (Test-Path $Binary)) {
     Die "No such file: $Binary"
 }
 
-Write-Host '--- Beluga installer (Windows) ---'
-if (-not (Confirm-Step "Install beluga from ${ScriptDir}?")) { Write-Host 'Aborted.'; exit 1 }
-
 # beluga keeps its files in $HOME/.beluga, as on Linux and macOS; on
 # Windows that's your profile folder (beluga.exe sets HOME from it too).
 $BelugaHome = Join-Path $env:USERPROFILE '.beluga'
+
+function Test-Junction($path) {
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    return $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+}
+
+function Test-SamePath($a, $b) {
+    return $a.TrimEnd('\') -ieq $b.TrimEnd('\')
+}
+
+# --- uninstall --------------------------------------------------------------
+
+if ($Uninstall) {
+    Write-Host '--- Beluga uninstaller (Windows) ---'
+    $installed = Join-Path $Prefix 'beluga.exe'
+    if (Test-Path $installed) {
+        if (Confirm-Step "Remove ${installed}?") {
+            try {
+                Remove-Item -Force $installed
+            } catch {
+                Die "Couldn't remove $installed - is beluga still running? Close it and re-run."
+            }
+            # Left over from an update while beluga was running.
+            Remove-Item -Force -ErrorAction SilentlyContinue "$installed.old"
+            if (-not (Get-ChildItem -Force $Prefix)) { Remove-Item $Prefix }
+            Ok "Removed $installed"
+        }
+    } else {
+        Warn "No beluga.exe in $Prefix"
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $entries = @($userPath -split ';' | Where-Object { $_ })
+    $kept = @($entries | Where-Object { -not (Test-SamePath $_ $Prefix) })
+    if ($kept.Count -ne $entries.Count -and -not (Test-Path (Join-Path $Prefix 'beluga.exe'))) {
+        [Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'User')
+        Ok "Removed $Prefix from your user PATH"
+    }
+
+    if (-not (Test-Path $BelugaHome)) {
+        # nothing to keep or delete
+    } elseif ($Purge) {
+        if (Confirm-Step "Delete $BelugaHome (your config, personal-config and every package) for good?") {
+            # -Dev junctions first, on their own: Windows PowerShell 5.1's
+            # Remove-Item -Recurse follows a junction and would delete the
+            # checkout's packages it points to.
+            $pkgDir = Join-Path $BelugaHome 'packages'
+            if (Test-Path $pkgDir) {
+                foreach ($p in Get-ChildItem -LiteralPath $pkgDir -Force) {
+                    if (Test-Junction $p.FullName) { [IO.Directory]::Delete($p.FullName, $false) }
+                }
+            }
+            Remove-Item -LiteralPath $BelugaHome -Recurse -Force
+            Ok "Deleted $BelugaHome"
+        }
+    } else {
+        Write-Host "Kept $BelugaHome (your config and packages); -Uninstall -Purge deletes it too."
+    }
+    exit 0
+}
+
+# --- update -----------------------------------------------------------------
+
+if ($Update) {
+    if (-not (Test-Path (Join-Path $ScriptDir '.git'))) {
+        Die "-Update needs a git clone of beluga, and $ScriptDir isn't one. For a release, download the new zip and run its install.ps1."
+    }
+    if (-not (Test-Command 'git')) { Die '-Update needs git (winget install Git.Git).' }
+    Info "Updating $ScriptDir ..."
+    $before = & git rev-parse HEAD
+    & git pull --ff-only
+    if ($LASTEXITCODE -ne 0) { Die 'git pull failed (local changes or a diverged branch?) - sort it out and re-run.' }
+    if ((& git rev-parse HEAD) -eq $before) { Ok 'Already up to date' }
+    else { & git --no-pager log --oneline "$before..HEAD" }
+    # Re-run the (possibly new) installer, so a changed install.ps1 is the
+    # one doing the installing.
+    $rerun = @{}
+    foreach ($key in $PSBoundParameters.Keys) {
+        if ($key -ne 'Update') { $rerun[$key] = $PSBoundParameters[$key] }
+    }
+    & $PSCommandPath @rerun
+    exit $LASTEXITCODE
+}
+
+Write-Host '--- Beluga installer (Windows) ---'
+if (-not (Confirm-Step "Install beluga from $ScriptDir to ${Prefix}?")) { Write-Host 'Aborted.'; exit 1 }
 
 # --- dependencies -----------------------------------------------------------
 
@@ -150,6 +248,38 @@ if (-not $Binary) {
 }
 Install-Dependency 'git' $false
 Ok 'Dependencies checked'
+
+# --- build ------------------------------------------------------------------
+
+# Build first: if it fails, ~/.beluga stays as it was, rather than holding
+# new packages the old beluga.exe can't run.
+
+$Exe = $Binary
+if (-not $Exe) {
+    if ($DebugBuild) {
+        Info 'Building (debug, APP_DEBUG logging enabled) ...'
+        $mesonArgs = @('-Dbuildtype=debug', '-Dc_args=-DAPP_DEBUG')
+    } else {
+        Info 'Building (release) ...'
+        # -Dc_args= explicitly: a reconfigure keeps every option it isn't
+        # given, so a previous -DebugBuild's -DAPP_DEBUG would otherwise stay.
+        $mesonArgs = @('-Dbuildtype=release', '-Dc_args=')
+    }
+    # MinGW gcc, even when Visual Studio's compiler is also around (it isn't
+    # supported: the code uses gcc extensions).
+    $env:CC = 'gcc'
+    # --reconfigure only on a directory meson has actually set up: on an
+    # empty or half-created build\ it fails.
+    if (Test-Path (Join-Path $ScriptDir 'build\meson-private')) {
+        & meson setup --reconfigure build @mesonArgs
+    } else {
+        & meson setup build @mesonArgs
+    }
+    if ($LASTEXITCODE -ne 0) { Die 'meson setup failed' }
+    & meson compile -C build
+    if ($LASTEXITCODE -ne 0) { Die "Build failed - nothing was installed, $BelugaHome is untouched." }
+    $Exe = Join-Path $ScriptDir 'build\beluga.exe'
+}
 
 # --- config files -----------------------------------------------------------
 
@@ -207,11 +337,6 @@ $PackagesSrc = Join-Path $ScriptDir 'packages'
 $PackagesDst = Join-Path $BelugaHome 'packages'
 $PackagesBak = Join-Path $BelugaHome 'packages.bak'
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-
-function Test-Junction($path) {
-    $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-    return $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
-}
 
 # Same files with the same contents? (lisp_log.err aside: the editor writes
 # it into whatever directory it runs from.)
@@ -287,45 +412,30 @@ if ($SkipPackages) {
     Ok 'Bundled packages up to date'
 }
 
-# --- build ------------------------------------------------------------------
-
-$Exe = $Binary
-if (-not $Exe) {
-    if ($DebugBuild) {
-        Info 'Building (debug, APP_DEBUG logging enabled) ...'
-        $mesonArgs = @('-Dbuildtype=debug', '-Dc_args=-DAPP_DEBUG')
-    } else {
-        Info 'Building (release) ...'
-        # -Dc_args= explicitly: a reconfigure keeps every option it isn't
-        # given, so a previous -DebugBuild's -DAPP_DEBUG would otherwise stay.
-        $mesonArgs = @('-Dbuildtype=release', '-Dc_args=')
-    }
-    # MinGW gcc, even when Visual Studio's compiler is also around (it isn't
-    # supported: the code uses gcc extensions).
-    $env:CC = 'gcc'
-    if (Test-Path (Join-Path $ScriptDir 'build')) {
-        & meson setup --reconfigure build @mesonArgs
-    } else {
-        & meson setup build @mesonArgs
-    }
-    if ($LASTEXITCODE -ne 0) { Die 'meson setup failed' }
-    & meson compile -C build
-    if ($LASTEXITCODE -ne 0) { Die 'Build failed' }
-    $Exe = Join-Path $ScriptDir 'build\beluga.exe'
-}
-
 # --- install the binary -----------------------------------------------------
 
 Info "Installing to $Prefix ..."
 New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-try {
-    Copy-Item -Force $Exe (Join-Path $Prefix 'beluga.exe')
-} catch {
-    Die "Couldn't write $Prefix\beluga.exe - is beluga still running? Close it and re-run."
+$Target = Join-Path $Prefix 'beluga.exe'
+# A running beluga.exe can't be overwritten, but it can be renamed: move it
+# aside first, so updating doesn't need every beluga closed.
+$Old = "$Target.old"
+Remove-Item -Force -ErrorAction SilentlyContinue $Old
+if (Test-Path $Target) {
+    try { Move-Item -Force $Target $Old } catch { }
 }
+try {
+    Copy-Item -Force $Exe $Target
+} catch {
+    if ((Test-Path $Old) -and -not (Test-Path $Target)) { Move-Item $Old $Target }
+    Die "Couldn't write $Target - is beluga still running? Close it and re-run."
+}
+# Fails, harmlessly, while the old one is still running; the next install
+# or -Uninstall cleans it up.
+Remove-Item -Force -ErrorAction SilentlyContinue $Old
 
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-$onPath = @($userPath -split ';' | Where-Object { $_.TrimEnd('\') -ieq $Prefix.TrimEnd('\') }).Count -gt 0
+$onPath = @($userPath -split ';' | Where-Object { $_ -and (Test-SamePath $_ $Prefix) }).Count -gt 0
 if (-not $onPath) {
     if (Confirm-Step "Add $Prefix to your PATH?") {
         $newPath = (@($userPath, $Prefix) | Where-Object { $_ }) -join ';'
