@@ -99,6 +99,21 @@ void settingsLoad(void) {
   settingsRead(lisp_env(E.ctx), &E.constantes, s_invalid, sizeof(s_invalid));
 }
 
+void settingsWriteTemplate(FILE *f) {
+  int i;
+  const Setting *s;
+  const int *global;
+  char value[32];
+  for (i = 0; i < SETTING_COUNT; i++) {
+    s = &s_settings[i];
+    // The same field of E.global_constantes: what init.lisp set.
+    global = (const int *)((const char *)&E.global_constantes +
+                           ((const char *)s->target - (const char *)&E.constantes));
+    formatValue(s, *global, value, sizeof(value));
+    fprintf(f, ";; %s\n;; (define %s %s)\n\n", s->doc, s->name, value);
+  }
+}
+
 void settingsReportProblems(void) {
   if (s_invalid[0])
     editorSetStatusMessage("init.lisp: invalid %s, using the default (CTRL-x c s)", s_invalid);

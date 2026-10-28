@@ -166,6 +166,7 @@ typedef struct
     char* root;          // absolute, '/' separators, no trailing slash
     int trusted;         // its .beluga/init.lisp may run (project-trust)
     int opened;          // made current at least once this session
+    int removed;         // forgotten (project-remove): not listed or saved
     int has_config_env;  // config_env holds its evaluated .beluga/init.lisp
     Lisp config_env;     // the global env extended with the project's own table
     long last_used;      // larger is more recent; orders ~/.beluga/projects

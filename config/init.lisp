@@ -490,10 +490,17 @@
 (map-key "r" lsp-rename "project")
 (map-key "z" lsp-format-buffer "project")
 ;; The project itself: switch to a remembered one (opens find-file in
-;; it), trust it so its .beluga/init.lisp loads, or open that file.
+;; it), trust it so its .beluga/init.lisp loads, or open that file (a new
+;; one starts with every setting as a commented-out placeholder).
+;; n remembers any directory as a project, x forgets one (its files are
+;; left alone), X forgets those whose directory is gone, u undoes t.
 (map-key "p" project-switch "project")
 (map-key "t" project-trust "project")
+(map-key "u" project-untrust "project")
 (map-key "c" project-open-config "project")
+(map-key "n" project-add "project")
+(map-key "x" project-remove "project")
+(map-key "X" project-prune "project")
 
 ;; term
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "term")
