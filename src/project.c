@@ -11,6 +11,7 @@
 #include "../include/editor_op.h"
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
+#include "../include/input.h"
 #include "../include/settings.h"
 #include "../include/list_popup.h"
 #include "../include/os.h"
@@ -36,6 +37,7 @@ static char **s_markers = NULL; // added ones, owned
 static int s_marker_count = 0;
 
 static long s_clock = 0;        // last_used stamps
+static int s_loaded = 0;        // projectInit() has read ~/.beluga/projects
 static int s_last_buffer_id = -1; // what projectSyncActive() last saw
 static char s_notice[256];      // shown on the next tick, see setNotice()
 
@@ -56,7 +58,7 @@ static void canonicalDir(const char *path, char *out, size_t out_size) {
   } else if (os_path_is_absolute(path)) {
     snprintf(out, out_size, "%s", path);
   } else {
-    cwd = os_getcwd();
+    cwd = editorGetCwd();
     snprintf(out, out_size, "%s/%s", cwd ? cwd : "", path);
     gfree(cwd);
   }
@@ -70,6 +72,8 @@ static const char *baseName(const char *path) {
   const char *slash = strrchr(path, '/');
   return slash && slash[1] ? slash + 1 : path;
 }
+
+static int findProject(const char *root);
 
 static int hasMarker(const char *dir) {
   char path[OS_PATH_MAX];
@@ -89,6 +93,15 @@ static int hasMarker(const char *dir) {
 }
 
 /**
+ * @brief Whether `dir` is a remembered project: one project-add added
+ * stays a root without any marker, and so does one whose .git went away.
+ */
+static int isRemembered(const char *dir) {
+  const int index = findProject(dir);
+  return index != -1 && !E.projects[index].removed;
+}
+
+/**
  * @brief The project root above `start_dir` (a canonical directory), in
  * `out`. 0 when there is none.
  * @details Never the home directory or anything above it, nor the
@@ -99,7 +112,11 @@ static int findRoot(const char *start_dir, char *out, size_t out_size) {
   char dir[OS_PATH_MAX];
   char parent[OS_PATH_MAX];
   char home[OS_PATH_MAX];
-  canonicalDir(os_home_dir(), home, sizeof(home));
+  char *home_dir = os_home_dir();
+  if (!home_dir)
+    return 0;
+  canonicalDir(home_dir, home, sizeof(home));
+  gfree(home_dir);
   snprintf(dir, sizeof(dir), "%s", start_dir);
   for (;;) {
     if (os_path_equal(dir, home))
@@ -107,7 +124,7 @@ static int findRoot(const char *start_dir, char *out, size_t out_size) {
     utilDirname(dir, parent, sizeof(parent));
     if (os_path_equal(parent, dir) || strcmp(parent, ".") == 0)
       return 0; // dir is the filesystem root
-    if (hasMarker(dir)) {
+    if (hasMarker(dir) || isRemembered(dir)) {
       snprintf(out, out_size, "%s", dir);
       return 1;
     }
@@ -125,13 +142,21 @@ static int findProject(const char *root) {
   return -1;
 }
 
-/** @brief Index of `root` in E.projects, adding it if it's new; -1 on OOM. */
+/**
+ * @brief Index of `root` in E.projects, adding it if it's new (or
+ * bringing back one project-remove forgot); -1 on OOM.
+ */
 static int addProject(const char *root, int trusted, long last_used) {
   Project *grown;
   Project *p;
   int index = findProject(root);
-  if (index != -1)
+  if (index != -1) {
+    if (E.projects[index].removed) {
+      E.projects[index].removed = 0;
+      E.projects[index].last_used = last_used;
+    }
     return index;
+  }
   grown = (Project *)grealloc(E.projects,
                               (E.number_of_projects + 1) * sizeof(Project));
   if (!grown)
@@ -149,7 +174,9 @@ static int addProject(const char *root, int trusted, long last_used) {
 }
 
 static void projectsFilePath(char *out, size_t out_size) {
-  snprintf(out, out_size, "%s/.beluga/projects", os_home_dir());
+  char *home = os_home_dir();
+  snprintf(out, out_size, "%s/.beluga/projects", home ? home : ".");
+  gfree(home);
 }
 
 /**
@@ -184,32 +211,47 @@ static int byLastUsed(const void *a, const void *b) {
   return pa->last_used < pb->last_used ? 1 : pa->last_used > pb->last_used ? -1 : 0;
 }
 
-/** @brief The projects, most recently used first (galloc'd, NULL if none). */
-static Project **sortedProjects(void) {
+/**
+ * @brief The projects not removed, most recently used first, and their
+ * number in `count` (galloc'd, NULL if none; `count` -1 on OOM).
+ */
+static Project **sortedProjects(int *count) {
   Project **sorted;
   int i;
+  *count = 0;
   if (E.number_of_projects == 0)
     return NULL;
   sorted = (Project **)galloc(E.number_of_projects * sizeof(Project *));
-  if (!sorted)
+  if (!sorted) {
+    *count = -1;
     return NULL;
+  }
   for (i = 0; i < E.number_of_projects; i++)
-    sorted[i] = &E.projects[i];
-  qsort(sorted, E.number_of_projects, sizeof(Project *), byLastUsed);
+    if (!E.projects[i].removed)
+      sorted[(*count)++] = &E.projects[i];
+  if (*count == 0) {
+    gfree(sorted);
+    return NULL;
+  }
+  qsort(sorted, *count, sizeof(Project *), byLastUsed);
   return sorted;
 }
 
 static void saveProjects(void) {
   char path[OS_PATH_MAX];
-  Project **sorted = sortedProjects();
+  int count;
+  Project **sorted = sortedProjects(&count);
   FILE *f;
   int i;
-  if (!sorted)
+  // Not before projectInit() read the file, and not on OOM: either would
+  // write over the remembered projects with nothing.
+  if (!s_loaded || count < 0)
     return;
   projectsFilePath(path, sizeof(path));
   f = fopen(path, "w");
   if (f) {
-    for (i = 0; i < E.number_of_projects && i < PROJECTS_REMEMBERED; i++)
+    // Written even when empty, so removing the last project sticks.
+    for (i = 0; i < count && i < PROJECTS_REMEMBERED; i++)
       fprintf(f, "%c %s\n", sorted[i]->trusted ? '+' : '-', sorted[i]->root);
     fclose(f);
   }
@@ -281,6 +323,13 @@ static void activate(int index) {
   if (index < 0 || index >= E.number_of_projects)
     return;
   p = &E.projects[index];
+  if (p->removed) {
+    // A buffer opened before project-remove forgot its project: it has
+    // none now, and init.lisp's settings apply.
+    E.current_project = -1;
+    E.constantes = E.global_constantes;
+    return;
+  }
   p->last_used = ++s_clock;
   if (index == E.current_project)
     return;
@@ -293,6 +342,35 @@ static void activate(int index) {
     runHooks("project-open", hook_args);
   }
   E.constantes = p->constantes;
+}
+
+/**
+ * @brief Drops the project's own config: its settings give way to
+ * init.lisp's. What its init.lisp did to the editor as a whole (map-key,
+ * add-hook) stays until beluga restarts.
+ */
+static void unloadConfig(Project *p) {
+  p->has_config_env = 0;
+  p->constantes = E.global_constantes;
+  if (E.current_project >= 0 && p == &E.projects[E.current_project])
+    E.constantes = E.global_constantes;
+}
+
+/**
+ * @brief Forgets E.projects[index]: it leaves the list and
+ * ~/.beluga/projects, untrusted. Nothing on disk is touched, and opening
+ * a file in it again brings it back like a new one.
+ * @details Marked rather than taken out of E.projects, since buffers and
+ * daemon windows hold indexes into it.
+ */
+static void removeProject(int index) {
+  Project *p = &E.projects[index];
+  unloadConfig(p);
+  p->removed = 1;
+  p->trusted = 0;
+  p->opened = 0;
+  if (index == E.current_project)
+    E.current_project = -1;
 }
 
 /** @brief The project above directory `dir`, added if new; -1 if none. */
@@ -311,6 +389,7 @@ void projectInit(void) {
   char *cwd;
   int index;
   loadProjects();
+  s_loaded = 1;
   // The working directory's project is current until a buffer says
   // otherwise, so (beluga with no file) inside a project still gets it.
   cwd = os_getcwd();
@@ -330,6 +409,7 @@ void projectFree(void) {
   E.projects = NULL;
   E.number_of_projects = 0;
   E.current_project = -1;
+  s_loaded = 0;
   for (i = 0; i < s_marker_count; i++)
     gfree(s_markers[i]);
   gfree(s_markers);
@@ -390,7 +470,7 @@ char *projectRootOrCwd(void) {
   char *copy;
   if (root)
     return utilStrdup(root);
-  cwd = os_getcwd();
+  cwd = editorGetCwd();
   if (!cwd)
     return NULL;
   copy = utilStrdup(cwd);
@@ -422,14 +502,15 @@ static Lisp l_projectName(Lisp args, LispError *e, LispContext ctx) {
 
 /** @brief (project-list) — every remembered project root, most recent first. */
 static Lisp l_projectList(Lisp args, LispError *e, LispContext ctx) {
-  Project **sorted = sortedProjects();
+  int count;
+  Project **sorted = sortedProjects(&count);
   Lisp list = lisp_null();
   int i;
   (void)args;
   (void)e;
   if (!sorted)
     return list;
-  for (i = E.number_of_projects - 1; i >= 0; i--)
+  for (i = count - 1; i >= 0; i--)
     list = lisp_cons(lisp_make_string2(sorted[i]->root, ctx), list, ctx);
   gfree(sorted);
   return list;
@@ -489,10 +570,33 @@ static Lisp l_projectTrust(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Writes a new .beluga/init.lisp at `path`: a short header and
+ * every setting as a commented-out placeholder. 0 if it can't be written.
+ */
+static int writeConfigTemplate(const char *path) {
+  FILE *f = fopen(path, "w");
+  if (!f)
+    return 0;
+  fprintf(f,
+          ";; Project config: evaluated when one of this project's files is\n"
+          ";; opened, once the project is trusted (project-trust, CTRL-x p t).\n"
+          ";; A (define ...) here only applies while one of its buffers is\n"
+          ";; active; PROJECT-ROOT holds the project's root. map-key and\n"
+          ";; add-hook still act on the whole editor.\n"
+          ";;\n"
+          ";; Uncomment a setting to override it for this project. Each shows\n"
+          ";; the value your init.lisp gives it. Save, then CTRL-x p t reloads.\n"
+          ";; (settings) lists the values in effect.\n\n");
+  settingsWriteTemplate(f);
+  return fclose(f) == 0;
+}
+
+/**
  * @brief (project-open-config) — opens the current project's
  * .beluga/init.lisp, creating its .beluga directory if needed.
  * @details A config created this way is yours, so the project becomes
- * trusted; opening one that already exists doesn't trust it.
+ * trusted; opening one that already exists doesn't trust it. A new one
+ * starts with every setting as a commented-out placeholder.
  */
 static Lisp l_projectOpenConfig(Lisp args, LispError *e, LispContext ctx) {
   Project *p;
@@ -519,6 +623,10 @@ static Lisp l_projectOpenConfig(Lisp args, LispError *e, LispContext ctx) {
     p->trusted = 1;
     saveProjects();
     configPath(p, path, sizeof(path));
+    if (!writeConfigTemplate(path)) {
+      editorSetStatusMessage("project-open-config: can't write %s", path);
+      return lisp_null();
+    }
   }
   upath = stringToUtf8((unsigned char *)path);
   if (!upath)
@@ -527,6 +635,181 @@ static Lisp l_projectOpenConfig(Lisp args, LispError *e, LispContext ctx) {
   active->buffer_id = bufferCreate(upath, READ_AND_WRITE, FILE_BUFF);
   gfree(upath);
   return lisp_null();
+}
+
+/**
+ * @brief Lists the remembered projects, most recent first (so the current
+ * one is on top), as "name  /root"; choosing one calls `on_select` with
+ * its root.
+ */
+static void openProjectPicker(const char *title, LispCFunc on_select,
+                              LispContext ctx) {
+  int count;
+  Project **sorted = sortedProjects(&count);
+  char label[OS_PATH_MAX + 64];
+  Lisp items = lisp_null();
+  int i;
+  if (!sorted) {
+    editorSetStatusMessage("No projects yet: open a file inside one, or project-add");
+    return;
+  }
+  for (i = count - 1; i >= 0; i--) {
+    snprintf(label, sizeof(label), "%-20s %s%s", baseName(sorted[i]->root),
+             sorted[i]->root, sorted[i]->trusted ? "  (trusted)" : "");
+    items = lisp_cons(lisp_cons(lisp_make_string2(label, ctx),
+                                lisp_make_string2(sorted[i]->root, ctx), ctx),
+                      items, ctx);
+  }
+  gfree(sorted);
+  listPopupOpen(title, items, lisp_make_func(on_select), lisp_null(), 1);
+}
+
+/**
+ * @brief (project-untrust) — stops trusting the current project: its
+ * .beluga/init.lisp no longer loads, and its settings give way to
+ * init.lisp's.
+ */
+static Lisp l_projectUntrust(Lisp args, LispError *e, LispContext ctx) {
+  Project *p;
+  int had_config;
+  (void)args;
+  (void)e;
+  (void)ctx;
+  if (E.current_project < 0) {
+    editorSetStatusMessage("Not in a project");
+    return lisp_null();
+  }
+  p = &E.projects[E.current_project];
+  if (!p->trusted) {
+    editorSetStatusMessage("%s isn't trusted", baseName(p->root));
+    return lisp_null();
+  }
+  had_config = p->has_config_env;
+  p->trusted = 0;
+  saveProjects();
+  unloadConfig(p);
+  editorSetStatusMessage(had_config ? "%s untrusted, its config unloaded (key maps and hooks it set stay until restart)"
+                                    : "%s untrusted",
+                         baseName(p->root));
+  return lisp_null();
+}
+
+/** @brief Forgets the project at `root`, saying so. 0 if it isn't one. */
+static int removeRoot(const char *root) {
+  char canonical[OS_PATH_MAX];
+  int index;
+  canonicalDir(root, canonical, sizeof(canonical));
+  index = findProject(canonical);
+  if (index == -1 || E.projects[index].removed) {
+    editorSetStatusMessage("Not a remembered project: %s", canonical);
+    return 0;
+  }
+  removeProject(index);
+  saveProjects();
+  editorSetStatusMessage("Forgot project %s (its files are untouched)",
+                         E.projects[index].root);
+  return 1;
+}
+
+/** @brief project-remove's on-select. */
+static Lisp projectRemoveSelected(Lisp args, LispError *e, LispContext ctx) {
+  (void)e;
+  (void)ctx;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING)
+    removeRoot(lisp_string(lisp_car(args)));
+  return lisp_null();
+}
+
+/**
+ * @brief (project-remove) or (project-remove "/root") — forgets a
+ * project: it leaves project-switch and ~/.beluga/projects, and is no
+ * longer trusted. Without an argument, picks it from the list (the
+ * current one on top). Its files, .beluga included, are left alone.
+ */
+static Lisp l_projectRemove(Lisp args, LispError *e, LispContext ctx) {
+  (void)e;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING)
+    return lisp_make_bool(removeRoot(lisp_string(lisp_car(args))));
+  openProjectPicker("Remove project", projectRemoveSelected, ctx);
+  return lisp_null();
+}
+
+/**
+ * @brief (project-prune) — forgets every remembered project whose
+ * directory no longer exists; returns how many.
+ */
+static Lisp l_projectPrune(Lisp args, LispError *e, LispContext ctx) {
+  OsFileInfo info;
+  int i;
+  int pruned = 0;
+  (void)args;
+  (void)e;
+  (void)ctx;
+  for (i = 0; i < E.number_of_projects; i++) {
+    if (E.projects[i].removed)
+      continue;
+    if (os_file_info(E.projects[i].root, &info) != 0 || !info.is_dir) {
+      removeProject(i);
+      pruned++;
+    }
+  }
+  if (pruned)
+    saveProjects();
+  editorSetStatusMessage(pruned == 1 ? "Forgot %d project that no longer exists"
+                                     : "Forgot %d projects that no longer exist",
+                         pruned);
+  return lisp_make_int(pruned);
+}
+
+/**
+ * @brief (project-add) or (project-add "dir") — remembers `dir` as a
+ * project and makes it current, even without a marker: from then on it
+ * is the root for the files under it. Without an argument, prompts for
+ * the directory, starting from the working directory.
+ */
+static Lisp l_projectAdd(Lisp args, LispError *e, LispContext ctx) {
+  char dir[OS_PATH_MAX];
+  char canonical[OS_PATH_MAX];
+  char *cwd;
+  char *answer;
+  Utf8Char *placeholder;
+  Utf8Char *input;
+  OsFileInfo info;
+  int index;
+  (void)e;
+  (void)ctx;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_STRING) {
+    snprintf(dir, sizeof(dir), "%s", lisp_string(lisp_car(args)));
+  } else {
+    cwd = editorGetCwd();
+    snprintf(dir, sizeof(dir), "%s/", cwd ? cwd : "");
+    gfree(cwd);
+    os_path_to_slashes(dir);
+    placeholder = stringToUtf8((unsigned char *)dir);
+    input = editorPrompt("Add project : %u", placeholder, 1);
+    gfree(placeholder);
+    if (!input)
+      return lisp_null(); // cancelled
+    answer = (char *)utf8ToString(input);
+    gfree(input);
+    if (!answer)
+      return lisp_null();
+    snprintf(dir, sizeof(dir), "%s", answer);
+    gfree(answer);
+  }
+  canonicalDir(dir, canonical, sizeof(canonical));
+  if (os_file_info(canonical, &info) != 0 || !info.is_dir) {
+    editorSetStatusMessage("project-add: %s isn't a directory", canonical);
+    return lisp_null();
+  }
+  index = addProject(canonical, 0, ++s_clock);
+  if (index == -1)
+    return lisp_null();
+  activate(index);
+  saveProjects();
+  if (!s_notice[0])
+    setNotice("Project %s added", baseName(canonical));
+  return lisp_make_string2(canonical, ctx);
 }
 
 /** @brief project-switch's on-select: the chosen root becomes current. */
@@ -539,7 +822,7 @@ static Lisp projectSwitchSelected(Lisp args, LispError *e, LispContext ctx) {
     return lisp_null();
   root = lisp_string(lisp_car(args));
   index = findProject(root);
-  if (index == -1)
+  if (index == -1 || E.projects[index].removed)
     return lisp_null();
   activate(index);
   fileFinderOpenAt(E.projects[index].root);
@@ -551,26 +834,9 @@ static Lisp projectSwitchSelected(Lisp args, LispError *e, LispContext ctx) {
  * first; choosing one makes it current and opens find-file in it.
  */
 static Lisp l_projectSwitch(Lisp args, LispError *e, LispContext ctx) {
-  Project **sorted = sortedProjects();
-  char label[OS_PATH_MAX + 64];
-  Lisp items = lisp_null();
-  int i;
   (void)args;
   (void)e;
-  if (!sorted) {
-    editorSetStatusMessage("No projects yet: open a file inside one");
-    return lisp_null();
-  }
-  for (i = E.number_of_projects - 1; i >= 0; i--) {
-    snprintf(label, sizeof(label), "%-20s %s", baseName(sorted[i]->root),
-             sorted[i]->root);
-    items = lisp_cons(lisp_cons(lisp_make_string2(label, ctx),
-                                lisp_make_string2(sorted[i]->root, ctx), ctx),
-                      items, ctx);
-  }
-  gfree(sorted);
-  listPopupOpen("Projects", items, lisp_make_func(projectSwitchSelected),
-                lisp_null(), 1);
+  openProjectPicker("Projects", projectSwitchSelected, ctx);
   return lisp_null();
 }
 
@@ -582,4 +848,8 @@ void projectRegisterBuiltins(void) {
   registerBuiltin("project-trust", l_projectTrust);
   registerBuiltin("project-open-config", l_projectOpenConfig);
   registerBuiltin("project-switch", l_projectSwitch);
+  registerBuiltin("project-add", l_projectAdd);
+  registerBuiltin("project-remove", l_projectRemove);
+  registerBuiltin("project-prune", l_projectPrune);
+  registerBuiltin("project-untrust", l_projectUntrust);
 }

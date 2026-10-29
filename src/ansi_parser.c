@@ -48,6 +48,13 @@ static int regionBottom(const TermParserState* ts)
     return ts->screen_top_row + bottom;
 }
 
+// The last column the cursor can reach: the pane's, once it's known.
+static int lastColumn(const TermParserState* ts)
+{
+    return ts->pane_width > 0 && ts->pane_width <= TERM_MAX_COLUMNS ? ts->pane_width - 1
+                                                                    : TERM_MAX_COLUMNS - 1;
+}
+
 static int regionIsWholeScreen(const TermParserState* ts)
 {
     return regionTop(ts) == ts->screen_top_row &&
@@ -284,24 +291,52 @@ static void scrollDown(struct buffer_t* buf, const int top, const int bottom, in
  *
  **********************************************************************************************************************/
 
+static void lineFeed(struct buffer_t* buf);
+
 /**
  * @brief Write one decoded Utf8Char at the cursor, with the current SGR
  * attribute, then move the cursor past it (one or two columns; a combining
  * mark joins the character before it and doesn't move it).
- * @details Finding the character at a column walks the row, so a run of
- * text remembers where it is (col_cache_*): each character of `cat`'s
- * output doesn't walk its line again. Anything else the parser does forgets
- * it (see ansiParserFeed()).
+ * @details Lines wrap at the pane's width the way xterm's do: a character
+ * written in the last column leaves the cursor there with a wrap pending,
+ * and only the next character goes to the start of the next line (so a
+ * program can fill the last column, then move or CR LF, without an empty
+ * line in between). A wide character that doesn't fit wraps whole.
+ * Finding the character at a column walks the row, so a run of text
+ * remembers where it is (col_cache_*): each character of `cat`'s output
+ * doesn't walk its line again. Anything else the parser does forgets it
+ * (see ansiParserFeed()).
  */
 static void putChar(struct buffer_t* buf, const Utf8Char* c)
 {
     TermParserState* ts = &buf->term_state;
-    Row* row = currentRow(buf);
+    Row* row;
     const int w = utf8CharWidth(c);
+    const int last = lastColumn(ts);
     int start;
     int end;
     int col;
+
+    if (w > 0 && (ts->wrap_pending || (w == 2 && ts->cursor_x == last && last > 0)))
+    {
+        ts->wrap_pending = 0;
+        ts->cursor_x = 0;
+        lineFeed(buf);
+        ts->col_cache_valid = 0;
+    }
+    row = currentRow(buf);
     if (!row) return;
+
+    if (w == 0)
+    {
+        // With a wrap pending, the cursor still sits on the character the
+        // mark belongs to: it goes after it.
+        start = splitAt(row, ts->cursor_x + (ts->wrap_pending ? 1 : 0));
+        if (ts->cursor_x > 0 || ts->wrap_pending)
+            cellInsert(row, start, c, ts->current_attr);
+        ts->col_cache_valid = 0;
+        return;
+    }
 
     if (ts->col_cache_valid && ts->col_cache_y == ts->cursor_y &&
         ts->col_cache_x == ts->cursor_x && ts->col_cache_idx <= row->size)
@@ -309,28 +344,28 @@ static void putChar(struct buffer_t* buf, const Utf8Char* c)
     else
         start = splitAt(row, ts->cursor_x);
 
-    if (w == 0)
+    // The characters covering the columns it takes, with their marks.
+    col = ts->cursor_x;
+    end = start;
+    while (end < row->size && col < ts->cursor_x + w)
+        col += utf8CharWidth(&row->characters[end++]);
+    while (end < row->size && utf8CharWidth(&row->characters[end]) == 0)
+        end++;
+    // A wide character overwritten by half: its other half goes blank.
+    if (col > ts->cursor_x + w)
+        end = splitAt(row, ts->cursor_x + w);
+    cellDelete(row, start, end);
+    cellInsert(row, start++, c, ts->current_attr);
+
+    if (ts->cursor_x + w > last)
     {
-        if (ts->cursor_x > 0)
-            cellInsert(row, start++, c, ts->current_attr);
+        // The last column: the cursor stays on it until the next character.
+        ts->wrap_pending = ts->pane_width > 0;
+        ts->cursor_x = last;
+        ts->col_cache_valid = 0;
+        return;
     }
-    else
-    {
-        // The characters covering the columns it takes, with their marks.
-        col = ts->cursor_x;
-        end = start;
-        while (end < row->size && col < ts->cursor_x + w)
-            col += utf8CharWidth(&row->characters[end++]);
-        while (end < row->size && utf8CharWidth(&row->characters[end]) == 0)
-            end++;
-        // A wide character overwritten by half: its other half goes blank.
-        if (col > ts->cursor_x + w)
-            end = splitAt(row, ts->cursor_x + w);
-        cellDelete(row, start, end);
-        cellInsert(row, start++, c, ts->current_attr);
-        ts->cursor_x += w;
-        if (ts->cursor_x > TERM_MAX_COLUMNS - 1) ts->cursor_x = TERM_MAX_COLUMNS - 1;
-    }
+    ts->cursor_x += w;
     ts->col_cache_valid = 1;
     ts->col_cache_y = ts->cursor_y;
     ts->col_cache_x = ts->cursor_x;
@@ -346,6 +381,7 @@ static void lineFeed(struct buffer_t* buf)
 {
     TermParserState* ts = &buf->term_state;
     const int height = screenHeight(ts);
+    ts->wrap_pending = 0;
     if (!ts->alt_screen && regionIsWholeScreen(ts) && ts->cursor_y >= regionBottom(ts))
     {
         ts->cursor_y++;
@@ -363,6 +399,7 @@ static void lineFeed(struct buffer_t* buf)
 static void reverseIndex(struct buffer_t* buf)
 {
     TermParserState* ts = &buf->term_state;
+    ts->wrap_pending = 0;
     if (ts->cursor_y == regionTop(ts))
         scrollDown(buf, regionTop(ts), regionBottom(ts), 1);
     else if (ts->cursor_y > ts->screen_top_row)
@@ -372,10 +409,14 @@ static void reverseIndex(struct buffer_t* buf)
 static void carriageReturn(struct buffer_t* buf)
 {
     buf->term_state.cursor_x = 0;
+    buf->term_state.wrap_pending = 0;
 }
 
 static void backspace(struct buffer_t* buf)
 {
+    // With a wrap pending the cursor is still on the last column: BS goes
+    // to the one before it, as on xterm.
+    buf->term_state.wrap_pending = 0;
     if (buf->term_state.cursor_x > 0)
         buf->term_state.cursor_x--;
 }
@@ -387,18 +428,21 @@ static void backspace(struct buffer_t* buf)
  */
 static void horizontalTab(struct buffer_t* buf)
 {
+    buf->term_state.wrap_pending = 0;
     buf->term_state.cursor_x = (buf->term_state.cursor_x / 8 + 1) * 8;
-    if (buf->term_state.cursor_x > TERM_MAX_COLUMNS - 1)
-        buf->term_state.cursor_x = TERM_MAX_COLUMNS - 1;
+    if (buf->term_state.cursor_x > lastColumn(&buf->term_state))
+        buf->term_state.cursor_x = lastColumn(&buf->term_state);
 }
 
+// After a cursor move (which also drops a pending wrap): back on screen.
 static void clampCursorToScreen(TermParserState* ts)
 {
     const int bottom = ts->screen_top_row + screenHeight(ts) - 1;
+    ts->wrap_pending = 0;
     if (ts->cursor_y < ts->screen_top_row) ts->cursor_y = ts->screen_top_row;
     if (ts->cursor_y > bottom) ts->cursor_y = bottom;
     if (ts->cursor_x < 0) ts->cursor_x = 0;
-    if (ts->cursor_x > TERM_MAX_COLUMNS - 1) ts->cursor_x = TERM_MAX_COLUMNS - 1;
+    if (ts->cursor_x > lastColumn(ts)) ts->cursor_x = lastColumn(ts);
 }
 
 static void saveCursor(TermParserState* ts)
@@ -621,6 +665,7 @@ static void dispatchPrivateMode(struct buffer_t* buf, const int set)
 {
     TermParserState* ts = &buf->term_state;
     int i;
+    ts->wrap_pending = 0;
     for (i = 0; i < ts->nparams; i++)
     {
         switch (ts->params[i])
@@ -669,6 +714,11 @@ static void dispatchCsi(struct buffer_t* buf, char final)
     int bottom;
     int i;
     Row* line;
+
+    // Everything but colours moves or changes the screen under the
+    // cursor: a pending wrap doesn't survive it.
+    if (final != 'm')
+        ts->wrap_pending = 0;
 
     switch (final)
     {
@@ -815,6 +865,8 @@ static void dispatchEsc(struct buffer_t* buf, const unsigned char byte)
 {
     TermParserState* ts = &buf->term_state;
     ts->state = TPARSE_GROUND;
+    if (byte != '[' && byte != '7')
+        ts->wrap_pending = 0;
     switch (byte)
     {
     case '[':

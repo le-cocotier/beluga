@@ -7,8 +7,9 @@
  * terminal panes and background processes.
  *
  * Per window (a ClientView): the screen size, the pane layout, the pending
- * key prefix, the popups, the status message, the quit counter and the
- * last frame drawn.
+ * key prefix (and which-key's timer for it), the popups, the status
+ * message, the quit counter and the last frame drawn. The working
+ * directory is the client's (E.cwd).
  *
  * The editor reads all of that from the global E, so rather than threading
  * a client through every function, the daemon swaps a window's view into E
@@ -20,10 +21,15 @@
  * window's keys with that window current, then draw every window. An edit
  * in one window shows in the others on the next tick.
  *
- * A prompt (editorPrompt(): open-file, M-x, search, ...) is a nested loop
- * that reads keys until ENTER; while one window has a prompt open, the
- * others wait (emacs has the same rule for the minibuffer across
- * terminals). If that window disconnects, its prompt reads ESC and ends.
+ * A prompt (editorPrompt(): open-file, M-x, search, a y/n question) is a
+ * nested loop that reads keys until ENTER. While it waits for its window's
+ * keys, the other windows are served from inside it (serveOtherWindows()):
+ * they redraw and handle their keys as usual. The buffer the prompt's
+ * window has active is read-only for them meanwhile and can't be killed,
+ * since the command that asked still holds it. The prompts nest on one
+ * stack, though: when a second window opens a prompt while the first one's
+ * is open, the first takes its keys again once the second one's closes. If
+ * a window disconnects, its prompt reads ESC and ends.
  */
 
 #include "../include/daemon.h"
@@ -31,10 +37,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../include/autosave.h"
 #include "../include/buffer.h"
 #include "../include/builtins.h"
 #include "../include/config_load.h"
 #include "../include/daemon_frame.h"
+#include "../include/dap.h"
 #include "../include/data.h"
 #include "../include/define.h"
 #include "../include/editor_op.h"
@@ -56,6 +64,10 @@ extern EditorConfig E;
 // Clients beyond this are turned away: the run loop waits on one stream per
 // client inside RUN_LOOP_MAX_STREAMS.
 #define DAEMON_MAX_CLIENTS 16
+
+// A second Ctrl-C this soon after the first stops a daemon with unsaved
+// buffers anyway.
+#define DAEMON_INTERRUPT_AGAIN_MS 3000
 
 /**
  * @brief The part of E that belongs to one window.
@@ -80,11 +92,17 @@ typedef struct
     Utf8Char *prompt_input;
     int prompt_is_command;
     int quit_times_buffer;
+    int which_key_prefix;
+    long which_key_since;
     // The window's current project: from its active pane's buffer, or
     // picked with project-switch (project.c).
     int current_project;
     struct const_t constantes;
     int project_last_buffer;
+    // An open path prompt's TAB matches (borrowed from editorPrompt()).
+    char **prompt_matches;
+    int prompt_match_count;
+    int prompt_match_selected;
     ScreenCache cache;
 } ClientView;
 
@@ -92,6 +110,7 @@ typedef struct daemon_client_t
 {
     OsConn *conn;
     FrameReader reader;
+    int id;            // > 0, never reused: debug sessions name their window by it
     int greeted;       // the hello arrived and the window is open
     int hello_pending; // the hello arrived; the window opens next tick
     int gone;          // the connection has ended
@@ -117,6 +136,12 @@ static DaemonClient *s_focused = NULL; // the window that last sent keys
 static ClientView s_idle;              // E's view while no window is current
 static int s_running = 0;
 static int s_stop = 0; // beluga --kill was accepted
+static int s_next_id = 1;
+// The windows whose key is being handled, outermost first: more than one
+// when a window's prompt serves the others (serveOtherWindows()).
+static DaemonClient *s_handling[DAEMON_MAX_CLIENTS + 1];
+static int s_handling_depth = 0;
+static DaemonClient *s_entered_from = NULL; // windowLeave() goes back there
 
 /***********************************************************************************************************************
  *
@@ -140,7 +165,12 @@ static void viewSave(ClientView *v) {
   v->prefix_state = E.prefix_state;
   v->prompt_input = E.prompt_input;
   v->prompt_is_command = E.prompt_is_command;
+  v->prompt_matches = E.prompt_matches;
+  v->prompt_match_count = E.prompt_match_count;
+  v->prompt_match_selected = E.prompt_match_selected;
   v->quit_times_buffer = E.quit_times_buffer;
+  v->which_key_prefix = E.which_key_prefix;
+  v->which_key_since = E.which_key_since;
   v->current_project = E.current_project;
   v->constantes = E.constantes;
   projectSwapLastBuffer(&v->project_last_buffer);
@@ -163,7 +193,12 @@ static void viewLoad(ClientView *v) {
   E.prefix_state = v->prefix_state;
   E.prompt_input = v->prompt_input;
   E.prompt_is_command = v->prompt_is_command;
+  E.prompt_matches = v->prompt_matches;
+  E.prompt_match_count = v->prompt_match_count;
+  E.prompt_match_selected = v->prompt_match_selected;
   E.quit_times_buffer = v->quit_times_buffer;
+  E.which_key_prefix = v->which_key_prefix;
+  E.which_key_since = v->which_key_since;
   E.current_project = v->current_project;
   E.constantes = v->constantes;
   projectSwapLastBuffer(&v->project_last_buffer);
@@ -231,9 +266,15 @@ static void clientSwitchTo(DaemonClient *c) {
     c->view.constantes = E.constantes;
     c->view.project_last_buffer = -1;
   }
+  // Its cursors stay with its panes (each window its own, on the same
+  // buffers); the next window's come back at its next key or redraw.
+  splitScreenSaveCursor();
   viewSave(s_current ? &s_current->view : &s_idle);
   viewLoad(c ? &c->view : &s_idle);
   s_current = c;
+  // Relative paths, the open-file prompt, new terminals: from where this
+  // window's `beluga -c` ran.
+  E.cwd = c ? c->cwd : NULL;
   if (!c)
     return;
   if (c->view.fresh) {
@@ -333,16 +374,21 @@ static int handleHello(DaemonClient *c, const unsigned char *payload, const size
  * @brief beluga --kill: the daemon stops after this tick, unless a file
  * buffer has unsaved changes and the kill isn't forced.
  */
-static void handleKill(DaemonClient *c, const int force) {
-  char message[160];
-  struct buffer_t *b;
+// How many file buffers have unsaved changes.
+static int unsavedBuffers(void) {
+  struct buffer_t *b = E.buffers;
   int unsaved = 0;
   int i;
-
-  b = E.buffers;
   for (i = 0; b && i < E.number_of_buffer; i++, b = b->next)
     if (b->type == FILE_BUFF && b->dirty)
       unsaved++;
+  return unsaved;
+}
+
+static void handleKill(DaemonClient *c, const int force) {
+  char message[160];
+  const int unsaved = unsavedBuffers();
+
   if (unsaved > 0 && !force) {
     snprintf(message, sizeof(message),
              "beluga: %d buffer%s unsaved changes; save them, or use beluga --kill --force",
@@ -484,6 +530,8 @@ static void acceptClients(void) {
       continue;
     }
     c = gcalloc(1, sizeof(*c));
+    if (c)
+      c->id = s_next_id++;
     if (!c) {
       os_conn_close(conn);
       continue;
@@ -510,6 +558,94 @@ static void daemonWrite(const void *buf, const size_t n) {
   }
 }
 
+// How long a window waiting in a prompt waits for its own keys before the
+// others are served again.
+#define SERVE_SLICE_MS 50
+
+static int isHandling(const DaemonClient *c) {
+  int i;
+  for (i = 0; i < s_handling_depth; i++)
+    if (s_handling[i] == c)
+      return 1;
+  return 0;
+}
+
+// Handles `c`'s pending keys with its view current (it stays current).
+static void handleKeys(DaemonClient *c) {
+  while (c->greeted && keysPending(c) && !c->closing && s_handling_depth < DAEMON_MAX_CLIENTS) {
+    clientSwitchTo(c);
+    s_focused = c;
+    s_handling[s_handling_depth++] = c;
+    editorProcessKeypress();
+    s_handling_depth--;
+    if (E.exit_requested) { // CTRL-x CTRL-c: this window only
+      E.exit_requested = 0;
+      c->closing = 1;
+    }
+  }
+}
+
+// The buffer active in `c`'s view (current or saved), or NULL.
+static struct buffer_t *activeBufferOf(const DaemonClient *c) {
+  const ScreenLayout *layout = c == s_current ? &E.layout : &c->view.layout;
+  if (!layout->panes || layout->num_panes == 0)
+    return NULL;
+  return bufferFindById(layout->panes[layout->active_pane].buffer_id);
+}
+
+/**
+ * @brief While `waiting` (whose view is current) waits in a prompt: the
+ * other windows read what their clients sent, handle their keys and
+ * redraw, then `waiting` is current again. Windows with a key of their own
+ * still being handled (further up the stack) only redraw.
+ */
+static void serveOtherWindows(DaemonClient *waiting) {
+  int held_ids[DAEMON_MAX_CLIENTS + 1];
+  int held_states[DAEMON_MAX_CLIENTS + 1];
+  DaemonClient *focused = s_focused;
+  DaemonClient *c;
+  struct buffer_t *b;
+  int held = 0;
+  int i;
+
+  acceptClients();
+  for (c = s_clients; c; c = c->next)
+    if (c != waiting && !c->gone)
+      clientPump(c, 0);
+  // The buffers the waiting commands hold: read-only, and not killed,
+  // until they go on.
+  for (i = 0; i < s_handling_depth && held < DAEMON_MAX_CLIENTS + 1; i++) {
+    b = activeBufferOf(s_handling[i]);
+    if (!b)
+      continue;
+    held_ids[held] = b->buffer_id;
+    held_states[held++] = b->state;
+    b->state = READ_ONLY;
+    b->prompt_holds++;
+  }
+  for (c = s_clients; c; c = c->next) {
+    if (c->hello_pending && !c->closing)
+      clientOpen(c);
+    if (c != waiting && !isHandling(c))
+      handleKeys(c);
+  }
+  for (c = s_clients; c; c = c->next)
+    if (c != waiting && c->greeted && !c->closing) {
+      clientSwitchTo(c);
+      projectSyncActive();
+      editorRefreshScreen();
+    }
+  clientSwitchTo(waiting);
+  for (i = held - 1; i >= 0; i--) {
+    b = bufferFindById(held_ids[i]);
+    if (b) {
+      b->state = held_states[i];
+      b->prompt_holds--;
+    }
+  }
+  s_focused = focused;
+}
+
 /**
  * @brief Key bytes for the current window, waiting up to `timeout_ms` for
  * the client to send some. A window that has gone (or no window at all)
@@ -527,7 +663,19 @@ static long daemonReadKeys(void *buf, const size_t n, const int timeout_ms) {
     left = deadline - os_monotonic_ms();
     if (timeout_ms >= 0 && left <= 0)
       break;
-    clientPump(c, timeout_ms < 0 ? 1000 : (int)left);
+    // A loop of its own (a prompt) waiting for this window's keys: the
+    // other windows go on meanwhile.
+    if (isHandling(c)) {
+      serveOtherWindows(c);
+      if (keysPending(c) || c->gone)
+        break;
+      left = deadline - os_monotonic_ms();
+      if (left > SERVE_SLICE_MS || timeout_ms < 0)
+        left = SERVE_SLICE_MS;
+    } else if (timeout_ms < 0) {
+      left = 1000;
+    }
+    clientPump(c, left > 0 ? (int)left : 0);
   }
   if (c && keysPending(c)) {
     avail = c->keys_len - c->keys_head;
@@ -559,6 +707,45 @@ static const ScreenDriver s_daemon_driver = {daemonWrite, daemonReadKeys, daemon
  *                                                 The run loop
  *
  **********************************************************************************************************************/
+
+/**
+ * @brief Acts on a Ctrl-C, a closed terminal or a SIGTERM (os_take_stop_signal()).
+ * @details Nothing unsaved: the daemon stops. A closed terminal or SIGTERM
+ * can't be asked anything, so the unsaved buffers get their autosave copy
+ * (offered back when the file is opened again) and the daemon stops. Ctrl-C
+ * with unsaved buffers only warns; a second one within a few seconds stops
+ * it the same way. Stopping goes through the end of the run loop, which
+ * closes the windows and removes the socket.
+ */
+static void handleStopSignal(void) {
+  static long long s_interrupted_at = -1;
+  const int sig = os_take_stop_signal();
+  const long long now = os_monotonic_ms();
+  struct buffer_t *b;
+  int unsaved;
+  int i;
+
+  if (sig == OS_STOP_NONE)
+    return;
+  unsaved = unsavedBuffers();
+  if (sig == OS_STOP_INTERRUPT && unsaved > 0 &&
+      (s_interrupted_at < 0 || now - s_interrupted_at > DAEMON_INTERRUPT_AGAIN_MS)) {
+    s_interrupted_at = now;
+    fprintf(stderr,
+            "\nbeluga: %d buffer%s unsaved changes. Save them, or press Ctrl-C again to "
+            "stop anyway (autosave keeps a copy).\n",
+            unsaved, unsaved == 1 ? " has" : "s have");
+    return;
+  }
+  b = E.buffers;
+  for (i = 0; b && i < E.number_of_buffer; i++, b = b->next)
+    if (b->type == FILE_BUFF && b->dirty)
+      autosaveWrite(b);
+  if (unsaved > 0)
+    fprintf(stderr, "beluga: stopped; the unsaved changes of %d buffer%s are in ~/.beluga/autosave\n",
+            unsaved, unsaved == 1 ? "" : "s");
+  s_stop = 1;
+}
 
 static void daemonRunLoop(void) {
   OsStream *streams[RUN_LOOP_MAX_STREAMS];
@@ -596,20 +783,15 @@ static void daemonRunLoop(void) {
           clientPump(by_stream[i], 0);
     }
     editorTick();
+    handleStopSignal();
+    if (s_stop)
+      break;
 
     for (c = s_clients; c; c = next) {
       next = c->next;
       if (c->hello_pending && !c->closing)
         clientOpen(c);
-      while (c->greeted && keysPending(c) && !c->closing) {
-        clientSwitchTo(c);
-        s_focused = c;
-        editorProcessKeypress();
-        if (E.exit_requested) { // CTRL-x CTRL-c: this window only
-          E.exit_requested = 0;
-          c->closing = 1;
-        }
-      }
+      handleKeys(c);
     }
 
     for (c = s_clients; c; c = next) {
@@ -636,6 +818,30 @@ static void daemonRunLoop(void) {
 
 int daemonIsRunning(void) { return s_running; }
 
+/*
+ * Debug sessions belong to the window that started them: their events
+ * (stopped, output, a program's terminal pane) land in that window's view,
+ * whichever window is current when they arrive.
+ */
+static int windowCurrent(void) { return s_current ? s_current->id : 0; }
+
+static int windowEnter(const int id) {
+  DaemonClient *c;
+  for (c = s_clients; c; c = c->next)
+    if (c->id == id && c->greeted && !c->closing)
+      break;
+  if (!c || c == s_current)
+    return 0;
+  s_entered_from = s_current;
+  clientSwitchTo(c);
+  return 1;
+}
+
+static void windowLeave(void) {
+  clientSwitchTo(s_entered_from);
+  s_entered_from = NULL;
+}
+
 int daemonMain(const char *name) {
   char err[512];
   Utf8Char *splash_screen;
@@ -646,6 +852,10 @@ int daemonMain(const char *name) {
     fprintf(stderr, "beluga: %s\n", err);
     return 1;
   }
+  // Ctrl-C, a closed terminal, SIGTERM: stop the way --kill does, rather
+  // than dying with the socket left behind (handleStopSignal()).
+  os_catch_stop_signals();
+  dapSetWindowHooks(windowCurrent, windowEnter, windowLeave);
   // No window yet: no size (80x24 is assumed), nothing drawn, prompts end.
   screenSetDriver(&s_daemon_driver);
   s_running = 1;

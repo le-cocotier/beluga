@@ -10,73 +10,16 @@ incomplete · **[feature]** new capability.
 
 ---
 
-## From the code
-
-Nothing open right now.
-
----
-
-## Known bugs (not marked in the code)
-
-- [ ] **[bug]** Typing fast into a terminal pane drops keystrokes. This
-  reproduces on older binaries too, so it's not a regression. Start from
-  `ptyForwardKey()` (`src/input.c`) and the input read in
-  `editorRunLoop()` (`src/editor_op.c`).
-  - Doesn't reproduce on Linux (bash and dash, a 100-character line sent in
-    one write, keys 2 ms apart, typing during `seq 1 200000`): every key
-    arrived. Input isn't buffered in user space (`readKeyBytes()` reads
-    straight from the fd), so a key can't be lost between ticks. Likely
-    macOS-specific; next step is a repro there (which shell, which
-    terminal app, what was typed).
-  - `tools/pty_tests.py` (`meson test`, the `pty` test) now types into a
-    terminal pane in one burst and 2 ms apart, so the Linux case is
-    checked on every run.
-- [ ] **[feature]** `ESCAPE` in a terminal pane always goes back to the
-  editor (`config/init.lisp`, the `term` prefix), so it never reaches a
-  program: in vim, only CTRL-c leaves insert mode (CTRL-[ is the same
-  byte as `ESCAPE`, so the pane takes it too). Options:
-  send `ESCAPE` to the program while it's on the alternate screen (vim,
-  less, htop) and use another key to leave the pane there, or a double
-  `ESCAPE`. A choice for the keymap, not a parser problem.
-- [ ] **[feature]** The terminal parser doesn't wrap: it doesn't know the
-  pane's width, so a line longer than the pane stays one row and is cut at
-  the pane's edge (`src/ansi_parser.c`, `putChar()`). Wrapping needs the
-  width in `TermParserState` (set where `pane_height` is) and xterm's
-  pending-wrap rule (the cursor stays on the last column until the next
-  character).
-
----
-
-## Configuration and packages
-
-Nothing open right now.
-
----
-
 ## Daemon mode
 
 `beluga --daemon` / `beluga -c` (src/daemon.c, src/daemon_client.c). What's
 left after the first step:
 
-- [ ] **[feature]** A cursor per pane instead of per buffer
-  (`struct buffer_t` x/y): two windows, or two split panes, on the same file
-  share one cursor today.
-- [ ] **[feature]** `beluga -c` starts a daemon when none is running, and
-  `--daemon` detaches from its terminal (fork on Unix, a detached process on
-  Windows). Today the daemon stays in the foreground.
-- [ ] **[debt]** Prompts block: while one window has an `editorPrompt()`
-  open (open-file, M-x, search, kill-buffer confirmation), the other windows
-  don't redraw or take keys until it closes. Make the prompt a per-window
-  state driven by the run loop instead of a nested key loop.
-- [ ] **[debt]** A per-window working directory. The client sends its own
-  in the hello (used for the files on its command line), but the open-file
-  prompt, find-file, project search and new terminal panes still use the
-  daemon's (`os_getcwd()`).
-- [ ] **[debt]** Ctrl-C (or a closed terminal) on the daemon kills it
-  without asking about unsaved buffers; only `beluga --kill` checks. The
-  stale socket left on Unix is replaced at the next start.
-- [ ] **[debt]** which-key's pending-prefix timer (`whichKeyDraw()`'s
-  statics) is shared between windows.
+- [ ] **[debt]** Prompts still nest on one stack: the other windows are
+  served while a window waits in its `editorPrompt()`, but when a second
+  window opens a prompt meanwhile, the first one's keys wait until the
+  second prompt closes. Making the prompt a per-window state driven by the
+  run loop (its ~35 callers continuing in a callback) would lift that.
 
 ---
 
@@ -85,34 +28,6 @@ left after the first step:
 The Debug Adapter Protocol client (src/dap.c, src/debug_ui.c,
 src/breakpoints.c). What's left after the first step:
 
-- [ ] **[feature]** `runInTerminal`: run the program in a terminal pane,
-  for programs that read stdin or draw with curses. Today the adapter's
-  request is refused and the program's output arrives as output events
-  (`refuseRequest()` in `src/dap.c`).
-- [ ] **[feature]** Adapters reached over TCP (delve's `dlv dap`, codelldb,
-  js-debug) need a TCP connect in `os.h`; only stdio adapters work.
-- [ ] **[feature]** Attach to a running process (`attach` with a pid
-  picked from a list), exception breakpoints, watch expressions, values
-  inline after the code while paused (the inlay hint drawing could carry
-  them), logpoints and hit counts (gdb supports both).
-- [ ] **[feature]** Keep breakpoints across restarts, per project. Today
-  they last until beluga exits.
-- [ ] **[debt]** Daemon mode: one session for the whole daemon, and the
-  stopped line moves whichever window last typed. Give each project its
-  own session.
-- [ ] **[debt]** gdb sets the breakpoints before `launch` has loaded the
-  program (it runs the program as soon as `launch` arrives, see the comment
-  at the top of `src/dap.c`), so every session's output starts with "No
-  source file named …" and a pending breakpoint, which then resolves.
-- [ ] **[debt]** A breakpoint stays on its row when ENTER is pressed at
-  the very start of that row, so it ends up on the new empty line above
-  the code (`breakpointsLinesInserted()` callers in `src/buffer.c`).
-- [ ] **[debt]** Not tried yet with debugpy, or lldb-dap on Windows.
-  gdb 15 on Linux and lldb-dap on macOS are covered by
+- [ ] **[debt]** Not tried yet with lldb-dap on Windows. gdb 15 on Linux,
+  lldb-dap on macOS and debugpy (`runInTerminal` included) are covered by
   `tools/pty_tests.py`.
-
----
-
-## Tooling and housekeeping
-
-Nothing open right now.

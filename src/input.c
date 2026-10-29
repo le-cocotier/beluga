@@ -273,7 +273,7 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
       absolute = os_path_is_absolute(buf_str);
       gfree(buf_str);
       if (!absolute) {
-        pwd = os_getcwd(); // not $PWD: Windows shells don't set it
+        pwd = editorGetCwd(); // not $PWD: Windows shells don't set it
         appDebug("%s\n", pwd ? pwd : "");
         // Replace path by pwd + last word
         utf8Printf(path, PATH_MAX, "%s/%u", pwd ? pwd : ".", buf);
@@ -495,6 +495,8 @@ void editorProcessKeypress() {
   int k;
   LspClient *lsp;
 
+  // Focus may have moved since the last key: each pane its own cursor.
+  splitScreenSyncCursor();
   macroNoteKeySequenceStart();
   c = editorReadKey();
 

@@ -39,6 +39,9 @@
 (define BREADCRUMBS #t)
 (define INLINE-DIAGNOSTICS #t)
 (define INLAY-HINTS #t)
+;; DEBUG-INLINE-VALUES: while the debugger is paused, the variables' values
+;; after the lines that use them, "total += i   total = 3, i = 2".
+(define DEBUG-INLINE-VALUES #t)
 
 ;; Prefixes need to exist before anything below tries to (map-key ... "user")
 ;; or "term" — including packages, which load next. A package that tried to
@@ -102,6 +105,8 @@
 ;;                          ; instead of "nodejs", not alongside it — both
 ;;                          ; register "ts" and only the first one wins it.
 ;; (add-package "lisp")     ; no server needed — highlighting + comment toggle only
+;; (add-package "markdown") ; marksman optional — highlighting, heading outline,
+;;                          ; list continuation on ENTER work without it
 ;;
 ;; Note on CTRL-d: c/python/rust/php/lisp bind it only for their own file
 ;; types (map-key's optional last argument, e.g. "py" or (list "c" "h")),
@@ -341,6 +346,8 @@
 (map-key "TAB" editor-insert-tab "no-prefix")
 (map-key "CTRL-s" buffer-find "no-prefix")
 (map-key "CTRL-r" buffer-find-reverse "no-prefix")
+(map-key "F3" buffer-find-word "no-prefix")
+(map-key "F2" buffer-find-word-reverse "no-prefix")
 ;; Fuzzy project-file picker: type to narrow every file in the project
 ;; (git ls-files / find), ENTER opens the highlight. CTRL-p / CTRL-n also
 ;; move the selection while it's open.
@@ -398,11 +405,17 @@
 (map-key "q" debug-stop "debug")
 (map-key "p" debug-pause "debug")
 (map-key "s" debug-start "debug")
+(map-key "a" debug-attach "debug")              ; a running program, picked from a list
 (map-key "b" debug-toggle-breakpoint "debug")
 (map-key "k" debug-breakpoint-condition "debug") ; stop only when an expression is true
+(map-key "h" debug-breakpoint-hit-count "debug") ; stop only from the Nth hit on
+(map-key "L" debug-logpoint "debug")             ; log a message there instead of stopping
+(map-key "E" debug-exception-breakpoints "debug") ; which exceptions stop the program
 (map-key "l" debug-breakpoints "debug")          ; listed in *search*, ENTER jumps
 (map-key "x" debug-clear-breakpoints "debug")
 (map-key "e" debug-evaluate "debug")            ; an expression, in the selected frame
+(map-key "w" debug-watch "debug")               ; shown in the panel at every stop
+(map-key "W" debug-unwatch "debug")
 (map-key "g" debug-command "debug")             ; a command for the debugger (gdb's own)
 (map-key "d" debug-panel "debug")
 (map-key "o" debug-output "debug")
@@ -419,6 +432,8 @@
 (map-key "q" debug-stop "debug-view")
 (map-key "p" debug-pause "debug-view")
 (map-key "e" debug-evaluate "debug-view")
+(map-key "w" debug-watch "debug-view")
+(map-key "W" debug-unwatch "debug-view")           ; the watch under the cursor
 (map-key "g" debug-command "debug-view")
 (map-key "o" debug-output "debug-view")
 (map-key "CTRL-x" '(editor-set-prefix "user") "debug-view")
@@ -477,10 +492,17 @@
 (map-key "r" lsp-rename "project")
 (map-key "z" lsp-format-buffer "project")
 ;; The project itself: switch to a remembered one (opens find-file in
-;; it), trust it so its .beluga/init.lisp loads, or open that file.
+;; it), trust it so its .beluga/init.lisp loads, or open that file (a new
+;; one starts with every setting as a commented-out placeholder).
+;; n remembers any directory as a project, x forgets one (its files are
+;; left alone), X forgets those whose directory is gone, u undoes t.
 (map-key "p" project-switch "project")
 (map-key "t" project-trust "project")
+(map-key "u" project-untrust "project")
 (map-key "c" project-open-config "project")
+(map-key "n" project-add "project")
+(map-key "x" project-remove "project")
+(map-key "X" project-prune "project")
 
 ;; term
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "term")

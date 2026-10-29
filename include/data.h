@@ -95,6 +95,13 @@ typedef struct editor_pane_t
     // paneFitShownBuffer() in output.c. -1 forces a fit.
     int shown_buffer_id;
     int is_active; // Is this pane currently active
+    // Each pane has its own cursor: a buffer's x/y is the cursor of the
+    // pane that has focus, and the others keep theirs here, for the buffer
+    // saved_buffer_id (-1: none) — see splitScreenSyncCursor(). `id` tells
+    // panes apart across layouts (0 until it is first given one).
+    int id;
+    int saved_x, saved_y;
+    int saved_buffer_id;
 } EditorPane;
 
 /**
@@ -147,6 +154,7 @@ struct const_t
     int BREADCRUMBS;        // (define BREADCRUMBS #t) — "struct › function" in the status bar
     int INLINE_DIAGNOSTICS; // (define INLINE-DIAGNOSTICS #t) — the message after the line
     int INLAY_HINTS;        // (define INLAY-HINTS #t) — parameter names / types inside the line
+    int DEBUG_INLINE_VALUES; // (define DEBUG-INLINE-VALUES #t) — variables' values after the lines, while paused
 };
 
 /**
@@ -158,6 +166,7 @@ typedef struct
     char* root;          // absolute, '/' separators, no trailing slash
     int trusted;         // its .beluga/init.lisp may run (project-trust)
     int opened;          // made current at least once this session
+    int removed;         // forgotten (project-remove): not listed or saved
     int has_config_env;  // config_env holds its evaluated .beluga/init.lisp
     Lisp config_env;     // the global env extended with the project's own table
     long last_used;      // larger is more recent; orders ~/.beluga/projects
@@ -275,6 +284,18 @@ typedef struct
         int role; // a TokenType (syntax_highlighter.h)
     } line_prefixes[12];
     int num_line_prefixes;
+
+    // Inline spans, tried in order where a token can start: `open`, then
+    // text on the same row up to `close`, drawn in `role` (the markers in
+    // the comment color). Markdown-style flanking: no word character just
+    // before `open` or after `close`, no blank just inside either. How
+    // Markdown gets **bold** and *italic* (syntax-add-span).
+    struct syntax_span_t {
+        char open[8];
+        char close[8];
+        int role; // a TokenType
+    } spans[8];
+    int num_spans;
 } LanguageSyntax;
 
 struct lsp_client_t
@@ -529,6 +550,11 @@ typedef struct term_parser_state_t
     TermCellAttr saved_attr;
     int screen_top_row;
     int pane_height;
+    // The pane's width, for wrapping (0: not known, lines don't wrap), and
+    // xterm's pending wrap: a character went in the last column, and the
+    // cursor stays there until the next one goes to the next line.
+    int pane_width;
+    int wrap_pending;
     // Scroll region (DECSTBM): its first screen row counted from 0, its
     // last counted from 1, 0 meaning the screen's last row whatever the
     // pane's height (so a zeroed state has no region).
@@ -618,6 +644,14 @@ typedef struct buffer_t
     int buffer_id;
     int b_lsp_open;
     int x, y; /**< Position in the file */
+    // The pane (EditorPane.id) whose cursor x/y is, and where it was when
+    // that pane last lost focus: x/y moved since means something put the
+    // cursor somewhere on purpose (a jump), which the next pane keeps.
+    int cursor_pane;
+    int cursor_left_x, cursor_left_y;
+    // Daemon mode: windows waiting in a prompt with this buffer active,
+    // while other windows are served. It can't be killed meanwhile.
+    int prompt_holds;
     Row* row;
     int numrows;
     int b_has_changed;
@@ -787,6 +821,15 @@ typedef struct editor_config_t
 
     struct const_t constantes;
     int quit_times_buffer;
+
+    // The working directory relative paths, the open-file prompt and new
+    // terminal panes start from (editorGetCwd()). NULL: the process's. In
+    // the daemon, the current window's (from its client).
+    const char* cwd;
+    // which-key (which_key.c): the prefix it last saw pending, and since
+    // when (ms), so the panel shows only once a chord has settled.
+    int which_key_prefix;
+    long which_key_since;
 
     // ── Projects (project.c) ────────────────────────────────────────────
     // constantes is the current project's copy of the settings;

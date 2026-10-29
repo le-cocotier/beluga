@@ -5,14 +5,33 @@
  */
 
 #include "../include/pty_session.h"
+#include "../include/editor_op.h"
+#include "../include/galloc.h"
 #include "../include/terminal.h"
 #include "../include/split_screen.h"
 
 #include <string.h>
 
+static const char* const* s_next_argv;
+static const char* s_next_cwd;
+static const char* const* s_next_env;
+
+void ptySessionSetNextProgram(const char* const* argv, const char* cwd, const char* const* env)
+{
+    s_next_argv = argv;
+    s_next_cwd = cwd;
+    s_next_env = env;
+}
+
 int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, const int rows, const int cols)
 {
-    buf->pty = os_pty_open(shell_path, rows, cols);
+    char* cwd = editorGetCwd();
+    if (s_next_argv)
+        buf->pty = os_pty_spawn(s_next_argv, s_next_cwd ? s_next_cwd : cwd, s_next_env, rows, cols);
+    else
+        buf->pty = os_pty_open(shell_path, cwd, rows, cols);
+    ptySessionSetNextProgram(NULL, NULL, NULL);
+    gfree(cwd);
     if (!buf->pty)
     {
         appDebug("couldn't start a shell for the terminal buffer");
@@ -22,6 +41,7 @@ int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, const int rows
     memset(&buf->term_state, 0, sizeof(TermParserState));
     buf->term_state.state = TPARSE_GROUND;
     buf->term_state.pane_height = splitScreenGetActivePane()->height;
+    buf->term_state.pane_width = cols;
     return 0;
 }
 
@@ -39,6 +59,11 @@ long ptySessionWrite(const struct buffer_t* buf, const char* bytes, const size_t
 OsStream *ptySessionOutput(const struct buffer_t* buf)
 {
     return buf->pty ? os_pty_output(buf->pty) : NULL;
+}
+
+long ptySessionPid(const struct buffer_t* buf)
+{
+    return buf->pty ? os_pty_pid(buf->pty) : -1;
 }
 
 int ptySessionIsAlive(struct buffer_t* buf)

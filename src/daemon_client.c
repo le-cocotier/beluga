@@ -17,6 +17,10 @@
 #include "../include/galloc.h"
 #include "../include/os.h"
 #include "../include/terminal.h"
+#include "../include/utils.h"
+
+// How long a daemon just started gets to take connections.
+#define DAEMON_START_TIMEOUT_MS 10000
 
 /**
  * @brief The hello frame's payload (see daemon_frame.h), galloc'd.
@@ -46,6 +50,54 @@ static char *buildHello(const int rows, const int cols, char *const *files,
   return hello;
 }
 
+int clientStartDaemon(const char *name) {
+  char err[512];
+  char daemon_arg[256];
+  char log_file[OS_PATH_MAX];
+  const char *argv[4];
+  const char *dir = utilBelugaDir();
+  char *exe;
+  OsConn *conn;
+  long long deadline;
+
+  conn = os_conn_connect(name, err, sizeof(err));
+  if (conn) {
+    os_conn_close(conn);
+    fprintf(stderr, "beluga: a daemon called \"%s\" is already running\n", name);
+    return 1;
+  }
+  exe = os_exe_path();
+  if (!exe) {
+    fprintf(stderr, "beluga: can't tell where this program is, to start the daemon\n");
+    return 1;
+  }
+  snprintf(daemon_arg, sizeof(daemon_arg), "--daemon=%s", name);
+  if (dir)
+    snprintf(log_file, sizeof(log_file), "%s/daemon-%s.log", dir, name);
+  argv[0] = exe;
+  argv[1] = daemon_arg;
+  argv[2] = "--foreground";
+  argv[3] = NULL;
+  if (os_spawn_detached(argv, dir ? log_file : NULL, err, sizeof(err)) == -1) {
+    gfree(exe);
+    fprintf(stderr, "beluga: couldn't start the daemon: %s\n", err);
+    return 1;
+  }
+  gfree(exe);
+  deadline = os_monotonic_ms() + DAEMON_START_TIMEOUT_MS;
+  while (os_monotonic_ms() < deadline) {
+    conn = os_conn_connect(name, err, sizeof(err));
+    if (conn) {
+      os_conn_close(conn);
+      return 0;
+    }
+    os_sleep_ms(50);
+  }
+  fprintf(stderr, "beluga: the daemon didn't start%s%s\n", dir ? "; see " : "",
+          dir ? log_file : "");
+  return 1;
+}
+
 int clientMain(const char *name, char *const *files, const int n_files) {
   char err[512];
   OsConn *conn;
@@ -67,12 +119,12 @@ int clientMain(const char *name, char *const *files, const int n_files) {
   long n;
   int r;
 
+  // None running: start one, the way `beluga --daemon` does.
   conn = os_conn_connect(name, err, sizeof(err));
+  if (!conn && clientStartDaemon(name) == 0)
+    conn = os_conn_connect(name, err, sizeof(err));
   if (!conn) {
-    if (strcmp(name, DAEMON_DEFAULT_NAME) == 0)
-      fprintf(stderr, "beluga: %s\nStart one with: beluga --daemon\n", err);
-    else
-      fprintf(stderr, "beluga: %s\nStart one with: beluga --daemon=%s\n", err, name);
+    fprintf(stderr, "beluga: %s\n", err);
     return 1;
   }
   if (os_term_enter_raw() == -1) {

@@ -198,16 +198,34 @@ static void textEndPosition(const char *text, int row, int col, int *end_row,
 }
 
 /**
+ * @brief 1 when the characters of `r` before `col` are only spaces and tabs
+ * (none at all included).
+ */
+static int rowHeadIsBlank(const Row *r, int col) {
+  int i;
+  for (i = 0; i < col && i < r->size; i++)
+    if (r->characters[i].length != 1 ||
+        (r->characters[i].character[0] != ' ' &&
+         r->characters[i].character[0] != '\t'))
+      return 0;
+  return 1;
+}
+
+/**
  * @brief Splits `row` into two rows at character index `col` — the tail
  * ([col, size)) becomes a new row right after it. Pure row mutation: no
  * cursor movement, no undo recording (callers do both themselves).
  */
 static void rowSplitAt(struct buffer_t *buf, int row, int col) {
   Row *r = &buf->row[row];
+  const int head_blank = rowHeadIsBlank(r, col);
   bufferInsertRow(buf, row + 1, &r->characters[col], r->size - col);
   r = &buf->row[row]; // bufferInsertRow's recalloc may have moved the array
   r->size = col;
   END_OF_STRING(r->characters[r->size]);
+  // ENTER before a line's code: its breakpoint goes down with the code.
+  if (head_blank)
+    breakpointsLineMoved(buf, row, row + 1);
 }
 
 /**
@@ -228,6 +246,7 @@ static void rowJoinNext(struct buffer_t *buf, int row) {
           sizeof(Row) * (buf->numrows - row - 2));
   buf->numrows--;
   breakpointsLinesRemoved(buf, row + 1, 1);
+  splitScreenLinesShifted(buf, row + 1, -1);
   syntaxHighlighterInvalidateAfter(buf, row);
 }
 
@@ -250,6 +269,7 @@ static void rowRemoveAt(struct buffer_t *buf, int at) {
           sizeof(Row) * (buf->numrows - at - 1));
   buf->numrows--;
   breakpointsLinesRemoved(buf, at, 1);
+  splitScreenLinesShifted(buf, at, -1);
   syntaxHighlighterInvalidateAfter(buf, at - 1);
 }
 
@@ -901,7 +921,12 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
       return -1;
     utf8Cpy(filename, name_start);
   } else if (type == TERMINAL_BUFF) { // path is already just a plain name, no
-    filename = stringToUtf8(temp_filename);
+    // "term" (the shell of CTRL-x t), or the name given (a debugged
+    // program's, ptySessionSetNextProgram()).
+    filename = path ? (Utf8Char *)gcalloc(utf8StringLen(path), sizeof(Utf8Char))
+                    : stringToUtf8(temp_filename);
+    if (filename && path)
+      utf8Cpy(filename, path);
     // splitting needed
     if (!filename)
       return -1;
@@ -1005,7 +1030,13 @@ int bufferCreate(const Utf8Char *path, enum bufferStatus_e state,
   {
     new_buf->pty = NULL;
     new_buf->path = NULL;
-    new_buf->fullname = stringToUtf8((unsigned char *)"term");
+    if (path) {
+      new_buf->fullname = gcalloc(utf8StringLen(path), sizeof(Utf8Char));
+      if (new_buf->fullname)
+        utf8Cpy(new_buf->fullname, path);
+    } else {
+      new_buf->fullname = stringToUtf8((unsigned char *)"term");
+    }
 
     active = splitScreenGetActivePane();
     if (ptySessionSpawn(new_buf, NULL, active->height, active->width) != 0) {
@@ -1178,6 +1209,10 @@ int bufferClose(int buff_id) {
   }
   if (buf->next == buf) {
     editorSetStatusMessage("Can't kill the only buffer");
+    return -1;
+  }
+  if (buf->prompt_holds > 0) {
+    editorSetStatusMessage("Another window has a prompt open on this buffer");
     return -1;
   }
   if (!bufferConfirmKill(buf))
@@ -1669,6 +1704,126 @@ void bufferFindReverse(struct buffer_t *buf) {
 }
 
 /**
+ * @brief Whether a cell belongs to a word for buffer-find-word: ASCII
+ * letters, digits and '_' (so identifiers like my_var match whole), plus
+ * any multi-byte UTF-8 character, so accented words aren't cut in two.
+ */
+static int bufferIsWordChar(const Utf8Char *ch) {
+  unsigned char c;
+  if (ch->length > 1)
+    return 1;
+  c = ch->character[0];
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '_';
+}
+
+static int bufferCharEqual(const Utf8Char *a, const Utf8Char *b) {
+  return a->length == b->length &&
+         memcmp(a->character, b->character, (size_t)a->length) == 0;
+}
+
+/**
+ * @brief Whether the n characters of word sit at column col of row as a
+ * whole word (not preceded or followed by another word character).
+ */
+static int bufferWordMatchAt(const Row *row, int col, const Utf8Char *word,
+                             int n) {
+  int i;
+  if (col < 0 || col + n > row->size)
+    return 0;
+  if (col > 0 && bufferIsWordChar(&row->characters[col - 1]))
+    return 0;
+  if (col + n < row->size && bufferIsWordChar(&row->characters[col + n]))
+    return 0;
+  for (i = 0; i < n; i++)
+    if (!bufferCharEqual(&row->characters[col + i], &word[i]))
+      return 0;
+  return 1;
+}
+
+/**
+ * @brief Moves the cursor to the next (or previous) whole-word occurrence
+ * of the word under the cursor, like Vim's * and #
+ * @details When the cursor isn't on a word, the first word after it on the
+ * same line is used. The search is case-sensitive, wraps around the ends of
+ * the buffer, and lands on the start of the match. The status bar says when
+ * the search wrapped or when the word has no other occurrence.
+ * @param buf Buffer to search in
+ * @param reverse 0 to search forward, 1 to search backward
+ */
+void bufferFindWordAtCursor(struct buffer_t *buf, int reverse) {
+  Row *row;
+  int start;
+  int end;
+  int n;
+  int k;
+  int r;
+  int c;
+  int from;
+  int to;
+  char *word_str;
+
+  if (!buf || buf->numrows == 0 || buf->y >= buf->numrows)
+    return;
+  row = &buf->row[buf->y];
+
+  start = buf->x;
+  while (start < row->size && !bufferIsWordChar(&row->characters[start]))
+    start++;
+  if (start >= row->size) {
+    editorSetStatusMessage("No word under cursor");
+    return;
+  }
+  while (start > 0 && bufferIsWordChar(&row->characters[start - 1]))
+    start--;
+  end = start;
+  while (end < row->size && bufferIsWordChar(&row->characters[end]))
+    end++;
+  n = end - start;
+
+  /* k = 0 is the rest of the cursor's row past the word's start, k = 1 ..
+   * numrows - 1 the other rows in search order, and k = numrows the
+   * cursor's row again from the other side, which ends on the word itself. */
+  for (k = 0; k <= buf->numrows; k++) {
+    if (reverse)
+      r = ((buf->y - k) % buf->numrows + buf->numrows) % buf->numrows;
+    else
+      r = (buf->y + k) % buf->numrows;
+    row = &buf->row[r];
+
+    if (reverse) {
+      from = (k == 0) ? start - 1 : row->size - n;
+      to = (k == buf->numrows) ? start : 0;
+      for (c = from; c >= to; c--)
+        if (bufferWordMatchAt(row, c, buf->row[buf->y].characters + start, n))
+          goto found;
+    } else {
+      from = (k == 0) ? start + 1 : 0;
+      to = (k == buf->numrows) ? start : row->size - n;
+      for (c = from; c <= to; c++)
+        if (bufferWordMatchAt(row, c, buf->row[buf->y].characters + start, n))
+          goto found;
+    }
+  }
+  return;
+
+found:
+  if (r == buf->y && c == start) {
+    word_str = (char *)utf8ToNString(buf->row[buf->y].characters + start, n);
+    editorSetStatusMessage("Only occurrence of \"%s\"", word_str);
+    gfree(word_str);
+  } else if (reverse ? (r > buf->y || (r == buf->y && c > start))
+                     : (r < buf->y || (r == buf->y && c < start))) {
+    editorSetStatusMessage(reverse ? "Search wrapped to the bottom"
+                                   : "Search wrapped to the top");
+  }
+  buf->y = r;
+  buf->x = c;
+}
+
+
+
+/**
  * @brief Index of `row` within `buffer->row`, or -1 if it isn't one of its
  * rows — -1 makes syntaxHighlighterInvalidateAfter() drop the whole cache,
  * the safe answer when we can't tell which row changed.
@@ -1727,8 +1882,10 @@ void bufferInsertRow(struct buffer_t *buffer, int at, Utf8Char *string,
     buffer->edit_seq++;
   }
   // Rows appended at the end (a file being read) move nothing.
-  if (at < buffer->numrows - 1)
+  if (at < buffer->numrows - 1) {
     breakpointsLinesInserted(buffer, at, 1);
+    splitScreenLinesShifted(buffer, at, 1);
+  }
   syntaxHighlighterInvalidateAfter(buffer, at - 1);
 }
 
@@ -1757,8 +1914,10 @@ static int rowsInsertEmpty(struct buffer_t *buf, int at, int count) {
     END_OF_STRING(buf->row[i].characters[0]);
   }
   buf->numrows += count;
-  if (at < buf->numrows - count)
+  if (at < buf->numrows - count) {
     breakpointsLinesInserted(buf, at, count);
+    splitScreenLinesShifted(buf, at, count);
+  }
   return 1;
 }
 
@@ -1852,6 +2011,8 @@ static void textInsertRaw(struct buffer_t *buf, int row, int col,
   memcpy(tail, r->characters + col, (size_t)tail_len * sizeof(Utf8Char));
   r->size = col;
   END_OF_STRING(r->characters[r->size]);
+  if (rowHeadIsBlank(r, col))
+    breakpointsLineMoved(buf, row, row + lines);
 
   cur = row;
   line_start = 0;
@@ -1919,6 +2080,7 @@ static char *textDeleteRaw(struct buffer_t *buf, int start_row, int start_col,
             sizeof(Row) * (size_t)(buf->numrows - end_row - 1));
     buf->numrows -= removed;
     breakpointsLinesRemoved(buf, start_row + 1, removed);
+    splitScreenLinesShifted(buf, start_row + 1, -removed);
   }
   syntaxHighlighterInvalidateAfter(buf, start_row);
   return deleted;

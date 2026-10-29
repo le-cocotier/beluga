@@ -517,8 +517,6 @@ static void drawPrefixHelp(struct abuf *ab) {
 void whichKeyDraw(struct abuf *ab) {
     EditorPane *active;
     struct buffer_t *buf;
-    static int last_prefix = 0;
-    static long pending_since = 0;
     long now;
     char title[128];
     // TAB completion in a prompt with several matches: they're the answer
@@ -567,11 +565,11 @@ void whichKeyDraw(struct abuf *ab) {
     // Only once the prefix has been pending a moment, so fluent chords
     // don't strobe the panel on their way through.
     now = monotonic_ms();
-    if (E.prefix_state != last_prefix) {
-        last_prefix = E.prefix_state;
-        pending_since = now;
+    if (E.prefix_state != E.which_key_prefix) {
+        E.which_key_prefix = E.prefix_state;
+        E.which_key_since = now;
     }
-    if (now - pending_since < WK_DELAY_MS)
+    if (now - E.which_key_since < WK_DELAY_MS)
         return;
 
     drawPrefixHelp(ab);

@@ -51,6 +51,8 @@ static Setting s_settings[] = {
      "Show a line's error or warning message after its text."},
     {"INLAY-HINTS", SETTING_BOOL, 1, 0, &E.constantes.INLAY_HINTS,
      "Show the server's inlay hints (parameter names, deduced types) inside lines."},
+    {"DEBUG-INLINE-VALUES", SETTING_BOOL, 1, 0, &E.constantes.DEBUG_INLINE_VALUES,
+     "While the debugger is paused, show the variables' values after the lines that use them."},
 };
 
 #define SETTING_COUNT ((int)(sizeof(s_settings) / sizeof(s_settings[0])))
@@ -95,6 +97,21 @@ void settingsRead(Lisp env, struct const_t *out, char *invalid, size_t invalid_s
 void settingsLoad(void) {
   s_invalid[0] = '\0';
   settingsRead(lisp_env(E.ctx), &E.constantes, s_invalid, sizeof(s_invalid));
+}
+
+void settingsWriteTemplate(FILE *f) {
+  int i;
+  const Setting *s;
+  const int *global;
+  char value[32];
+  for (i = 0; i < SETTING_COUNT; i++) {
+    s = &s_settings[i];
+    // The same field of E.global_constantes: what init.lisp set.
+    global = (const int *)((const char *)&E.global_constantes +
+                           ((const char *)s->target - (const char *)&E.constantes));
+    formatValue(s, *global, value, sizeof(value));
+    fprintf(f, ";; %s\n;; (define %s %s)\n\n", s->doc, s->name, value);
+  }
 }
 
 void settingsReportProblems(void) {

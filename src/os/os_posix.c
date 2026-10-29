@@ -27,6 +27,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -36,6 +39,9 @@
 #include <time.h>
 #include <unistd.h>
 #ifdef __APPLE__
+#include <libproc.h>     // proc_pidpath
+#include <sys/sysctl.h>  // KERN_PROC_UID
+#include <mach-o/dyld.h> // _NSGetExecutablePath
 #include <malloc/malloc.h> // malloc_zone_statistics
 #include <util.h> // forkpty
 #else
@@ -68,6 +74,232 @@ const char *os_name(void) {
 }
 
 long os_getpid(void) { return (long)getpid(); }
+
+static void setCloexec(int fd);
+
+static volatile sig_atomic_t s_interrupted;
+static volatile sig_atomic_t s_hung_up;
+
+static void onStopSignal(const int sig) {
+  if (sig == SIGINT)
+    s_interrupted = 1;
+  else
+    s_hung_up = 1;
+}
+
+void os_catch_stop_signals(void) {
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = onStopSignal;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);
+  sigaction(SIGHUP, &sa, NULL);
+}
+
+int os_take_stop_signal(void) {
+  if (s_hung_up) {
+    s_hung_up = 0;
+    s_interrupted = 0;
+    return OS_STOP_HANGUP;
+  }
+  if (s_interrupted) {
+    s_interrupted = 0;
+    return OS_STOP_INTERRUPT;
+  }
+  return OS_STOP_NONE;
+}
+
+char *os_exe_path(void) {
+  char path[OS_PATH_MAX];
+#ifdef __APPLE__
+  uint32_t size = sizeof(path);
+  char *real;
+  if (_NSGetExecutablePath(path, &size) != 0)
+    return NULL;
+  real = os_realpath(path);
+  return real ? real : gstrdup(path);
+#else
+  const ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
+  if (n <= 0)
+    return NULL;
+  path[n] = '\0';
+  return gstrdup(path);
+#endif
+}
+
+static int compareProcesses(const void *a, const void *b) {
+  const long x = ((const OsProcessInfo *)a)->pid;
+  const long y = ((const OsProcessInfo *)b)->pid;
+  return x < y ? -1 : x > y;
+}
+
+#ifdef __APPLE__
+OsProcessInfo *os_process_list(int *count) {
+  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, (int)geteuid()};
+  struct kinfo_proc *procs = NULL;
+  OsProcessInfo *out;
+  char path[PROC_PIDPATHINFO_MAXSIZE];
+  size_t size = 0;
+  int n;
+  int i;
+  *count = 0;
+  // The list can grow between asking its size and reading it: room to spare.
+  if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0)
+    return NULL;
+  size += size / 4 + sizeof(struct kinfo_proc) * 16;
+  procs = galloc(size);
+  if (!procs)
+    return NULL;
+  if (sysctl(mib, 4, procs, &size, NULL, 0) != 0) {
+    gfree(procs);
+    return NULL;
+  }
+  n = (int)(size / sizeof(struct kinfo_proc));
+  out = gcalloc(n > 0 ? (size_t)n : 1, sizeof(OsProcessInfo));
+  if (!out) {
+    gfree(procs);
+    return NULL;
+  }
+  for (i = 0; i < n; i++) {
+    if (procs[i].kp_proc.p_pid == getpid() || procs[i].kp_proc.p_pid <= 0)
+      continue;
+    out[*count].pid = procs[i].kp_proc.p_pid;
+    if (proc_pidpath(procs[i].kp_proc.p_pid, path, sizeof(path)) > 0)
+      snprintf(out[*count].command, sizeof(out[*count].command), "%s", path);
+    else
+      snprintf(out[*count].command, sizeof(out[*count].command), "%s", procs[i].kp_proc.p_comm);
+    (*count)++;
+  }
+  gfree(procs);
+  qsort(out, (size_t)*count, sizeof(OsProcessInfo), compareProcesses);
+  return out;
+}
+#else
+OsProcessInfo *os_process_list(int *count) {
+  DIR *dir = opendir("/proc");
+  struct dirent *entry;
+  struct stat st;
+  OsProcessInfo *out = NULL;
+  OsProcessInfo *grown;
+  char path[64];
+  char *end;
+  FILE *f;
+  size_t n;
+  size_t i;
+  long pid;
+  int cap = 0;
+  *count = 0;
+  if (!dir)
+    return NULL;
+  while ((entry = readdir(dir)) != NULL) {
+    pid = strtol(entry->d_name, &end, 10);
+    if (*end || pid <= 0 || pid == (long)getpid())
+      continue;
+    snprintf(path, sizeof(path), "/proc/%ld", pid);
+    if (stat(path, &st) != 0 || st.st_uid != geteuid())
+      continue;
+    if (*count == cap) {
+      grown = grealloc(out, sizeof(OsProcessInfo) * (size_t)(cap ? cap * 2 : 128));
+      if (!grown)
+        break;
+      out = grown;
+      cap = cap ? cap * 2 : 128;
+    }
+    out[*count].pid = pid;
+    out[*count].command[0] = '\0';
+    // The arguments, NUL-separated; empty for a kernel thread.
+    snprintf(path, sizeof(path), "/proc/%ld/cmdline", pid);
+    f = fopen(path, "r");
+    n = f ? fread(out[*count].command, 1, sizeof(out[*count].command) - 1, f) : 0;
+    if (f)
+      fclose(f);
+    while (n > 0 && out[*count].command[n - 1] == '\0')
+      n--;
+    for (i = 0; i < n; i++)
+      if (out[*count].command[i] == '\0')
+        out[*count].command[i] = ' ';
+    out[*count].command[n] = '\0';
+    if (n == 0)
+      continue;
+    (*count)++;
+  }
+  closedir(dir);
+  if (out)
+    qsort(out, (size_t)*count, sizeof(OsProcessInfo), compareProcesses);
+  return out;
+}
+#endif
+
+int os_spawn_detached(const char *const *argv, const char *log_file, char *err,
+                      const size_t err_size) {
+  int report[2]; // the grandchild's errno if exec fails; EOF once it ran
+  int child_errno = 0;
+  int status;
+  int fd;
+  pid_t pid;
+  ssize_t n;
+
+  if (!argv || !argv[0]) {
+    snprintf(err, err_size, "nothing to start");
+    return -1;
+  }
+  if (pipe(report) == -1) {
+    snprintf(err, err_size, "pipe: %s", strerror(errno));
+    return -1;
+  }
+  setCloexec(report[0]);
+  setCloexec(report[1]);
+  pid = fork();
+  if (pid == -1) {
+    snprintf(err, err_size, "fork: %s", strerror(errno));
+    close(report[0]);
+    close(report[1]);
+    return -1;
+  }
+  if (pid == 0) {
+    // A session of its own, then a second fork so it isn't a session
+    // leader either: no terminal can ever become its controlling one.
+    close(report[0]);
+    setsid();
+    if (fork() != 0)
+      _exit(0);
+    fd = open("/dev/null", O_RDONLY);
+    if (fd >= 0) {
+      dup2(fd, 0);
+      if (fd > 2)
+        close(fd);
+    }
+    fd = log_file ? open(log_file, O_WRONLY | O_CREAT | O_APPEND, 0600) : -1;
+    if (fd < 0)
+      fd = open("/dev/null", O_WRONLY);
+    if (fd >= 0) {
+      dup2(fd, 1);
+      dup2(fd, 2);
+      if (fd > 2)
+        close(fd);
+    }
+    signal(SIGHUP, SIG_DFL);
+    signal(SIGINT, SIG_DFL);
+    execv(argv[0], (char *const *)argv);
+    child_errno = errno;
+    if (write(report[1], &child_errno, sizeof(child_errno)) < 0)
+      _exit(127);
+    _exit(127);
+  }
+  close(report[1]);
+  waitpid(pid, &status, 0); // the first child, which exits at once
+  do
+    n = read(report[0], &child_errno, sizeof(child_errno));
+  while (n < 0 && errno == EINTR);
+  close(report[0]);
+  if (n == (ssize_t)sizeof(child_errno)) {
+    snprintf(err, err_size, "%s: %s", argv[0], strerror(child_errno));
+    return -1;
+  }
+  return 0;
+}
 
 /***********************************************************************************************************************
  *
@@ -548,12 +780,21 @@ struct OsPty {
   int exited;
 };
 
-OsPty *os_pty_open(const char *shell, const int rows, const int cols) {
+/**
+ * @brief forkpty() for os_pty_open() and os_pty_spawn(): the child changes
+ * to `cwd`, applies `env` and TERM, then runs `argv` (execvp) or, with
+ * `shell` set instead, the shell interactively.
+ */
+static OsPty *ptyStart(const char *shell, const char *const *argv, const char *cwd,
+                       const char *const *env, const int rows, const int cols) {
   struct winsize ws;
   OsPty *p;
   pid_t pid;
   int master;
   const char *sh;
+  const char *eq;
+  char name[256];
+  int i;
 
   p = gcalloc(1, sizeof(*p));
   if (!p)
@@ -568,11 +809,29 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols) {
     return NULL;
   }
   if (pid == 0) {
+    if (cwd && *cwd && chdir(cwd) != 0) {
+      // Not there any more: the editor's directory, as before.
+    }
+    for (i = 0; env && env[i]; i++) {
+      eq = strchr(env[i], '=');
+      if (!eq) {
+        unsetenv(env[i]);
+      } else if ((size_t)(eq - env[i]) < sizeof(name)) {
+        memcpy(name, env[i], (size_t)(eq - env[i]));
+        name[eq - env[i]] = '\0';
+        setenv(name, eq + 1, 1);
+      }
+    }
+    setenv("TERM", "xterm-256color", 1);
+    if (argv) {
+      execvp(argv[0], (char *const *)argv);
+      fprintf(stderr, "%s: %s\n", argv[0], strerror(errno));
+      _exit(127);
+    }
     // The child: become the shell.
     sh = (shell && *shell) ? shell : getenv("SHELL");
     if (!sh || !*sh)
       sh = access("/bin/zsh", X_OK) == 0 ? "/bin/zsh" : "/bin/sh";
-    setenv("TERM", "xterm-256color", 1);
     execl(sh, sh, "-i", (char *)NULL);
     _exit(127);
   }
@@ -582,6 +841,19 @@ OsPty *os_pty_open(const char *shell, const int rows, const int cols) {
   streamInit(&p->out, master, 0);
   return p;
 }
+
+OsPty *os_pty_open(const char *shell, const char *cwd, const int rows, const int cols) {
+  return ptyStart(shell ? shell : "", NULL, cwd, NULL, rows, cols);
+}
+
+OsPty *os_pty_spawn(const char *const *argv, const char *cwd, const char *const *env,
+                    const int rows, const int cols) {
+  if (!argv || !argv[0])
+    return NULL;
+  return ptyStart(NULL, argv, cwd, env, rows, cols);
+}
+
+long os_pty_pid(OsPty *p) { return p ? (long)p->pid : -1; }
 
 OsStream *os_pty_output(OsPty *p) { return p ? &p->out : NULL; }
 
@@ -833,6 +1105,98 @@ OsConn *os_conn_connect(const char *name, char *err, const size_t err_size) {
     return NULL;
   }
   return connFromFd(fd);
+}
+
+/**
+ * @brief connect() on a non-blocking socket, waiting at most `timeout_ms`.
+ * @return 0, or -1 with errno set.
+ */
+static int connectWithin(const int fd, const struct sockaddr *addr, const socklen_t len,
+                         const int timeout_ms) {
+  struct pollfd pfd;
+  int error = 0;
+  socklen_t error_len = sizeof(error);
+  int pr;
+  fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+  if (connect(fd, addr, len) == 0)
+    return 0;
+  if (errno != EINPROGRESS)
+    return -1;
+  pfd.fd = fd;
+  pfd.events = POLLOUT;
+  pfd.revents = 0;
+  do
+    pr = poll(&pfd, 1, timeout_ms);
+  while (pr < 0 && errno == EINTR);
+  if (pr == 0) {
+    errno = ETIMEDOUT;
+    return -1;
+  }
+  if (pr < 0 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &error_len) == -1)
+    return -1;
+  if (error != 0) {
+    errno = error;
+    return -1;
+  }
+  return 0;
+}
+
+OsConn *os_tcp_connect(const char *host, const int port, const int timeout_ms, char *err,
+                       const size_t err_size) {
+  struct addrinfo hints;
+  struct addrinfo *found = NULL;
+  struct addrinfo *a;
+  char service[16];
+  int one = 1;
+  int fd = -1;
+  int rc;
+
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  snprintf(service, sizeof(service), "%d", port);
+  rc = getaddrinfo(host, service, &hints, &found);
+  if (rc != 0) {
+    snprintf(err, err_size, "%s: %s", host, gai_strerror(rc));
+    return NULL;
+  }
+  errno = ECONNREFUSED;
+  for (a = found; a && fd == -1; a = a->ai_next) {
+    fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+    if (fd == -1)
+      continue;
+    if (connectWithin(fd, a->ai_addr, a->ai_addrlen, timeout_ms) == -1) {
+      rc = errno;
+      close(fd);
+      fd = -1;
+      errno = rc;
+    }
+  }
+  freeaddrinfo(found);
+  if (fd == -1) {
+    snprintf(err, err_size, "%s:%d: %s", host, port, strerror(errno));
+    return NULL;
+  }
+  setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+  return connFromFd(fd);
+}
+
+int os_tcp_free_port(void) {
+  struct sockaddr_in addr;
+  socklen_t len = sizeof(addr);
+  int port = -1;
+  const int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd == -1)
+    return -1;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = 0; // the system picks one
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
+      getsockname(fd, (struct sockaddr *)&addr, &len) == 0)
+    port = ntohs(addr.sin_port);
+  close(fd);
+  return port;
 }
 
 OsStream *os_conn_input(OsConn *c) { return c ? &c->in : NULL; }

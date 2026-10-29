@@ -15,6 +15,13 @@ Lisp editorPromptLisp(Lisp args, LispError *e, LispContext ctx);
 // The debugger (builtins_debug.c)
 Lisp l_debugToggleBreakpoint(Lisp args, LispError *e, LispContext ctx);
 Lisp l_debugBreakpointCondition(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugBreakpointHitCount(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugLogpoint(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugExceptionBreakpoints(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugWatch(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugUnwatch(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugWatches(Lisp args, LispError *e, LispContext ctx);
+Lisp l_debugAttach(Lisp args, LispError *e, LispContext ctx);
 Lisp l_debugClearBreakpoints(Lisp args, LispError *e, LispContext ctx);
 Lisp l_debugBreakpoints(Lisp args, LispError *e, LispContext ctx);
 Lisp l_dapAdapter(Lisp args, LispError *e, LispContext ctx);
@@ -40,6 +47,7 @@ Lisp l_syntaxAddKeyword(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddType(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddCommentWord(Lisp args, LispError *e, LispContext ctx);
 Lisp l_syntaxAddLinePrefix(Lisp args, LispError *e, LispContext ctx);
+Lisp l_syntaxAddSpan(Lisp args, LispError *e, LispContext ctx);
 Lisp l_bufferSetSyntax(Lisp args, LispError *e, LispContext ctx);
 Lisp l_writeFile(Lisp args, LispError *e, LispContext ctx);
 
@@ -109,6 +117,8 @@ Lisp editorSwitchPreviousBuffer(Lisp args, LispError *e, LispContext ctx);
 Lisp editorSwitchBufferPopup(Lisp args, LispError *e, LispContext ctx);
 Lisp bufferFind_L(Lisp args, LispError *e, LispContext ctx);
 Lisp bufferFindReverse_L(Lisp args, LispError *e, LispContext ctx);
+Lisp bufferFindWord_L(Lisp args, LispError *e, LispContext ctx);
+Lisp bufferFindWordReverse_L(Lisp args, LispError *e, LispContext ctx);
 
 // Pane
 

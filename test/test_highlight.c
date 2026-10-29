@@ -77,5 +77,25 @@ int main(void) {
   check("/* @param */", CM "/* " KW "@param" " " TY CM "*/");
 
   syntaxFreeCommentWords();
+
+  // Spans (syntax-add-span), as the markdown package sets them up.
+  memset(&lang, 0, sizeof(lang));
+  strcpy(lang.extension, "md");
+  strcpy(lang.spans[0].open, "**");
+  strcpy(lang.spans[0].close, "**");
+  lang.spans[0].role = TOKEN_BOLD;
+  strcpy(lang.spans[1].open, "*");
+  strcpy(lang.spans[1].close, "*");
+  lang.spans[1].role = TOKEN_ITALIC;
+  lang.num_spans = 2;
+  syntaxHighlighterSeed(0);
+  check("a **b c** d", DF "a " CM "**" DF "\x1b[1m" "b c" "\x1b[22m" CM "**" " " DF "d");
+  check("*x*.", CM "*" DF "\x1b[3m" "x" "\x1b[23m" CM "*" DF ".");
+  // Not emphasis: blanks inside the markers, a word character outside
+  // them, or no closing marker on the row.
+  check("a * b *", DF "a " DF "* " DF "b " DF "*");
+  check("x*y*", DF "x" DF "*" DF "y" DF "*");
+  check("**open", DF "*" DF "*" DF "open");
+
   return testDone();
 }

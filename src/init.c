@@ -2,6 +2,7 @@
 #include "../include/breakpoints.h"
 #include "../include/builtins.h"
 #include "../include/dap.h"
+#include "../include/debug_ui.h"
 #include "../include/color.h"
 #include "../include/cJSON.h"
 #include "../include/completion.h"
@@ -87,6 +88,8 @@ void initBuiltins(void) {
   registerBuiltin("editor-batch?", l_editorBatch);
   registerBuiltin("buffer-find", bufferFind_L);
   registerBuiltin("buffer-find-reverse", bufferFindReverse_L);
+  registerBuiltin("buffer-find-word", bufferFindWord_L);
+  registerBuiltin("buffer-find-word-reverse", bufferFindWordReverse_L);
   registerBuiltin("editor-read-char", editorReadChar_L);
   registerBuiltin("add-prefix", editorPrefix);
   registerBuiltin("editor-set-prefix", editorSetPrefix);
@@ -181,6 +184,7 @@ void initBuiltins(void) {
   registerBuiltin("syntax-add-type", l_syntaxAddType);
   registerBuiltin("syntax-add-comment-word", l_syntaxAddCommentWord);
   registerBuiltin("syntax-add-line-prefix", l_syntaxAddLinePrefix);
+  registerBuiltin("syntax-add-span", l_syntaxAddSpan);
   registerBuiltin("buffer-set-syntax", l_bufferSetSyntax);
   registerBuiltin("write-file", l_writeFile);
   registerBuiltin("app-debug?", l_appDebugP);
@@ -205,10 +209,14 @@ void initBuiltins(void) {
   registerBuiltin("editor-scratch-set-prefix", l_editorScratchSetPrefix);
   registerBuiltin("debug-toggle-breakpoint", l_debugToggleBreakpoint);
   registerBuiltin("debug-breakpoint-condition", l_debugBreakpointCondition);
+  registerBuiltin("debug-breakpoint-hit-count", l_debugBreakpointHitCount);
+  registerBuiltin("debug-logpoint", l_debugLogpoint);
+  registerBuiltin("debug-exception-breakpoints", l_debugExceptionBreakpoints);
   registerBuiltin("debug-clear-breakpoints", l_debugClearBreakpoints);
   registerBuiltin("debug-breakpoints", l_debugBreakpoints);
   registerBuiltin("dap-adapter", l_dapAdapter);
   registerBuiltin("debug-start", l_debugStart);
+  registerBuiltin("debug-attach", l_debugAttach);
   registerBuiltin("debug-continue", l_debugContinue);
   registerBuiltin("debug-stop", l_debugStop);
   registerBuiltin("debug-next", l_debugNext);
@@ -220,6 +228,9 @@ void initBuiltins(void) {
   registerBuiltin("debug-output", l_debugOutput);
   registerBuiltin("debug-evaluate", l_debugEvaluate);
   registerBuiltin("debug-command", l_debugCommand);
+  registerBuiltin("debug-watch", l_debugWatch);
+  registerBuiltin("debug-unwatch", l_debugUnwatch);
+  registerBuiltin("debug-watches", l_debugWatches);
   registerBuiltin("debug-state", l_debugState);
   registerBuiltin("debug-frames", l_debugFrames);
 #ifdef APP_DEBUG
@@ -389,6 +400,19 @@ static char *themeColor(const char *ansi) {
  *   - E.prefix
  *   - E.panes.layout (via SplitScreenInit)
  */
+/**
+ * @brief Breakpoints outlive the editor: ~/.beluga/breakpoints holds every
+ * project's, and each debug session gets those of its own project.
+ */
+static void initBreakpointStore(void) {
+  char path[OS_PATH_MAX];
+  const char *dir = utilBelugaDir();
+  if (!dir)
+    return;
+  snprintf(path, sizeof(path), "%s/breakpoints", dir);
+  breakpointsSetStore(path);
+}
+
 void initEditor() {
   char *home;
   EditorPane *active = NULL;
@@ -529,6 +553,7 @@ void initEditor() {
   // After init.lisp (which may add project markers) and its settings,
   // which projects without a config of their own keep.
   projectInit();
+  initBreakpointStore();
   // Clients are created per server, the first time a matching file is
   // opened (bufferMaybeStartLsp()).
   E.number_of_lsp_clients = 0;
@@ -560,6 +585,7 @@ void deInitEditor() {
   dapFree();
   debugBuiltinsFree();
   breakpointsFree();
+  debugUiFree();
 
   // write back ~/.beluga/projects, then free the list
   projectFree();

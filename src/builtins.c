@@ -600,7 +600,7 @@ Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
   appDebug("[EDITOR OPEN FILE]\n");
   // The working directory as the starting point (getcwd, not $PWD, which
   // Windows shells don't set).
-  cwd = os_getcwd();
+  cwd = editorGetCwd();
   // With a trailing slash, so typing a name right away completes inside
   // the directory instead of appending to its name.
   slashed = utilFormat("%s%s", cwd ? cwd : "",
@@ -726,7 +726,7 @@ Lisp editorOpenFilePath(const Lisp args, LispError *e, LispContext ctx) {
  * @return Lisp string, or "" if getcwd() fails
  */
 Lisp editorPwd(Lisp args, LispError *e, LispContext ctx) {
-  char *cwd = os_getcwd();
+  char *cwd = editorGetCwd();
   Lisp result = lisp_make_string2(cwd ? cwd : "", ctx);
   (void)args;
   (void)e;
@@ -1196,6 +1196,35 @@ Lisp bufferFindReverse_L(Lisp args, LispError *e, LispContext ctx) {
   bufferFindReverse(buffer);
   return lisp_null();
 }
+
+/**
+ * @brief Lisp function to jump to the next occurrence of the word under
+ * the cursor
+ * @details (buffer-find-word) — whole word, case-sensitive, wraps around
+ * the end of the buffer. Like Vim's *.
+ * @see bufferFindWordAtCursor()
+ */
+Lisp bufferFindWord_L(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active;
+  active = splitScreenGetActivePane();
+  bufferFindWordAtCursor(bufferFindById(active->buffer_id), 0);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to jump to the previous occurrence of the word
+ * under the cursor
+ * @details (buffer-find-word-reverse) — mirrors (buffer-find-word),
+ * wrapping around the start of the buffer. Like Vim's #.
+ * @see bufferFindWordAtCursor()
+ */
+Lisp bufferFindWordReverse_L(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active;
+  active = splitScreenGetActivePane();
+  bufferFindWordAtCursor(bufferFindById(active->buffer_id), 1);
+  return lisp_null();
+}
+
 
 /**
  * @brief Lisp function to read the character under the cursor
@@ -2553,7 +2582,7 @@ Lisp l_expandPath(Lisp args, LispError *e, LispContext ctx) {
     snprintf(joined, sizeof(joined), "%s", path);
   } else {
     if (!base || base[0] == '\0') {
-      cwd = os_getcwd();
+      cwd = editorGetCwd();
       base = cwd ? cwd : "/";
     }
     snprintf(joined, sizeof(joined), "%s/%s", base, path);
@@ -3391,6 +3420,47 @@ Lisp l_syntaxAddLinePrefix(Lisp args, LispError *e, LispContext ctx) {
            sizeof(lang->line_prefixes[0].prefix), "%s", prefix);
   lang->line_prefixes[lang->num_line_prefixes].role = role;
   lang->num_line_prefixes++;
+  return lisp_true();
+}
+
+/**
+ * @brief Lisp function: color text between two markers on a row
+ * @details (syntax-add-span "ext" "open" "close" "role") — in that
+ * language, text from "open" to the next "close" on the same row is drawn
+ * in "role", which besides the color roles of syntax-add-line-prefix can
+ * be "bold" or "italic"; the markers themselves get the comment color.
+ * Markdown-style flanking applies (no word character just outside a
+ * marker, no blank just inside), so "snake_case" or "a * b" don't match.
+ * Spans are tried in the order they were added: add "**" before "*". The
+ * language must already exist (syntax-define-language).
+ * @return #t, or #f if the language is unknown, the role is unknown, a
+ * marker is empty or too long (7 bytes) or the language already has 8
+ * spans
+ */
+Lisp l_syntaxAddSpan(Lisp args, LispError *e, LispContext ctx) {
+  const char *ext = lisp_string(lisp_car(args));
+  const char *open;
+  const char *close;
+  LanguageSyntax *lang;
+  int role;
+  (void)e;
+  (void)ctx;
+  args = lisp_cdr(args);
+  open = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  close = lisp_string(lisp_car(args));
+  args = lisp_cdr(args);
+  role = syntaxRoleFromName(lisp_string(lisp_car(args)));
+
+  lang = findLanguageByExtension(ext);
+  if (!lang || role < 0 || !*open || !*close ||
+      strlen(open) >= sizeof(lang->spans[0].open) || strlen(close) >= sizeof(lang->spans[0].close) ||
+      lang->num_spans >= (int)(sizeof(lang->spans) / sizeof(lang->spans[0])))
+    return lisp_false();
+  strcpy(lang->spans[lang->num_spans].open, open);
+  strcpy(lang->spans[lang->num_spans].close, close);
+  lang->spans[lang->num_spans].role = role;
+  lang->num_spans++;
   return lisp_true();
 }
 

@@ -4,6 +4,7 @@
 #include "data.h"
 
 #include <stddef.h>
+#include <stdio.h>
 
 // The settings init.lisp can (define ...), in one table (settings.c):
 // name, type, default and what each does. Adding a setting is one entry
@@ -20,6 +21,11 @@ void settingsRead(Lisp env, struct const_t *out, char *invalid, size_t invalid_s
 // Says in the status bar which settings were invalid, if any (main.c,
 // once the startup message is up).
 void settingsReportProblems(void);
+
+// Writes every setting to `f` as a commented-out (define NAME value)
+// under its doc, with init.lisp's value: the placeholders a new
+// .beluga/init.lisp starts with (project-open-config).
+void settingsWriteTemplate(FILE *f);
 
 // (describe-variable "NAME"): lines describing a setting (or any variable).
 Lisp describeVariable(Lisp args, LispError *e, LispContext ctx);
