@@ -175,11 +175,18 @@ if python3.found() and not is_windows
     args : [files('tools/smoke_test.py'), beluga_exe, meson.current_source_dir()],
     timeout : 60)
   # What's on screen, through pyte (tools/pty_harness.py): TAB completion,
-  # and full-screen programs (less, vim) in a terminal pane. Skipped
+  # full-screen programs (less, vim) in a terminal pane, the debugger, the
+  # daemon. One meson test per pty test, so each has its own timeout and a
+  # failure names the test; `meson test --suite pty` runs them all. Skipped
   # without pyte (python3-pyte).
-  test('pty', python3,
-    args : [files('tools/pty_tests.py'), beluga_exe, meson.current_source_dir()],
-    timeout : 300)
+  pty_tests = run_command(python3, files('tools/pty_tests.py'), '--list',
+    check : true).stdout().split()
+  foreach t : pty_tests
+    test('pty-' + t, python3,
+      args : [files('tools/pty_tests.py'), beluga_exe, meson.current_source_dir(), t],
+      suite : 'pty',
+      timeout : 240)
+  endforeach
 endif
 
 # Fuzz targets (test/fuzz/). By default each is built with a small main()
