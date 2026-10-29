@@ -186,6 +186,7 @@
 (map-key "q" explorer-close "explorer")
 (map-key "e" explorer-toggle "user")
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "explorer")
+(map-key "CTRL-x" '(editor-set-prefix "user") "explorer")
 
 ;; ─── static tree dump ───────────────────────────────────────────────────────
 

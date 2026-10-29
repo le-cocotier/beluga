@@ -515,6 +515,7 @@
 
 ;; term
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "term")
+(map-key "CTRL-x" '(editor-set-prefix "user") "term")
 
 ;; search
 (map-key "ENTER" project-search-goto "search")
