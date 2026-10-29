@@ -941,6 +941,34 @@ def daemon_debug_per_project(binary, repo):
             ed.run('--kill', '--force', '--name=' + name)
 
 
+def project_root_start(binary, repo):
+    """With a project open, the open-file prompt, dired's prompt and a new
+    terminal start at the project root, not where beluga was started.
+    Wide, so a long $TMPDIR (macOS) fits on the prompt line."""
+    with Beluga(binary, repo, cols=250) as ed:
+        os.makedirs(ed.path('proj/.git'))
+        os.makedirs(ed.path('proj/sub'))
+        os.makedirs(ed.path('elsewhere'))
+        with open(ed.path('proj/sub/a.txt'), 'w') as f:
+            f.write('x\n')
+        ed.start('../proj/sub/a.txt', cwd='elsewhere')
+        ed.keys(CTRL_X, 'f', delay=0.4)
+        ed.wait_for('Open :')
+        prompt = [line for line in ed.text() if line.startswith('Open :')]
+        assert prompt and prompt[0].endswith('/proj/'), prompt
+        ed.keys('\x1b', delay=0.3)
+        ed.keys(CTRL_X, 'd', delay=0.4)
+        ed.wait_for('Dired (directory):')
+        prompt = [line for line in ed.text() if line.startswith('Dired')]
+        assert prompt and prompt[0].rstrip('/').endswith('/proj'), prompt
+        ed.keys('\x1b', delay=0.3)
+        open_terminal(ed)
+        shell(ed, 'pwd')
+        ed.wait_for('/proj', 5)
+        assert not any('elsewhere' in line for line in ed.text()), ed.text()
+        ed.quit()
+
+
 TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
     ('pane-cursors', pane_cursors),
@@ -957,6 +985,7 @@ TESTS = [
     ('debugger-watches', debugger_watches),
     ('terminal-app-shift-function-keys', terminal_app_shift_function_keys),
     ('tab-completion-list', tab_completion_list),
+    ('project-root-start', project_root_start),
     ('terminal-alternate-screen', terminal_alternate_screen),
     ('terminal-vim', terminal_vim),
     ('terminal-colors', terminal_colors),

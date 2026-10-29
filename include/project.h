@@ -55,7 +55,8 @@ const char *projectCurrentRoot(void);
 
 // The current project's root, or the working directory without one, as a
 // galloc'd string (free with gfree). NULL only if both are unavailable.
-// What find-file and project-search start from.
+// What find-file, project-search, the open-file prompt and new terminals
+// start from.
 char *projectRootOrCwd(void);
 
 #endif // BELUGA_PROJECT_H_

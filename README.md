@@ -184,7 +184,8 @@ its terminal, or SIGTERM, stops it at once. Either way the unsaved changes are k
 Every window shares the daemon's buffers, Lisp config, language servers and terminal panes,
 and has its own splits (each pane with its own cursor, even on a file another window shows),
 popups, status line and working directory (where its `beluga -c` ran:
-the open-file prompt and new terminal panes start there). Each project has its own debug
+the open-file prompt, dired and new terminal panes start there
+when no project is open; with one, they start at the project root). Each project has its own debug
 session, so two projects can be debugged at once; a session's stops and output go to the window
 that last drove it. A prompt open in one window (open-file, M-x, a y/n question) doesn't stop
 the others; they just can't kill or edit the buffer it was asked about until it closes. Ctrl-x

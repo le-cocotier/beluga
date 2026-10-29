@@ -213,7 +213,8 @@
         (cons line (append child-lines (tree--build-entries (cdr entries) dir-path prefix))))))
 
 (define (project-tree)
-  (let* ((root (editor-pwd))
+  (let* ((project (project-root))
+         (root (if (string=? project "") (editor-pwd) project))
          (lines (cons (string-append root "/") (tree--build root "")))
          (buf-id (editor-scratch-open "*tree*")))
     (editor-scratch-set-lines buf-id lines)

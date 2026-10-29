@@ -22,6 +22,7 @@
 #include "../include/input.h"
 #include "../include/memory_inspector.h"
 #include "../include/output.h"
+#include "../include/project.h"
 #include "../include/project_search.h"
 #include "../include/replace.h"
 #include "../include/split_screen.h"
@@ -598,9 +599,9 @@ Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
   EditorPane *active;
   char *cwd;
   appDebug("[EDITOR OPEN FILE]\n");
-  // The working directory as the starting point (getcwd, not $PWD, which
-  // Windows shells don't set).
-  cwd = editorGetCwd();
+  // The current project's root as the starting point, else the working
+  // directory (getcwd, not $PWD, which Windows shells don't set).
+  cwd = projectRootOrCwd();
   // With a trailing slash, so typing a name right away completes inside
   // the directory instead of appending to its name.
   slashed = utilFormat("%s%s", cwd ? cwd : "",
@@ -719,9 +720,8 @@ Lisp editorOpenFilePath(const Lisp args, LispError *e, LispContext ctx) {
 /**
  * @brief Lisp function returning the process's actual current working
  * directory (via getcwd(), not the possibly-stale $PWD env var)
- * @details (editor-pwd) — used as the default project root for the file
- * explorer and tree dump, same role editor-open-file's own prompt
- * placeholder already plays for picking a file interactively.
+ * @details (editor-pwd) — the fallback when there is no current project
+ * (project-root is ""), for the file explorer, dired and the tree dump.
  * @param args Lisp arguments (unused)
  * @return Lisp string, or "" if getcwd() fails
  */
