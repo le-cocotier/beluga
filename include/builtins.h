@@ -117,6 +117,8 @@ Lisp editorSwitchPreviousBuffer(Lisp args, LispError *e, LispContext ctx);
 Lisp editorSwitchBufferPopup(Lisp args, LispError *e, LispContext ctx);
 Lisp bufferFind_L(Lisp args, LispError *e, LispContext ctx);
 Lisp bufferFindReverse_L(Lisp args, LispError *e, LispContext ctx);
+Lisp bufferFindWord_L(Lisp args, LispError *e, LispContext ctx);
+Lisp bufferFindWordReverse_L(Lisp args, LispError *e, LispContext ctx);
 
 // Pane
 

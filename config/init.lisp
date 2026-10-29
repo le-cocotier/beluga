@@ -346,6 +346,8 @@
 (map-key "TAB" editor-insert-tab "no-prefix")
 (map-key "CTRL-s" buffer-find "no-prefix")
 (map-key "CTRL-r" buffer-find-reverse "no-prefix")
+(map-key "F3" buffer-find-word "no-prefix")
+(map-key "F2" buffer-find-word-reverse "no-prefix")
 ;; Fuzzy project-file picker: type to narrow every file in the project
 ;; (git ls-files / find), ENTER opens the highlight. CTRL-p / CTRL-n also
 ;; move the selection while it's open.

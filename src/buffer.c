@@ -1704,6 +1704,126 @@ void bufferFindReverse(struct buffer_t *buf) {
 }
 
 /**
+ * @brief Whether a cell belongs to a word for buffer-find-word: ASCII
+ * letters, digits and '_' (so identifiers like my_var match whole), plus
+ * any multi-byte UTF-8 character, so accented words aren't cut in two.
+ */
+static int bufferIsWordChar(const Utf8Char *ch) {
+  unsigned char c;
+  if (ch->length > 1)
+    return 1;
+  c = ch->character[0];
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '_';
+}
+
+static int bufferCharEqual(const Utf8Char *a, const Utf8Char *b) {
+  return a->length == b->length &&
+         memcmp(a->character, b->character, (size_t)a->length) == 0;
+}
+
+/**
+ * @brief Whether the n characters of word sit at column col of row as a
+ * whole word (not preceded or followed by another word character).
+ */
+static int bufferWordMatchAt(const Row *row, int col, const Utf8Char *word,
+                             int n) {
+  int i;
+  if (col < 0 || col + n > row->size)
+    return 0;
+  if (col > 0 && bufferIsWordChar(&row->characters[col - 1]))
+    return 0;
+  if (col + n < row->size && bufferIsWordChar(&row->characters[col + n]))
+    return 0;
+  for (i = 0; i < n; i++)
+    if (!bufferCharEqual(&row->characters[col + i], &word[i]))
+      return 0;
+  return 1;
+}
+
+/**
+ * @brief Moves the cursor to the next (or previous) whole-word occurrence
+ * of the word under the cursor, like Vim's * and #
+ * @details When the cursor isn't on a word, the first word after it on the
+ * same line is used. The search is case-sensitive, wraps around the ends of
+ * the buffer, and lands on the start of the match. The status bar says when
+ * the search wrapped or when the word has no other occurrence.
+ * @param buf Buffer to search in
+ * @param reverse 0 to search forward, 1 to search backward
+ */
+void bufferFindWordAtCursor(struct buffer_t *buf, int reverse) {
+  Row *row;
+  int start;
+  int end;
+  int n;
+  int k;
+  int r;
+  int c;
+  int from;
+  int to;
+  char *word_str;
+
+  if (!buf || buf->numrows == 0 || buf->y >= buf->numrows)
+    return;
+  row = &buf->row[buf->y];
+
+  start = buf->x;
+  while (start < row->size && !bufferIsWordChar(&row->characters[start]))
+    start++;
+  if (start >= row->size) {
+    editorSetStatusMessage("No word under cursor");
+    return;
+  }
+  while (start > 0 && bufferIsWordChar(&row->characters[start - 1]))
+    start--;
+  end = start;
+  while (end < row->size && bufferIsWordChar(&row->characters[end]))
+    end++;
+  n = end - start;
+
+  /* k = 0 is the rest of the cursor's row past the word's start, k = 1 ..
+   * numrows - 1 the other rows in search order, and k = numrows the
+   * cursor's row again from the other side, which ends on the word itself. */
+  for (k = 0; k <= buf->numrows; k++) {
+    if (reverse)
+      r = ((buf->y - k) % buf->numrows + buf->numrows) % buf->numrows;
+    else
+      r = (buf->y + k) % buf->numrows;
+    row = &buf->row[r];
+
+    if (reverse) {
+      from = (k == 0) ? start - 1 : row->size - n;
+      to = (k == buf->numrows) ? start : 0;
+      for (c = from; c >= to; c--)
+        if (bufferWordMatchAt(row, c, buf->row[buf->y].characters + start, n))
+          goto found;
+    } else {
+      from = (k == 0) ? start + 1 : 0;
+      to = (k == buf->numrows) ? start : row->size - n;
+      for (c = from; c <= to; c++)
+        if (bufferWordMatchAt(row, c, buf->row[buf->y].characters + start, n))
+          goto found;
+    }
+  }
+  return;
+
+found:
+  if (r == buf->y && c == start) {
+    word_str = (char *)utf8ToNString(buf->row[buf->y].characters + start, n);
+    editorSetStatusMessage("Only occurrence of \"%s\"", word_str);
+    gfree(word_str);
+  } else if (reverse ? (r > buf->y || (r == buf->y && c > start))
+                     : (r < buf->y || (r == buf->y && c < start))) {
+    editorSetStatusMessage(reverse ? "Search wrapped to the bottom"
+                                   : "Search wrapped to the top");
+  }
+  buf->y = r;
+  buf->x = c;
+}
+
+
+
+/**
  * @brief Index of `row` within `buffer->row`, or -1 if it isn't one of its
  * rows — -1 makes syntaxHighlighterInvalidateAfter() drop the whole cache,
  * the safe answer when we can't tell which row changed.

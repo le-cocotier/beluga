@@ -88,6 +88,8 @@ void initBuiltins(void) {
   registerBuiltin("editor-batch?", l_editorBatch);
   registerBuiltin("buffer-find", bufferFind_L);
   registerBuiltin("buffer-find-reverse", bufferFindReverse_L);
+  registerBuiltin("buffer-find-word", bufferFindWord_L);
+  registerBuiltin("buffer-find-word-reverse", bufferFindWordReverse_L);
   registerBuiltin("editor-read-char", editorReadChar_L);
   registerBuiltin("add-prefix", editorPrefix);
   registerBuiltin("editor-set-prefix", editorSetPrefix);

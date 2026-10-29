@@ -1198,6 +1198,35 @@ Lisp bufferFindReverse_L(Lisp args, LispError *e, LispContext ctx) {
 }
 
 /**
+ * @brief Lisp function to jump to the next occurrence of the word under
+ * the cursor
+ * @details (buffer-find-word) — whole word, case-sensitive, wraps around
+ * the end of the buffer. Like Vim's *.
+ * @see bufferFindWordAtCursor()
+ */
+Lisp bufferFindWord_L(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active;
+  active = splitScreenGetActivePane();
+  bufferFindWordAtCursor(bufferFindById(active->buffer_id), 0);
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp function to jump to the previous occurrence of the word
+ * under the cursor
+ * @details (buffer-find-word-reverse) — mirrors (buffer-find-word),
+ * wrapping around the start of the buffer. Like Vim's #.
+ * @see bufferFindWordAtCursor()
+ */
+Lisp bufferFindWordReverse_L(Lisp args, LispError *e, LispContext ctx) {
+  EditorPane *active;
+  active = splitScreenGetActivePane();
+  bufferFindWordAtCursor(bufferFindById(active->buffer_id), 1);
+  return lisp_null();
+}
+
+
+/**
  * @brief Lisp function to read the character under the cursor
  * @details (editor-read-char) — returns the character at the active
  * buffer's cursor position. Returns #f when there is nothing there: the
