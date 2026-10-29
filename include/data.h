@@ -155,6 +155,7 @@ struct const_t
     int INLINE_DIAGNOSTICS; // (define INLINE-DIAGNOSTICS #t) — the message after the line
     int INLAY_HINTS;        // (define INLAY-HINTS #t) — parameter names / types inside the line
     int DEBUG_INLINE_VALUES; // (define DEBUG-INLINE-VALUES #t) — variables' values after the lines, while paused
+    int MOUSE;              // (define MOUSE #t) — wheel scrolling and click-to-place
 };
 
 /**
@@ -877,6 +878,10 @@ typedef struct editor_config_t
     // batch: no screen, messages go to stdout (beluga --sync-packages).
     int initialized;
     int batch;
+    // Screen cell (0-based, row 0 = top line) of the last mouse report,
+    // set by readUtf8Char() alongside the WHEEL-*/MOUSE-* key it returns.
+    int mouse_row;
+    int mouse_col;
 
     Buffer *buffers;
     int number_of_buffer;

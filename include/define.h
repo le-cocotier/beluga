@@ -85,6 +85,22 @@
 #define SHIFT_FUNCTION_KEY  0xA0
 #define IS_FUNCTION_KEY(c)  (((c) >= FUNCTION_KEY && (c) < FUNCTION_KEY + 12) || \
                              ((c) >= SHIFT_FUNCTION_KEY && (c) < SHIFT_FUNCTION_KEY + 12))
+// Mouse reports (see readUtf8Char()); where the pointer was is left in
+// E.mouse_row / E.mouse_col.
+#define WHEEL_UP         0x8D   // "WHEEL-UP" to map-key
+#define WHEEL_DOWN       0x8E   // "WHEEL-DOWN" to map-key
+#define MOUSE_LEFT       0x9C   // left button pressed — "MOUSE-LEFT" to map-key
+#define MOUSE_OTHER      0x9D   // any other mouse report (release, middle/right button): ignored
+#define IS_MOUSE_KEY(c)  ((c) == WHEEL_UP || (c) == WHEEL_DOWN || (c) == MOUSE_LEFT || \
+                          (c) == MOUSE_OTHER)
+#define MOUSE_SCROLL_LINES 3     // lines per wheel notch
+// Mouse reporting on/off, sent with every frame that changes (so a daemon
+// window gets it too) and turned off by terminalRestore(). 1000: presses,
+// releases and the wheel; 1006: reported as SGR, without X10's 223-column
+// limit.
+#define MOUSE_ON_SEQ     "\x1b[?1000h\x1b[?1006h"
+#define MOUSE_OFF_SEQ    "\x1b[?1006l\x1b[?1000l"
+#define MOUSE_SEQ_LEN    16
 
 #define BACKSPACE    127    // 0x7F (DEL byte many terminals send for Backspace)
 

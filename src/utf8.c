@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdarg.h>
 
+extern EditorConfig E;
 
 /**
  * @brief Reads `n` key bytes, waiting up to 100ms for each — the timing
@@ -57,6 +58,70 @@ static int shiftedFunctionKeyFromTilde(const int number)
     if (number == 28 || number == 29) return number - 28 + 6;  // S-F7, S-F8
     if (number >= 31 && number <= 34) return number - 31 + 8;  // S-F9-S-F12
     return -1;
+}
+
+/**
+ * @brief Turns a mouse report's button code into a key, and remembers
+ * where the pointer was.
+ * @param button xterm's button byte: 0-2 left/middle/right, +4 Shift,
+ * +8 Alt, +16 Ctrl, +32 motion, +64 wheel (64 up, 65 down)
+ * @param col, row 1-based screen cell
+ * @param press 0 for a release (SGR's final 'm')
+ */
+static unsigned char mouseKey(const int button, const int col, const int row, const int press)
+{
+    const int b = button & ~(4 | 8 | 16); // modifiers aren't bound (yet)
+
+    E.mouse_col = col - 1;
+    E.mouse_row = row - 1;
+    if (b == 64)
+        return WHEEL_UP;
+    if (b == 65)
+        return WHEEL_DOWN;
+    if (b == 0 && press)
+        return MOUSE_LEFT;
+    return MOUSE_OTHER;
+}
+
+/**
+ * @brief Reads the rest of an SGR (1006) mouse report, ESC [ < b ; x ; y M
+ * (press) or ...m (release), after the '<'.
+ */
+static unsigned char readSgrMouse(void)
+{
+    int values[3] = {0, 0, 0};
+    int n = 0;
+    int seq_len = 0;
+    char c;
+
+    for (;;)
+    {
+        if (readKeyBytes(&c, 1) != 1 || ++seq_len > 16)
+            return MOUSE_OTHER; // truncated or runaway: drop it
+        if (c >= '0' && c <= '9')
+            values[n] = values[n] * 10 + (c - '0');
+        else if (c == ';' && n < 2)
+            n++;
+        else
+            break;
+    }
+    if (n != 2 || (c != 'M' && c != 'm'))
+        return MOUSE_OTHER;
+    return mouseKey(values[0], values[1], values[2], c == 'M');
+}
+
+/**
+ * @brief Reads the rest of a legacy X10 mouse report, ESC [ M b x y, each
+ * byte offset by 32 — what a terminal without SGR mode support sends.
+ * Columns past 223 can't be encoded in it; those clicks land on the edge.
+ */
+static unsigned char readX10Mouse(void)
+{
+    unsigned char bytes[3];
+    if (readKeyBytes(bytes, 3) != 3)
+        return MOUSE_OTHER;
+    // Release is button 3 here: which button went up isn't reported.
+    return mouseKey(bytes[0] - 32, bytes[1] - 32, bytes[2] - 32, (bytes[0] & 3) != 3);
 }
 
 /**
@@ -153,7 +218,11 @@ Utf8Char* readUtf8Char(void) {
             return new_char; // incomplete sequence, treat as lone ESC
         }
 
-        if (seq0 == '[')
+        if (seq0 == '[' && seq1 == '<')
+            new_char->character[0] = readSgrMouse();
+        else if (seq0 == '[' && seq1 == 'M')
+            new_char->character[0] = readX10Mouse();
+        else if (seq0 == '[')
         {
             if (seq1 >= '0' && seq1 <= '9')
             {

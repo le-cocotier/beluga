@@ -191,6 +191,10 @@ void initBuiltins(void) {
   registerBuiltin("editor-recenter", l_editorRecenter);
   registerBuiltin("pane-height", l_paneHeight);
   registerBuiltin("pane-width", l_paneWidth);
+  registerBuiltin("editor-scroll-view", l_editorScrollView);
+  registerBuiltin("mouse-focus-pane", l_mouseFocusPane);
+  registerBuiltin("mouse-set-cursor", l_mouseSetCursor);
+  registerBuiltin("mouse-position", l_mousePosition);
   registerBuiltin("expand-path", l_expandPath);
   registerBuiltin("file-attributes", l_fileAttributes);
   registerBuiltin("process-run", l_processRun);

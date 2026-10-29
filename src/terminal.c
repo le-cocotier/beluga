@@ -55,6 +55,7 @@ long screenReadKeys(void *buf, const size_t n, const int timeout_ms)
 
 void die(const char* s)
 {
+    os_term_write(MOUSE_OFF_SEQ, MOUSE_SEQ_LEN);
     os_term_write("\x1b[2J", 4);
     os_term_write(CURSOR_TOP_LEFT, 3);
     os_term_leave_raw();
@@ -78,6 +79,7 @@ void disableRawMode()
  */
 void terminalRestore(void)
 {
+    os_term_write(MOUSE_OFF_SEQ, MOUSE_SEQ_LEN);
     os_term_write("\x1b[0m", 4);   // reset colors/attributes
     os_term_write("\x1b[2J", 4);   // clear screen
     os_term_write(CURSOR_TOP_LEFT, 3);
@@ -141,6 +143,10 @@ char* keyToString(const Utf8Char* key)
         case BEG_LINE:    strcpy(key_str, "HOME");        break;
         case END_LINE:    strcpy(key_str, "END");         break;
         case ALT_X:       strcpy(key_str, "ALT-x");       break;
+        case WHEEL_UP:    strcpy(key_str, "WHEEL-UP");    break;
+        case WHEEL_DOWN:  strcpy(key_str, "WHEEL-DOWN");  break;
+        case MOUSE_LEFT:  strcpy(key_str, "MOUSE-LEFT");  break;
+        case MOUSE_OTHER: strcpy(key_str, "MOUSE-OTHER"); break;
         case '\x1b':      strcpy(key_str, "ESCAPE");      break;
         default:
             if (key->length == 1 && IS_FUNCTION_KEY(c))
@@ -183,7 +189,9 @@ Utf8Char * editorReadKey()
     if (c)
         return c;
     c = readUtf8Char();
-    macroRecordKey(c);
+    // Not mouse reports: replayed, they'd act wherever the pointer is then.
+    if (c->length != 1 || !IS_MOUSE_KEY(c->character[0]))
+        macroRecordKey(c);
     return c;
 }
 

@@ -74,6 +74,13 @@ int splitScreenSwitchPane(void);
  */
 int splitScreenFocusOtherRealPane(void);
 
+// The pane covering screen cell (row, col), both 0-based: its index in
+// E.layout.panes, or -1 for a divider, the status bar or the message line.
+int splitScreenPaneAt(int row, int col);
+
+// Gives pane `index` focus (and its buffer's focus prefix, like a switch).
+void splitScreenFocusPane(int index);
+
 /**
  * @brief Updates the active pane's buffer
  * @param buffer_id New buffer ID for active pane

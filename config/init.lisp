@@ -22,6 +22,15 @@
 ;; CTRL-x p s shows it on demand either way. Omitting this leaves it on.
 (define LSP-SIGNATURE-HELP #t)
 
+;; Mouse: the wheel scrolls the pane under the pointer (3 lines a notch,
+;; the cursor rides along only if it would leave the pane) and a left click
+;; puts the cursor where you clicked. The keys are "WHEEL-UP", "WHEEL-DOWN"
+;; and "MOUSE-LEFT" if you'd rather map-key them to something else (see
+;; editor-scroll-view, mouse-set-cursor, mouse-position). While it's on, the
+;; terminal's own text selection needs Shift held (Option in iTerm2 and
+;; Terminal.app). Omitting this leaves it on.
+(define MOUSE #t)
+
 ;; Every AUTOSAVE-INTERVAL seconds, files with unsaved changes are copied to
 ;; ~/.beluga/autosave/. Saving (or killing the buffer) removes the copy; after
 ;; a crash or a closed terminal, opening the file again offers to recover it.

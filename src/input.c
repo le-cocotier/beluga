@@ -387,6 +387,133 @@ static int functionKeySequence(const unsigned char c, char *out, const size_t si
   return snprintf(out, size, shift ? "\x1b[%d;2~" : "\x1b[%d~", tilde[n]);
 }
 
+/**
+ * @brief Scrolls the active pane's view by `lines` (negative: up), keeping
+ * the cursor where it is unless it would leave the pane, in which case it
+ * stays on the pane's first/last line.
+ * @details Sets both halves of editorScroll()'s invariant (buf->y ==
+ * cursor_y + y_offset) together, as editor-recenter does, so its per-frame
+ * fixup doesn't scroll the view back to where the cursor was. Stops once
+ * the last line reaches the bottom of the pane. A terminal pane is left
+ * alone: its rows follow the shell, not a cursor the editor moves.
+ */
+void editorScrollView(const int lines) {
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf;
+  int offset;
+  int max_offset;
+
+  if (!active || active->height < 1)
+    return;
+  buf = bufferFindById(active->buffer_id);
+  if (!buf || buf->type == TERMINAL_BUFF || buf->numrows == 0)
+    return;
+
+  max_offset = buf->numrows - active->height;
+  if (max_offset < active->y_offset)
+    max_offset = active->y_offset; // already past it (editor-recenter): don't jump
+  offset = active->y_offset + lines;
+  if (offset > max_offset)
+    offset = max_offset;
+  if (offset < 0)
+    offset = 0;
+
+  if (buf->y < offset)
+    buf->y = offset;
+  if (buf->y > offset + active->height - 1)
+    buf->y = offset + active->height - 1;
+  if (buf->y > buf->numrows - 1)
+    buf->y = buf->numrows - 1;
+  if (buf->x > buf->row[buf->y].size)
+    buf->x = buf->row[buf->y].size;
+
+  active->y_offset = offset;
+  active->cursor_y = buf->y - offset;
+}
+
+/**
+ * @brief Gives focus to the pane under the last mouse report.
+ * @return 1 if the pointer was over a pane, 0 otherwise (a divider, the
+ * status bar, the message line).
+ */
+int editorMouseFocusPane(void) {
+  const int index = splitScreenPaneAt(E.mouse_row, E.mouse_col);
+  if (index < 0)
+    return 0;
+  splitScreenFocusPane(index);
+  // The buffer's x/y become this pane's cursor before anything moves it.
+  splitScreenSyncCursor();
+  return 1;
+}
+
+/**
+ * @brief Focuses the pane under the last mouse report and puts the cursor
+ * on the character there: past the end of a line, at its end; below the
+ * last line, on the last line; on the line-number gutter, at the first
+ * column shown. A click on a sticky-scroll row goes to the definition
+ * line it shows.
+ */
+void editorMouseSetCursor(void) {
+  EditorPane *active;
+  struct buffer_t *buf;
+  int sticky_rows[STICKY_MAX];
+  int sticky_n;
+  int pane_row;
+  int column;
+  int y;
+
+  if (!editorMouseFocusPane())
+    return;
+  active = splitScreenGetActivePane();
+  buf = bufferFindById(active->buffer_id);
+  if (!buf || buf->type == TERMINAL_BUFF || buf->numrows == 0)
+    return;
+
+  pane_row = E.mouse_row - active->origin_y;
+  sticky_n = editorPaneStickyRows(active, buf, sticky_rows);
+  if (pane_row < sticky_n) {
+    // editorScroll() brings the definition into view.
+    buf->y = sticky_rows[pane_row];
+    buf->x = 0;
+    return;
+  }
+  y = pane_row + active->y_offset;
+  if (y > buf->numrows - 1)
+    y = buf->numrows - 1;
+  column = E.mouse_col - active->origin_x - editorGutterWidth(buf);
+  if (column < 0)
+    column = 0;
+  column += active->x_offset;
+
+  // The target is on screen (or the line end left of it), so
+  // editorScroll() walks the cursor there without scrolling.
+  buf->y = y;
+  buf->x = utf8IndexAtColumn(buf->row[y].characters, buf->row[y].size, column);
+}
+
+/**
+ * @brief What a mouse key does when no keybind claims it: the wheel
+ * scrolls the pane under the pointer (focusing it), a left click places
+ * the cursor, anything else is dropped.
+ */
+static void mouseDefault(const unsigned char key) {
+  switch (key) {
+  case WHEEL_UP:
+    if (editorMouseFocusPane())
+      editorScrollView(-MOUSE_SCROLL_LINES);
+    break;
+  case WHEEL_DOWN:
+    if (editorMouseFocusPane())
+      editorScrollView(MOUSE_SCROLL_LINES);
+    break;
+  case MOUSE_LEFT:
+    editorMouseSetCursor();
+    break;
+  default:
+    break;
+  }
+}
+
 static void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
   unsigned char seq[8];
   int len;
@@ -547,6 +674,16 @@ void editorProcessKeypress() {
   // Hover / signature popup: ESC closes it (and goes no further); any other
   // key also closes a hover, then carries on as usual.
   if (lspUiInfoHandleKey(&E.lsp_info, c)) {
+    gfree(c);
+    return;
+  }
+
+  // Mouse reports: a keybind ("WHEEL-UP", "MOUSE-LEFT", ...) wins,
+  // otherwise the built-in behavior. Never typed, and never forwarded to
+  // a terminal buffer's shell as a stray byte.
+  if (c->length == 1 && IS_MOUSE_KEY(c->character[0])) {
+    if (!executeKeyBind(keyToString(c)))
+      mouseDefault(c->character[0]);
     gfree(c);
     return;
   }

@@ -287,6 +287,87 @@ def pane_cursors(binary, repo):
         ed.quit()
 
 
+MOUSE_MODE = 1000 << 5  # pyte keeps private modes shifted left by 5
+
+
+def wheel(row, col, up=False):
+    """An SGR wheel notch at 1-based screen cell (row, col)."""
+    return '\x1b[<%d;%d;%dM' % (64 if up else 65, col, row)
+
+
+def click(row, col):
+    """An SGR left press and release at 1-based screen cell (row, col)."""
+    return ('\x1b[<0;%d;%dM' % (col, row), '\x1b[<0;%d;%dm' % (col, row))
+
+
+def mouse_wheel_and_click(binary, repo):
+    """The editor asks for mouse reports; a wheel notch scrolls the view 3
+    lines with the cursor kept on screen; a click past a line's end puts
+    the cursor at its end, one on the gutter at its start; nothing of a
+    report is ever typed. Quitting turns the reports off again."""
+    with Beluga(binary, repo) as ed:
+        with open(ed.path('m.txt'), 'w') as f:
+            f.write(''.join('line %d\n' % i for i in range(1, 101)))
+        ed.start('m.txt')
+        ed.wait_for('line 20')
+        assert MOUSE_MODE in ed.screen.mode, sorted(ed.screen.mode)
+        ed.keys(wheel(5, 20), wheel(5, 20), delay=0.3)
+        lines = ed.text()
+        assert lines[0].split()[-1] == '7', lines[:3]
+        assert ed.screen.cursor.y == 0, ed.screen.cursor.y  # rode along on line 7
+        ed.keys(wheel(5, 20, up=True), delay=0.3)
+        assert ed.text()[0].split()[-1] == '4', ed.text()[:3]
+        ed.keys(*click(10, 90), 'X', delay=0.3)  # row 10 shows line 13
+        assert ed.text()[9].endswith('line 13X'), ed.text()[9]
+        ed.keys(*click(12, 1), 'Y', delay=0.3)
+        assert 'Yline 15' in ed.text()[11], ed.text()[11]
+        assert not any('65;' in line or '<0' in line for line in ed.text()), ed.text()
+        ed.keys(CTRL_X, 'u', delay=0.2)
+        ed.keys(CTRL_X, 'u', delay=0.2)
+        ed.quit()
+        ed.pump(0.2)
+        assert MOUSE_MODE not in ed.screen.mode, sorted(ed.screen.mode)
+
+
+def mouse_split_panes(binary, repo):
+    """A click in the other pane gives it focus and its cursor goes where
+    clicked; the wheel scrolls the pane under the pointer only."""
+    with Beluga(binary, repo, rows=30, cols=100) as ed:
+        with open(ed.path('p.txt'), 'w') as f:
+            f.write(''.join('line %d\n' % i for i in range(1, 101)))
+        ed.start('p.txt')
+        ed.wait_for('line 20')
+        ed.keys(CTRL_X, '"', delay=0.4)        # side by side, right one focused
+        ed.keys(*click(5, 30), 'L', delay=0.3)  # left pane, line 5
+        assert ed.text()[4].split('│')[0].rstrip().endswith('line 5L'), ed.text()[4]
+        assert ed.screen.cursor.x < 50, ed.screen.cursor.x
+        ed.keys(wheel(5, 80), delay=0.3)       # the right pane scrolls
+        left, right = ed.text()[0].split('│')
+        assert left.split()[-1] == '1' and right.split()[-1] == '4', ed.text()[0]
+        ed.keys(CTRL_X, 'u', delay=0.2)
+        ed.quit()
+
+
+def daemon_mouse(binary, repo):
+    """A daemon window gets mouse reports too: the request goes out with
+    what the daemon draws, and the client turns it off when it closes."""
+    name = daemon_name('mouse')
+    with Beluga(binary, repo) as ed:
+        try:
+            with open(ed.path('m.txt'), 'w') as f:
+                f.write(''.join('line %d\n' % i for i in range(1, 101)))
+            ed.start('-c', '--name=' + name, 'm.txt')
+            ed.wait_for('line 20')
+            assert MOUSE_MODE in ed.screen.mode, sorted(ed.screen.mode)
+            ed.keys(wheel(5, 20), delay=0.4)
+            assert ed.text()[0].split()[-1] == '4', ed.text()[:3]
+            ed.quit()
+            ed.pump(0.2)
+            assert MOUSE_MODE not in ed.screen.mode, sorted(ed.screen.mode)
+        finally:
+            ed.run('--kill', '--force', '--name=' + name)
+
+
 def gdb_with_dap():
     """gdb 14 or later (it speaks the Debug Adapter Protocol), or None."""
     gdb = shutil.which('gdb')
@@ -863,6 +944,9 @@ def daemon_debug_per_project(binary, repo):
 TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
     ('pane-cursors', pane_cursors),
+    ('mouse-wheel-and-click', mouse_wheel_and_click),
+    ('mouse-split-panes', mouse_split_panes),
+    ('daemon-mouse', daemon_mouse),
     ('debugger-gdb', debugger_gdb),
     ('debugger-attach', debugger_attach),
     ('debugger-lldb', debugger_lldb),

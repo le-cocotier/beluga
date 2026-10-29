@@ -2487,6 +2487,50 @@ Lisp l_paneWidth(Lisp args, LispError *e, LispContext ctx) {
   return lisp_make_int(active ? active->width : 0);
 }
 
+/**
+ * @brief Lisp function: scroll the active pane's view
+ * @details (editor-scroll-view lines) — negative scrolls up. The cursor
+ * keeps its place unless it would leave the pane, then it rides along on
+ * the first/last line shown. What the mouse wheel does by default (3 lines
+ * a notch), for binding "WHEEL-UP"/"WHEEL-DOWN" to something else.
+ * @return lisp_null()
+ */
+Lisp l_editorScrollView(Lisp args, LispError *e, LispContext ctx) {
+  (void)e;
+  (void)ctx;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT)
+    editorScrollView((int)lisp_int(lisp_car(args)));
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp functions: act where the last mouse report was
+ * @details (mouse-focus-pane) gives focus to the pane under the pointer,
+ * #f if it wasn't over one (a divider, the status bar). (mouse-set-cursor)
+ * also moves the cursor to the character clicked — the default for
+ * "MOUSE-LEFT". (mouse-position) is (row . col), 0-based screen cells.
+ */
+Lisp l_mouseFocusPane(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  return editorMouseFocusPane() ? lisp_true() : lisp_false();
+}
+
+Lisp l_mouseSetCursor(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  editorMouseSetCursor();
+  return lisp_null();
+}
+
+Lisp l_mousePosition(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  return lisp_cons(lisp_make_int(E.mouse_row), lisp_make_int(E.mouse_col), ctx);
+}
+
 /***********************************************************************************************************************
  *
  * Filesystem & process primitives — what a file-manager package (dired)

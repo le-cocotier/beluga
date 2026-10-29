@@ -864,6 +864,8 @@ static DWORD s_orig_in_mode;
 static DWORD s_orig_out_mode;
 static int s_raw;
 static int s_vt_input; // the console accepted ENABLE_VIRTUAL_TERMINAL_INPUT
+static int s_mouse;    // the editor asked for mouse reports (see watchMouseMode())
+static DWORD s_mouse_buttons; // button state of the last mouse record
 static OsStream s_term_input = { STREAM_CONSOLE, NULL, NULL, 0 };
 
 static void inputQueueClear(void);
@@ -909,6 +911,50 @@ void os_term_leave_raw(void)
     SetConsoleMode(consoleIn(), s_orig_in_mode);
     SetConsoleMode(consoleOut(), s_orig_out_mode);
     s_raw = 0;
+    s_mouse = 0;
+}
+
+/**
+ * @brief Console mouse input on or off, following the xterm mouse modes
+ * the editor turns on and off through its output (MOUSE_ON_SEQ in
+ * define.h), so it works the same for a daemon window, whose client only
+ * relays what the daemon draws.
+ * @details Windows Terminal (conpty) answers the xterm request itself and
+ * sends the SGR sequences through VT input. Classic conhost delivers
+ * MOUSE_EVENT records instead, and only with QuickEdit off (it keeps the
+ * clicks for its own selection otherwise); drainConsoleEvents() turns those
+ * into the same sequences.
+ */
+static void watchMouseMode(const char *buf, const size_t n)
+{
+    static const char on_seq[] = "\x1b[?1000h";
+    static const char off_seq[] = "\x1b[?1000l";
+    const size_t len = sizeof(on_seq) - 1;
+    DWORD in_mode;
+    int on = -1;
+    size_t i;
+
+    for (i = 0; i + len <= n; i++)
+    {
+        if (buf[i] != '\x1b')
+            continue;
+        if (memcmp(buf + i, on_seq, len) == 0)
+            on = 1;
+        else if (memcmp(buf + i, off_seq, len) == 0)
+            on = 0;
+    }
+    if (on < 0 || on == s_mouse || !s_raw)
+        return;
+    if (GetConsoleMode(consoleIn(), &in_mode))
+    {
+        if (on)
+            in_mode = (in_mode | ENABLE_MOUSE_INPUT) & ~(DWORD) ENABLE_QUICK_EDIT_MODE;
+        else
+            in_mode = (in_mode & ~(DWORD) ENABLE_MOUSE_INPUT) | (s_orig_in_mode & ENABLE_QUICK_EDIT_MODE);
+        SetConsoleMode(consoleIn(), in_mode | ENABLE_EXTENDED_FLAGS);
+    }
+    s_mouse = on;
+    s_mouse_buttons = 0;
 }
 
 int os_term_size(int *rows, int *cols)
@@ -926,6 +972,7 @@ void os_term_write(const void *buf, const size_t n)
     const char *p = buf;
     size_t left = n;
     DWORD written;
+    watchMouseMode(buf, n);
     while (left > 0)
     {
         if (!WriteFile(consoleOut(), p, (DWORD) (left > 65536 ? 65536 : left), &written, NULL) ||
@@ -1109,6 +1156,50 @@ static void translateKeyEvent(const KEY_EVENT_RECORD *k)
 }
 
 /**
+ * @brief Turns one console mouse event into the SGR sequence a terminal
+ * would have sent: wheel notches, and left button presses and releases.
+ */
+static void translateMouseEvent(const MOUSE_EVENT_RECORD *m)
+{
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    char seq[32];
+    int x;
+    int y;
+    int button;
+    char final = 'M';
+    const DWORD left_was = s_mouse_buttons & FROM_LEFT_1ST_BUTTON_PRESSED;
+    const DWORD left_is = m->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED;
+
+    // Positions are in screen-buffer coordinates; the editor counts from
+    // the top-left of the visible window.
+    x = m->dwMousePosition.X + 1;
+    y = m->dwMousePosition.Y + 1;
+    if (GetConsoleScreenBufferInfo(consoleOut(), &info))
+    {
+        x -= info.srWindow.Left;
+        y -= info.srWindow.Top;
+    }
+
+    if (m->dwEventFlags & MOUSE_WHEELED)
+        // The high word is the signed wheel delta: positive is away from
+        // the user (up).
+        button = (short) HIWORD(m->dwButtonState) > 0 ? 64 : 65;
+    else if (m->dwEventFlags & (MOUSE_MOVED | MOUSE_HWHEELED))
+        return; // only presses and the vertical wheel are reported (1000)
+    else
+    {
+        s_mouse_buttons = m->dwButtonState;
+        if (left_is == left_was)
+            return; // another button: not reported
+        button = 0;
+        if (!left_is)
+            final = 'm';
+    }
+    snprintf(seq, sizeof(seq), "\x1b[<%d;%d;%d%c", button, x, y, final);
+    inputQueuePush((const unsigned char *) seq, strlen(seq));
+}
+
+/**
  * @brief Moves whatever console events are waiting into the byte queue,
  * without blocking.
  */
@@ -1124,10 +1215,14 @@ static void drainConsoleEvents(void)
         if (!ReadConsoleInputW(consoleIn(), records, 64, &got) || got == 0)
             return;
         for (i = 0; i < got; i++)
+        {
             if (records[i].EventType == KEY_EVENT)
                 translateKeyEvent(&records[i].Event.KeyEvent);
-        // Resizes, focus and mouse events: dropped. The main loop notices
-        // a resize on its own by polling the window size.
+            else if (records[i].EventType == MOUSE_EVENT && s_mouse)
+                translateMouseEvent(&records[i].Event.MouseEvent);
+        }
+        // Resizes and focus events: dropped. The main loop notices a
+        // resize on its own by polling the window size.
     }
 }
 

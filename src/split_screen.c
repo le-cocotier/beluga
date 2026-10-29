@@ -499,6 +499,37 @@ int splitScreenFocusOtherRealPane(void) {
 }
 
 /**
+ * @brief The pane covering screen cell (row, col), both 0-based.
+ * @return Its index in E.layout.panes, or -1 (a divider, the status bar,
+ * the message line).
+ */
+int splitScreenPaneAt(const int row, const int col) {
+    const EditorPane *p;
+    int i;
+    for (i = 0; i < E.layout.num_panes; i++) {
+        p = &E.layout.panes[i];
+        if (row >= p->origin_y && row < p->origin_y + p->height &&
+            col >= p->origin_x && col < p->origin_x + p->width)
+            return i;
+    }
+    return -1;
+}
+
+/**
+ * @brief Moves focus to pane `index`, as splitScreenSwitchPane() would if
+ * it got there. Nothing happens for an index out of range or the pane
+ * that already has focus.
+ */
+void splitScreenFocusPane(const int index) {
+    if (index < 0 || index >= E.layout.num_panes || index == E.layout.active_pane)
+        return;
+    E.layout.panes[E.layout.active_pane].is_active = 0;
+    E.layout.active_pane = index;
+    E.layout.panes[index].is_active = 1;
+    splitScreenApplyFocusPrefix();
+}
+
+/**
  * @brief Switches active pane (focus moves between splits)
  * @return 0 on success, -1 on failure
  */
