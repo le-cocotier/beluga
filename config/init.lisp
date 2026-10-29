@@ -367,6 +367,7 @@
 (map-key "CTRL-SPACE" editor-set-mark "no-prefix")
 (map-key "CTRL-DEL" editor-kill-region "no-prefix")
 (map-key "CTRL-w" editor-cut-region "no-prefix")
+(map-key "ALT-w" '(editor-insert-char "a") "no-prefix")
 
 ;; user
 (map-key "p" '(editor-set-prefix "project") "user")
@@ -375,6 +376,7 @@
 (map-key "f" editor-open-file "user")
 (map-key "c" '(editor-set-prefix "config") "user")
 (map-key "ARROW-RIGHT" editor-switch-next-buffer "user")
+(map-key "ARROW-LEFT" editor-switch-prev-buffer "user")
 (map-key "b" editor-buffer-picker "user")
 (map-key "k" editor-kill-buffer "user")
 (map-key "\"" editor-split-screen-vertical "user")
