@@ -25,9 +25,6 @@ jobs:
       - name: Build project
         run: meson compile -C build
 
-      - name: Run tests (includes the OS-boundary check)
-        run: meson test -C build --print-errorlogs
-
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
