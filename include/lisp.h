@@ -950,8 +950,11 @@ Lisp lisp_make_table(LispContext ctx) {
 
 static void table_grow_(Lisp t, size_t new_capacity, LispContext ctx) {
   Table *table = table_get_(t);
-  if (new_capacity < 16)
-    new_capacity = 16;
+  // beluga: was 16. Every lambda call gets a table for its frame, and most
+  // frames hold one to three names: apply() sizes them with
+  // frame_capacity_() instead of paying for 16 slots each.
+  if (new_capacity < 4)
+    new_capacity = 4;
   assert(IS_POW2(new_capacity));
 
   int old_capacity = table->capacity;
@@ -975,6 +978,15 @@ static void table_grow_(Lisp t, size_t new_capacity, LispContext ctx) {
       lisp_table_set(t, key, lisp_vector_ref(old_vals, i), ctx);
   }
   assert(n == table->size);
+}
+
+// beluga: the smallest capacity that holds n names (and one internal define)
+// without lisp_table_set() growing the table.
+static int frame_capacity_(int n) {
+  int capacity = 4;
+  while (capacity <= 2 * n)
+    capacity *= 2;
+  return capacity;
 }
 
 void lisp_table_set(Lisp t, Lisp key, Lisp x, LispContext ctx) {
@@ -2256,6 +2268,19 @@ static int apply(Lisp operator, Lisp args, Lisp *out_result, Lisp *out_env,
     // make a new environment
     Lisp new_table = lisp_make_table(ctx);
 
+    // beluga: sized for the parameters up front. A frame with none stays
+    // empty (capacity 0) until something is defined in it.
+    int slot_count = 0;
+    Lisp it = slot_names;
+    while (lisp_is_pair(it)) {
+      ++slot_count;
+      it = lisp_cdr(it);
+    }
+    if (lisp_type(it) == LISP_SYMBOL)
+      ++slot_count;
+    if (slot_count > 0)
+      table_grow_(new_table, frame_capacity_(slot_count), ctx);
+
     // bind parameters to arguments
     // to pass into function call
     while (lisp_is_pair(slot_names) && lisp_is_pair(args)) {
@@ -2586,16 +2611,11 @@ Lisp lisp_macroexpand(Lisp lisp, LispError *out_error, LispContext ctx) {
   }
 }
 
-Lisp lisp_eval2(Lisp l, Lisp env, LispError *out_error, LispContext ctx) {
+// beluga: lisp_eval2() without the macroexpansion pass, for code that was
+// already expanded, like the body of a lambda (see apply_expanded_()).
+static Lisp eval_expanded_(Lisp expanded, Lisp env, LispError *out_error,
+                           LispContext ctx) {
   LispError error;
-  Lisp expanded = lisp_macroexpand(l, &error, ctx);
-
-  if (error != LISP_ERROR_NONE) {
-    if (out_error)
-      *out_error = error;
-    return lisp_null();
-  }
-
   size_t save_stack = ctx.p->stack_ptr;
 
   jmp_buf error_jmp;
@@ -2625,6 +2645,18 @@ Lisp lisp_eval2(Lisp l, Lisp env, LispError *out_error, LispContext ctx) {
   }
 }
 
+Lisp lisp_eval2(Lisp l, Lisp env, LispError *out_error, LispContext ctx) {
+  LispError error;
+  Lisp expanded = lisp_macroexpand(l, &error, ctx);
+
+  if (error != LISP_ERROR_NONE) {
+    if (out_error)
+      *out_error = error;
+    return lisp_null();
+  }
+  return eval_expanded_(expanded, env, out_error, ctx);
+}
+
 Lisp lisp_eval(Lisp expr, LispError *out_error, LispContext ctx) {
   return lisp_eval2(expr, lisp_env(ctx), out_error, ctx);
 }
@@ -2640,6 +2672,23 @@ Lisp lisp_apply(Lisp operator, Lisp args, LispError *out_error,
   if (*out_error != LISP_ERROR_NONE)
     return lisp_false();
   return needs_to_eval ? lisp_eval2(x, env, out_error, ctx) : x;
+}
+
+// beluga: lisp_apply() for the library's own calls (apply, map, filter,
+// sort, ...). A lambda's body was expanded along with the form that made
+// it, and eval_r() runs it as is; walking it through the expander again on
+// every call only cost time.
+static Lisp apply_expanded_(Lisp operator, Lisp args, LispError *out_error,
+                            LispContext ctx) {
+  Lisp x;
+  Lisp env;
+  int needs_to_eval;
+
+  *out_error = LISP_ERROR_NONE;
+  needs_to_eval = apply(operator, args, &x, &env, out_error, ctx);
+  if (*out_error != LISP_ERROR_NONE)
+    return lisp_false();
+  return needs_to_eval ? eval_expanded_(x, env, out_error, ctx) : x;
 }
 
 static Lisp gc_move(Lisp x, LispContext ctx) {
