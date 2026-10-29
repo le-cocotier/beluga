@@ -2,7 +2,8 @@
 """Headless tests that look at beluga's screen: the editor runs in a
 pseudo-terminal (tools/pty_harness.py) and pyte emulates the terminal.
 
-    tools/pty_tests.py BELUGA_BINARY REPO_DIR
+    tools/pty_tests.py BELUGA_BINARY REPO_DIR [TEST...]
+    tools/pty_tests.py --list
 
 POSIX only. Exits 77 (meson's "skipped") when pyte isn't installed
 (python3-pyte, or pip install pyte). A test that needs a program the
@@ -18,7 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pty_harness  # noqa: E402
-from pty_harness import Beluga, run_tests  # noqa: E402
+from pty_harness import Beluga, Skip, run_tests  # noqa: E402
 
 CTRL_X = '\x18'
 DOWN = '\x1b[B'
@@ -37,10 +38,6 @@ int main(void) {
   return total % 7;
 }
 """
-
-
-class Skip(Exception):
-    pass
 
 
 def open_terminal(ed):
@@ -1003,18 +1000,23 @@ TESTS = [
 
 
 def main():
+    """pty_tests.py --list prints the tests' names (meson.build makes one
+    test of each); pty_tests.py BINARY REPO [NAME...] runs the named tests,
+    or all of them."""
+    if sys.argv[1:] == ['--list']:
+        print('\n'.join(name for name, _ in TESTS))
+        return 0
     if pty_harness.pyte is None:
         print('pty tests skipped: pyte is not installed (python3-pyte)')
         return 77
-    tests = []
-    for name, test in TESTS:
-        def run(binary, repo, test=test, name=name):
-            try:
-                test(binary, repo)
-            except Skip as e:
-                print('skip  %s: %s' % (name, e))
-        tests.append((name, run))
-    return run_tests(tests, sys.argv[1], sys.argv[2])
+    binary, repo, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+    known = dict(TESTS)
+    unknown = [name for name in names if name not in known]
+    if unknown:
+        print('no such test: %s' % ', '.join(unknown))
+        return 2
+    tests = [(name, known[name]) for name in names] if names else TESTS
+    return run_tests(tests, binary, repo)
 
 
 if __name__ == '__main__':
