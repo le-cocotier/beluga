@@ -403,11 +403,9 @@ typedef struct
  * @brief State for the generic (editor-list-popup ...) builtin — a
  * single-instance modal picker any Lisp package can drive: pass a title,
  * a list of (label . value) pairs, and an on-select/on-cancel callback.
- * @note items/on_select/on_cancel are raw Lisp values kept alive by being
- * reachable from this global, matching how E.hooks[]/E.key_binds[] already
- * retain Lisp callbacks long-term — safe here because lisp_collect() (the
- * GC's moving compactor) is only ever invoked twice, during startup's
- * lisp_lib_load(), and never again once the editor is running.
+ * @note items/all_items/on_select/on_cancel are raw Lisp values, kept
+ * alive and updated by the collector like E.hooks[]/E.key_binds[]: see
+ * lisp_gc.c, which also clears them while the popup isn't visible.
  */
 typedef struct
 {

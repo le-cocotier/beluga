@@ -31,4 +31,7 @@ void asyncProcessPoll(void);
 // that want to say "working…".
 int asyncProcessCount(void);
 
+// The callbacks of the running processes, for the collector (lisp_gc.c).
+void asyncProcessVisitLispRoots(LispRootVisitor visit, LispContext ctx);
+
 #endif // BELUGA_ASYNC_PROCESS_H

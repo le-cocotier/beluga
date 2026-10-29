@@ -135,6 +135,13 @@ static void finish(AsyncProcess *p) {
     appDebug("[ASYNC] process callback raised an error\n");
 }
 
+void asyncProcessVisitLispRoots(LispRootVisitor visit, LispContext ctx) {
+  int i;
+  for (i = 0; i < MAX_ASYNC_PROCESSES; i++)
+    if (s_procs[i].in_use)
+      visit(&s_procs[i].callback, ctx);
+}
+
 void asyncProcessPoll(void) {
   int i;
   char chunk[4096];

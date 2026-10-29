@@ -9,6 +9,8 @@
 #ifndef DAEMON_H_
 #define DAEMON_H_
 
+#include "lisp.h"
+
 // The daemon name used when none is given (--daemon=NAME, --name=NAME).
 #define DAEMON_DEFAULT_NAME "server"
 
@@ -24,6 +26,10 @@ int daemonMain(const char *name);
 // 1 inside a running daemon: CTRL-x CTRL-c then closes the window it was
 // typed in, not the editor.
 int daemonIsRunning(void);
+
+// The Lisp values in the windows' saved views (their list popups), for
+// the collector (lisp_gc.c).
+void daemonVisitLispRoots(LispRootVisitor visit, LispContext ctx);
 
 /**
  * @brief Starts the daemon called `name` in the background (detached from

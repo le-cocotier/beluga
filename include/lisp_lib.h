@@ -67,34 +67,7 @@ static const char* lib_0_sequences_src_ =
       (if (pred (car l)) #t  \n\
           (some? pred (cdr l)))))  \n\
  \n\
-(define (_map1-helper proc l result)  \n\
-  (if (null? l)  \n\
-      (reverse! result)  \n\
-      (_map1-helper proc  \n\
-                    (cdr l)  \n\
-                    (cons (proc (car l)) result))))  \n\
- \n\
-(define (map1 proc l) (_map1-helper proc l '()))  \n\
- \n\
-(define (for-each1 proc l)  \n\
-  (if (null? l) '()  \n\
-      (begin (proc (car l)) (for-each1 proc (cdr l )))))  \n\
- \n\
 (define (reverse! l) (append-reverse! l '())) \n\
-(define (reverse l) (reverse! (list-copy l)))  \n\
- \n\
-(define (last-pair x)  \n\
- (if (pair? (cdr x))  \n\
-  (last-pair (cdr x)) x))  \n\
- \n\
-(define (list-tail x k)  \n\
- (if (zero? k) x  \n\
-  (list-tail (cdr x) (- k 1))))  \n\
- \n\
-(define (fold-left op acc lst) \n\
-  (if (null? lst) acc  \n\
-      (fold-left op (op acc (car lst)) (cdr lst)))) \n\
- \n\
 (define (_expand-shorthand-body path)  \n\
   (if (null? path) (cons 'pair '())  \n\
       (list (if (char=? (car path) #\\A)  \n\
@@ -313,63 +286,12 @@ static const char* lib_3_math_src_ =
               (apply * (cdr args))))))";
 
 static const char* lib_4_sequences_src_ = 
-"(define (map proc . rest)  \n\
- (define (helper lists result)  \n\
-  (if (some? null? lists)  \n\
-   (reverse! result)  \n\
-   (helper (map1 cdr lists)  \n\
-    (cons (apply proc (map1 car lists)) result))))  \n\
- (helper rest '()))  \n\
- \n\
-(define (for-each proc . rest)  \n\
- (define (helper lists)  \n\
-  (if (some? null? lists)  \n\
-   '()  \n\
-   (begin  \n\
-    (apply proc (map1 car lists))  \n\
-    (helper (map1 cdr lists)))))  \n\
- (helper rest))  \n\
- \n\
-(define (filter pred l)  \n\
- (define (helper l result)  \n\
-  (cond ((null? l) result)  \n\
-   ((pred (car l))  \n\
-    (helper (cdr l) (cons (car l) result)))  \n\
-   (else  \n\
-    (helper (cdr l) result))))  \n\
- (reverse! (helper l '())))  \n\
- \n\
-(define (reduce op default lst)  \n\
-  (if (null? lst) \n\
-      default \n\
-      (fold-left op (car lst) (cdr lst))))  \n\
- \n\
-(define (alist->hash-table alist)  \n\
+"(define (alist->hash-table alist)  \n\
   (define h (make-hash-table))  \n\
   (for-each1 (lambda (pair)  \n\
                (hash-table-set! h (car pair) (cdr pair))) alist)  \n\
   h)  \n\
  \n\
-(define (_assoc key list eq?)  \n\
- (if (null? list) #f  \n\
-  (let ((pair (car list)))  \n\
-    (if (and (pair? pair) (eq? key (car pair)))  \n\
-        pair  \n\
-        (_assoc key (cdr list) eq?)))))  \n\
- \n\
-(define (assoc key list) (_assoc key list equal?))  \n\
-(define (assq key list) (_assoc key list eq?))  \n\
-(define (assv key list) (_assoc key list eqv?))  \n\
- \n\
-(define (_member x list eq?)  \n\
- (cond ((null? list) #f)  \n\
-  ((eq? (car list) x) list)  \n\
-  (else (_member x (cdr list) eq?))))  \n\
- \n\
-(define (member x list) (_member x list equal?))  \n\
-(define (memq x list) (_member x list eq?))  \n\
-(define (memv x list) (_member x list eqv?))  \n\
-  \n\
 (define (make-initialized-vector l fn)  \n\
   (let ((v (make-vector l '())))  \n\
     (do ((i 0 (+ i 1)))  \n\
@@ -390,59 +312,7 @@ static const char* lib_4_sequences_src_ =
           (if (key< key (unwrap-key (vector-ref v mid)))  \n\
               (helper low mid 0)  \n\
               (helper mid high 0)))))  \n\
-  (helper 0 (vector-length v) 0))  \n\
- \n\
- \n\
-(define (_insertsort v lo hi op) \n\
-  (if (= (- hi lo) 0) \n\
-      v \n\
-      (do ((i (+ lo 1) (+ i 1))) \n\
-        ((= i hi) v) \n\
- \n\
-        (define x (vector-ref v i)) \n\
- \n\
-        (do ((j i (- j 1))) \n\
-          ((or \n\
-             (= j lo) \n\
-             (not (op x (vector-ref v (- j 1))))) \n\
-             (vector-set! v j x)) \n\
- \n\
-          (vector-set! v j (vector-ref v (- j 1))))) )) \n\
- \n\
-(define (_quicksort-partition v lo hi op)  \n\
-  (let ((pivot (vector-ref v (+ lo (/ (- hi lo) 2)))) \n\
-        (i (- lo 1)) \n\
-        (j (+ hi 1))) \n\
-    (do ()  \n\
-      ((>= i j) j)  \n\
- \n\
-      (set! i (+ i 1)) \n\
-      (do ()  \n\
-        ((not (op (vector-ref v i) pivot)) '())  \n\
-        (set! i (+ i 1)))  \n\
- \n\
-      (set! j (- j 1)) \n\
-      (do ()  \n\
-        ((not (op pivot (vector-ref v j))) '())  \n\
-        (set! j (- j 1)))  \n\
- \n\
-      (if (< i j) (vector-swap! v i j)) \n\
-      )))  \n\
- \n\
-(define (_quicksort-vector v lo hi threshold op)  \n\
-  (if (and (>= lo 0) (>= hi 0) (< lo hi) (> (- hi lo) threshold))  \n\
-      (let ((p (_quicksort-partition v lo hi op)))  \n\
-        (_quicksort-vector v lo p threshold op)  \n\
-        (_quicksort-vector v (+ p 1) hi threshold op))))  \n\
- \n\
-(define (sort! v op)  \n\
-  ; quicksort down to a certain level of recursion and \n\
-  ; then use insertion sort to finalize.  \n\
-  (_quicksort-vector v 0 (- (vector-length v) 1) 16 op) \n\
-  (_insertsort v 0 (vector-length v) op) \n\
-  v)  \n\
- \n\
-(define (sort list cmp) (vector->list (sort! (list->vector list) cmp)))";
+  (helper 0 (vector-length v) 0))";
 
 static const char* lib_5_streams_src_ = 
 "(define-macro delay (lambda (expr) \n\
@@ -831,14 +701,20 @@ static Lisp sch_list_copy(Lisp args, LispError* e, LispContext ctx) {
 
 static Lisp sch_append(Lisp args, LispError* e, LispContext ctx)
 {
-    Lisp l = lisp_null();  
+    // beluga: copies each list once (reversed onto l), where appending
+    // them one by one recopied everything gathered so far for each list.
+    Lisp l = lisp_null();
+    Lisp it;
 
-    while (lisp_is_pair(args))
+    if (!lisp_is_pair(args))
+        return l;
+    while (lisp_is_pair(lisp_cdr(args)))
     {
-        l = lisp_list_append(l, lisp_car(args), ctx);
+        for (it = lisp_car(args); lisp_is_pair(it); it = lisp_cdr(it))
+            l = lisp_cons(lisp_car(it), l, ctx);
         args = lisp_cdr(args);
     }
-    return l;
+    return lisp_list_reverse2(l, lisp_car(args));
 }
 
 static Lisp sch_append_reverse(Lisp args, LispError* e, LispContext ctx)
@@ -1838,7 +1714,7 @@ static Lisp sch_apply(Lisp args, LispError* e, LispContext ctx)
     Lisp operator = lisp_car(args);
     args = lisp_cdr(args);
     Lisp op_args = lisp_car(args);
-    return lisp_apply(operator, op_args, e, ctx);
+    return apply_expanded_(operator, op_args, e, ctx);
 }
 
 static Lisp sch_is_lambda(Lisp args, LispError* e, LispContext ctx)
@@ -1923,6 +1799,356 @@ static Lisp sch_is_cont(Lisp args, LispError* e, LispContext ctx)
     return lisp_make_bool(lisp_type(lisp_car(args)) == LISP_JUMP);
 }
 
+// ─── beluga: native list procedures ─────────────────────────────────────────
+// map, filter, assoc, sort, ... used to be Scheme in the library source
+// below, so every element cost a lambda call: a fresh environment table and
+// a few conses, all garbage for the collector. These do the same
+// work in C. A value a procedure still needs after calling back into Lisp is
+// kept on the interpreter stack, not in a C local, because the stack is what
+// lisp_collect() moves (gc-flip could run inside the callback).
+
+static Lisp* lib_slots_(int n, LispContext ctx)
+{
+    Lisp* slots = ctx.p->stack + ctx.p->stack_ptr;
+    int i;
+    for (i = 0; i < n; ++i)
+        lisp_stack_push(lisp_null(), ctx);
+    return slots;
+}
+
+static Lisp lib_release_(Lisp* slots, Lisp result, LispContext ctx)
+{
+    ctx.p->stack_ptr = (size_t)(slots - ctx.p->stack);
+    return result;
+}
+
+static Lisp lib_call1_(Lisp proc, Lisp x, LispError* e, LispContext ctx)
+{
+    return apply_expanded_(proc, lisp_cons(x, lisp_null(), ctx), e, ctx);
+}
+
+static Lisp lib_call2_(Lisp proc, Lisp x, Lisp y, LispError* e, LispContext ctx)
+{
+    return apply_expanded_(proc, lisp_cons(x, lisp_cons(y, lisp_null(), ctx), ctx), e, ctx);
+}
+
+static Lisp sch_map1(Lisp args, LispError* e, LispContext ctx)
+{
+    Lisp* s; // proc, rest of the list, result (reversed)
+    Lisp x;
+    ARITY_CHECK(2, 2);
+    s = lib_slots_(3, ctx);
+    s[0] = lisp_car(args);
+    s[1] = lisp_car(lisp_cdr(args));
+    while (lisp_is_pair(s[1]))
+    {
+        x = lib_call1_(s[0], lisp_car(s[1]), e, ctx);
+        if (*e != LISP_ERROR_NONE)
+            return lib_release_(s, lisp_null(), ctx);
+        s[2] = lisp_cons(x, s[2], ctx);
+        s[1] = lisp_cdr(s[1]);
+    }
+    return lib_release_(s, lisp_list_reverse(s[2]), ctx);
+}
+
+static Lisp sch_for_each1(Lisp args, LispError* e, LispContext ctx)
+{
+    Lisp* s; // proc, rest of the list
+    ARITY_CHECK(2, 2);
+    s = lib_slots_(2, ctx);
+    s[0] = lisp_car(args);
+    s[1] = lisp_car(lisp_cdr(args));
+    while (lisp_is_pair(s[1]))
+    {
+        lib_call1_(s[0], lisp_car(s[1]), e, ctx);
+        if (*e != LISP_ERROR_NONE)
+            break;
+        s[1] = lisp_cdr(s[1]);
+    }
+    return lib_release_(s, lisp_null(), ctx);
+}
+
+// (map proc list ...) and (for-each proc list ...): proc takes one element
+// of each list, and the walk stops at the end of the shortest one.
+static Lisp lib_map_n_(Lisp args, int collect, LispError* e, LispContext ctx)
+{
+    Lisp* s; // proc, a cursor per list, result (reversed)
+    Lisp it;
+    Lisp call_args;
+    Lisp x;
+    int at_end;
+    if (!lisp_is_pair(args))
+    {
+        *e = LISP_ERROR_TOO_FEW_ARGS;
+        return lisp_null();
+    }
+    s = lib_slots_(3, ctx);
+    s[0] = lisp_car(args);
+    s[1] = lisp_list_copy(lisp_cdr(args), ctx);
+    at_end = lisp_is_null(s[1]);
+    while (!at_end)
+    {
+        for (it = s[1]; lisp_is_pair(it); it = lisp_cdr(it))
+            if (!lisp_is_pair(lisp_car(it)))
+                at_end = 1;
+        if (at_end)
+            break;
+
+        call_args = lisp_null();
+        for (it = s[1]; lisp_is_pair(it); it = lisp_cdr(it))
+        {
+            call_args = lisp_cons(lisp_car(lisp_car(it)), call_args, ctx);
+            lisp_set_car(it, lisp_cdr(lisp_car(it)));
+        }
+        x = apply_expanded_(s[0], lisp_list_reverse(call_args), e, ctx);
+        if (*e != LISP_ERROR_NONE)
+            return lib_release_(s, lisp_null(), ctx);
+        if (collect)
+            s[2] = lisp_cons(x, s[2], ctx);
+    }
+    return lib_release_(s, collect ? lisp_list_reverse(s[2]) : lisp_null(), ctx);
+}
+
+static Lisp sch_map(Lisp args, LispError* e, LispContext ctx)
+{
+    if (lisp_is_pair(args) && lisp_is_pair(lisp_cdr(args)) && lisp_is_null(lisp_cdr(lisp_cdr(args))))
+        return sch_map1(args, e, ctx);
+    return lib_map_n_(args, 1, e, ctx);
+}
+
+static Lisp sch_for_each(Lisp args, LispError* e, LispContext ctx)
+{
+    if (lisp_is_pair(args) && lisp_is_pair(lisp_cdr(args)) && lisp_is_null(lisp_cdr(lisp_cdr(args))))
+        return sch_for_each1(args, e, ctx);
+    return lib_map_n_(args, 0, e, ctx);
+}
+
+static Lisp sch_filter(Lisp args, LispError* e, LispContext ctx)
+{
+    Lisp* s; // pred, rest of the list, result (reversed)
+    Lisp keep;
+    ARITY_CHECK(2, 2);
+    s = lib_slots_(3, ctx);
+    s[0] = lisp_car(args);
+    s[1] = lisp_car(lisp_cdr(args));
+    while (lisp_is_pair(s[1]))
+    {
+        keep = lib_call1_(s[0], lisp_car(s[1]), e, ctx);
+        if (*e != LISP_ERROR_NONE)
+            return lib_release_(s, lisp_null(), ctx);
+        if (lisp_is_true(keep))
+            s[2] = lisp_cons(lisp_car(s[1]), s[2], ctx);
+        s[1] = lisp_cdr(s[1]);
+    }
+    return lib_release_(s, lisp_list_reverse(s[2]), ctx);
+}
+
+static Lisp lib_fold_left_(Lisp op, Lisp acc, Lisp l, LispError* e, LispContext ctx)
+{
+    Lisp* s = lib_slots_(3, ctx); // op, accumulator, rest of the list
+    s[0] = op;
+    s[1] = acc;
+    s[2] = l;
+    while (lisp_is_pair(s[2]))
+    {
+        s[1] = lib_call2_(s[0], s[1], lisp_car(s[2]), e, ctx);
+        if (*e != LISP_ERROR_NONE)
+            return lib_release_(s, lisp_null(), ctx);
+        s[2] = lisp_cdr(s[2]);
+    }
+    return lib_release_(s, s[1], ctx);
+}
+
+static Lisp sch_fold_left(Lisp args, LispError* e, LispContext ctx)
+{
+    ARITY_CHECK(3, 3);
+    return lib_fold_left_(lisp_car(args), lisp_list_ref(args, 1), lisp_list_ref(args, 2), e, ctx);
+}
+
+static Lisp sch_reduce(Lisp args, LispError* e, LispContext ctx)
+{
+    Lisp l;
+    ARITY_CHECK(3, 3);
+    l = lisp_list_ref(args, 2);
+    if (!lisp_is_pair(l))
+        return lisp_list_ref(args, 1);
+    return lib_fold_left_(lisp_car(args), lisp_car(l), lisp_cdr(l), e, ctx);
+}
+
+static int lib_eq_(Lisp a, Lisp b) { return lisp_eq(a, b); }
+
+static Lisp lib_assoc_(Lisp args, int (*same)(Lisp, Lisp), LispError* e)
+{
+    Lisp key;
+    Lisp l;
+    Lisp entry;
+    ARITY_CHECK(2, 2);
+    key = lisp_car(args);
+    for (l = lisp_car(lisp_cdr(args)); lisp_is_pair(l); l = lisp_cdr(l))
+    {
+        entry = lisp_car(l);
+        if (lisp_is_pair(entry) && same(key, lisp_car(entry)))
+            return entry;
+    }
+    return lisp_false();
+}
+
+static Lisp sch_assoc(Lisp args, LispError* e, LispContext ctx) { return lib_assoc_(args, lisp_equal_r, e); }
+static Lisp sch_assq(Lisp args, LispError* e, LispContext ctx) { return lib_assoc_(args, lib_eq_, e); }
+static Lisp sch_assv(Lisp args, LispError* e, LispContext ctx) { return lib_assoc_(args, lisp_equal, e); }
+
+static Lisp lib_member_(Lisp args, int (*same)(Lisp, Lisp), LispError* e)
+{
+    Lisp x;
+    Lisp l;
+    ARITY_CHECK(2, 2);
+    x = lisp_car(args);
+    for (l = lisp_car(lisp_cdr(args)); lisp_is_pair(l); l = lisp_cdr(l))
+        if (same(lisp_car(l), x))
+            return l;
+    return lisp_false();
+}
+
+static Lisp sch_member(Lisp args, LispError* e, LispContext ctx) { return lib_member_(args, lisp_equal_r, e); }
+static Lisp sch_memq(Lisp args, LispError* e, LispContext ctx) { return lib_member_(args, lib_eq_, e); }
+static Lisp sch_memv(Lisp args, LispError* e, LispContext ctx) { return lib_member_(args, lisp_equal, e); }
+
+static Lisp sch_reverse(Lisp args, LispError* e, LispContext ctx)
+{
+    Lisp l;
+    Lisp result = lisp_null();
+    ARITY_CHECK(1, 1);
+    for (l = lisp_car(args); lisp_is_pair(l); l = lisp_cdr(l))
+        result = lisp_cons(lisp_car(l), result, ctx);
+    return result;
+}
+
+static Lisp sch_last_pair(Lisp args, LispError* e, LispContext ctx)
+{
+    Lisp l;
+    ARITY_CHECK(1, 1);
+    l = lisp_car(args);
+    if (!lisp_is_pair(l))
+    {
+        *e = LISP_ERROR_ARG_TYPE;
+        return lisp_null();
+    }
+    while (lisp_is_pair(lisp_cdr(l)))
+        l = lisp_cdr(l);
+    return l;
+}
+
+static Lisp sch_list_tail(Lisp args, LispError* e, LispContext ctx)
+{
+    Lisp l;
+    LispInt k;
+    ARITY_CHECK(2, 2);
+    l = lisp_car(args);
+    k = lisp_number_to_int(lisp_car(lisp_cdr(args)));
+    for (; k > 0; --k)
+    {
+        if (!lisp_is_pair(l))
+        {
+            *e = LISP_ERROR_OUT_OF_BOUNDS;
+            return lisp_null();
+        }
+        l = lisp_cdr(l);
+    }
+    return l;
+}
+
+// Bottom-up merge sort of the n elements of the vector in s[1], with cmp in
+// s[0] and a scratch vector of the same length in s[2]; the two swap after
+// every pass, so the sorted elements end up in s[1]. Stable: an element only
+// moves ahead of an earlier one when (cmp later earlier) is true.
+static int lib_merge_sort_(Lisp* s, int n, LispError* e, LispContext ctx)
+{
+    int width, lo, mid, hi, i, j, k;
+    Lisp before;
+    Lisp swap;
+    for (width = 1; width < n; width *= 2)
+    {
+        for (lo = 0; lo < n; lo += 2 * width)
+        {
+            mid = n - lo > width ? lo + width : n;
+            hi = n - mid > width ? mid + width : n;
+            i = lo;
+            j = mid;
+            k = lo;
+            while (i < mid && j < hi)
+            {
+                before = lib_call2_(s[0], lisp_vector_ref(s[1], j), lisp_vector_ref(s[1], i), e, ctx);
+                if (*e != LISP_ERROR_NONE)
+                    return 0;
+                if (lisp_is_true(before))
+                    lisp_vector_set(s[2], k++, lisp_vector_ref(s[1], j++));
+                else
+                    lisp_vector_set(s[2], k++, lisp_vector_ref(s[1], i++));
+            }
+            while (i < mid)
+                lisp_vector_set(s[2], k++, lisp_vector_ref(s[1], i++));
+            while (j < hi)
+                lisp_vector_set(s[2], k++, lisp_vector_ref(s[1], j++));
+        }
+        swap = s[1];
+        s[1] = s[2];
+        s[2] = swap;
+    }
+    return 1;
+}
+
+// Sorts vector v in place.
+static Lisp lib_sort_vector_(Lisp v, Lisp cmp, LispError* e, LispContext ctx)
+{
+    Lisp* s = lib_slots_(4, ctx); // cmp, sorted so far, scratch, v
+    int n = lisp_vector_length(v);
+    int i;
+    s[0] = cmp;
+    s[1] = v;
+    s[3] = v;
+    s[2] = lisp_make_vector(n, ctx);
+    if (!lib_merge_sort_(s, n, e, ctx))
+        return lib_release_(s, lisp_null(), ctx);
+    if (!lisp_eq(s[1], s[3]))
+        for (i = 0; i < n; ++i)
+            lisp_vector_set(s[3], i, lisp_vector_ref(s[1], i));
+    return lib_release_(s, s[3], ctx);
+}
+
+static Lisp sch_sort_x(Lisp args, LispError* e, LispContext ctx)
+{
+    ARITY_CHECK(2, 2);
+    if (lisp_type(lisp_car(args)) != LISP_VECTOR)
+    {
+        *e = LISP_ERROR_ARG_TYPE;
+        return lisp_null();
+    }
+    return lib_sort_vector_(lisp_car(args), lisp_car(lisp_cdr(args)), e, ctx);
+}
+
+// (sort sequence cmp): a sorted copy, a list for a list and a vector for a
+// vector. Stable, unlike the quicksort it replaces.
+static Lisp sch_sort(Lisp args, LispError* e, LispContext ctx)
+{
+    Lisp seq;
+    Lisp v;
+    ARITY_CHECK(2, 2);
+    seq = lisp_car(args);
+    if (lisp_type(seq) == LISP_VECTOR)
+        return lib_sort_vector_(lisp_subvector(seq, 0, lisp_vector_length(seq), ctx),
+                                lisp_car(lisp_cdr(args)), e, ctx);
+    if (!lisp_is_list(seq))
+    {
+        *e = LISP_ERROR_ARG_TYPE;
+        return lisp_null();
+    }
+    v = sch_list_to_vector(args, e, ctx);
+    v = lib_sort_vector_(v, lisp_car(lisp_cdr(args)), e, ctx);
+    if (*e != LISP_ERROR_NONE)
+        return lisp_null();
+    return sch_vector_to_list(lisp_cons(v, lisp_null(), ctx), e, ctx);
+}
+
 #undef ARITY_CHECK
 
 static const LispFuncDef lib_cfunc_defs[] = {
@@ -1976,6 +2202,24 @@ static const LispFuncDef lib_cfunc_defs[] = {
     { "length", sch_length },
     { "append", sch_append },
     { "append-reverse!", sch_append_reverse },
+    { "reverse", sch_reverse },
+    { "last-pair", sch_last_pair },
+    { "list-tail", sch_list_tail },
+    { "map1", sch_map1 },
+    { "for-each1", sch_for_each1 },
+    { "map", sch_map },
+    { "for-each", sch_for_each },
+    { "filter", sch_filter },
+    { "fold-left", sch_fold_left },
+    { "reduce", sch_reduce },
+    { "assoc", sch_assoc },
+    { "assq", sch_assq },
+    { "assv", sch_assv },
+    { "member", sch_member },
+    { "memq", sch_memq },
+    { "memv", sch_memv },
+    { "sort", sch_sort },
+    { "sort!", sch_sort_x },
     { "list-ref", sch_list_ref },
     { "nthcdr", sch_list_advance },
 
