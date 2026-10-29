@@ -119,6 +119,29 @@ static void testFrames(void) {
             "(100 9801)");
 }
 
+static Lisp s_root;
+
+static void visitTestRoot(LispRootVisitor visit, LispContext c) {
+  visit(&s_root, c);
+}
+
+static void testCollect(void) {
+  LispError error = LISP_ERROR_NONE;
+  // A value only C holds survives a collection, moved, through the roots;
+  // so do the vectors made without a fill.
+  s_root = lisp_eval(lisp_read("(list \"kept\" 'sym (make-vector 3) "
+                               "(vector-grow (vector 1) 4))",
+                               &error, ctx),
+                     &error, ctx);
+  lisp_set_roots(visitTestRoot, ctx);
+  lisp_collect(lisp_null(), ctx);
+  CHECK_STR(lisp_string(lisp_car(s_root)), "kept");
+  CHECK(lisp_eq(lisp_car(lisp_cdr(s_root)), lisp_make_symbol("sym", ctx)));
+  CHECK_INT(lisp_vector_length(lisp_list_ref(s_root, 3)), 4);
+  lisp_set_roots(NULL, ctx);
+  checkEval("(map (lambda (x) (* x x)) '(1 2 3))", "(1 4 9)");
+}
+
 int main(void) {
   testInit();
   ctx = lisp_init();
@@ -130,6 +153,7 @@ int main(void) {
   testLists();
   testSort();
   testFrames();
+  testCollect();
   lisp_shutdown(ctx);
   return testDone();
 }

@@ -13,6 +13,7 @@
 #include "../include/define.h"
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
+#include "../include/lisp_gc.h"
 #include "../include/macro.h"
 #include "../include/packages.h"
 #include "../include/project.h"
@@ -339,6 +340,7 @@ static void initConfig(void) {
   if (!E.ctx.p->err_port)
     E.ctx.p->err_port = tmpfile();
   lisp_lib_load(E.ctx);
+  lispGcInit();
   // Init builtins lisp functions
   initBuiltins();
 

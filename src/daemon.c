@@ -49,6 +49,7 @@
 #include "../include/galloc.h"
 #include "../include/init.h"
 #include "../include/input.h"
+#include "../include/lisp_gc.h"
 #include "../include/os.h"
 #include "../include/output.h"
 #include "../include/project.h"
@@ -758,6 +759,7 @@ static void daemonRunLoop(void) {
   int i;
 
   while (!s_stop) {
+    lispGcMaybeCollect();
     // Index 0: the listener; then one per client; then what the
     // standalone loop waits on too.
     n_streams = 0;
@@ -817,6 +819,13 @@ static void daemonRunLoop(void) {
 }
 
 int daemonIsRunning(void) { return s_running; }
+
+void daemonVisitLispRoots(LispRootVisitor visit, LispContext ctx) {
+  DaemonClient *c;
+  lispGcVisitListPopup(&s_idle.list_popup, visit, ctx);
+  for (c = s_clients; c; c = c->next)
+    lispGcVisitListPopup(&c->view.list_popup, visit, ctx);
+}
 
 /*
  * Debug sessions belong to the window that started them: their events

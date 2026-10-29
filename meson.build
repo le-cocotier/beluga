@@ -125,6 +125,7 @@ src_files = files(
   'src/screen_diff.c',
   'src/describe.c',
   'src/settings.c',
+  'src/lisp_gc.c',
   'src/daemon.c',
   'src/daemon_client.c',
   'src/daemon_frame.c'

@@ -1802,7 +1802,7 @@ static Lisp sch_is_cont(Lisp args, LispError* e, LispContext ctx)
 // ─── beluga: native list procedures ─────────────────────────────────────────
 // map, filter, assoc, sort, ... used to be Scheme in the library source
 // below, so every element cost a lambda call: a fresh environment table and
-// a few conses, all garbage the editor never collects. These do the same
+// a few conses, all garbage for the collector. These do the same
 // work in C. A value a procedure still needs after calling back into Lisp is
 // kept on the interpreter stack, not in a C local, because the stack is what
 // lisp_collect() moves (gc-flip could run inside the callback).
@@ -2107,9 +2107,6 @@ static Lisp lib_sort_vector_(Lisp v, Lisp cmp, LispError* e, LispContext ctx)
     s[1] = v;
     s[3] = v;
     s[2] = lisp_make_vector(n, ctx);
-    // lisp_make_vector() leaves the entries uninitialized; the collector
-    // must not find garbage there.
-    lisp_vector_fill(s[2], lisp_null());
     if (!lib_merge_sort_(s, n, e, ctx))
         return lib_release_(s, lisp_null(), ctx);
     if (!lisp_eq(s[1], s[3]))

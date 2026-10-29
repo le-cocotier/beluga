@@ -118,6 +118,18 @@ void lisp_shutdown(LispContext ctx);
 // global env
 Lisp lisp_collect(Lisp root_to_save, LispContext ctx);
 void lisp_print_collect_stats(LispContext ctx);
+
+// beluga: values the embedding program keeps outside the Lisp heap (a key
+// binding's command, a hook's callback, ...). lisp_collect() moves every
+// object it keeps, so it calls `roots` to have each such value updated:
+// `roots` calls `visit` on the address of every one of them. The program
+// must hold no other Lisp value (in a C local, say) across a collection.
+typedef void (*LispRootVisitor)(Lisp *root, LispContext ctx);
+void lisp_set_roots(void (*roots)(LispRootVisitor visit, LispContext ctx),
+                    LispContext ctx);
+// beluga: bytes allocated on the Lisp heap, live or not, since the last
+// collection (or startup).
+size_t lisp_heap_size(LispContext ctx);
 const char *lisp_error_string(LispError error);
 
 void lisp_set_env(Lisp env, LispContext ctx);
@@ -542,6 +554,8 @@ struct LispImpl {
 
   Lisp symbol_cache[SYM_COUNT];
 
+  void (*roots)(LispRootVisitor visit, LispContext ctx);
+
   size_t gc_stat_freed;
   size_t gc_stat_time;
 };
@@ -823,6 +837,11 @@ Lisp lisp_make_vector(int n, LispContext ctx) {
   size_t size = sizeof(Vector) + sizeof(LispVal) * n + sizeof(char) * n;
   Vector *vector = gc_alloc(size, LISP_VECTOR, ctx);
   vector->block.d.vector.length = n;
+  // beluga: the collector walks every entry of a vector, so none may be
+  // left uninitialized ((make-vector n) without a fill, vector-grow's new
+  // tail, a hash table's unused value slots).
+  memset(vector->entries, 0, sizeof(LispVal) * n);
+  memset((char *)vector->entries + sizeof(LispVal) * n, LISP_NULL, n);
 
   LispVal val;
   val.ptr_val = vector;
@@ -2766,6 +2785,10 @@ static Lisp gc_move_weak_symbols(Lisp old_table, LispContext ctx) {
   return to_table;
 }
 
+static void gc_move_root_(Lisp *root, LispContext ctx) {
+  *root = gc_move(*root, ctx);
+}
+
 Lisp lisp_collect(Lisp root_to_save, LispContext ctx) {
 #ifdef LISP_DEBUG
   time_t start_time = clock();
@@ -2783,6 +2806,8 @@ Lisp lisp_collect(Lisp root_to_save, LispContext ctx) {
 
   gc_move_v(ctx.p->symbol_cache, SYM_COUNT, ctx);
   gc_move_v(ctx.p->stack, ctx.p->stack_ptr, ctx);
+  if (ctx.p->roots)
+    ctx.p->roots(gc_move_root_, ctx);
 
   Lisp result = gc_move(root_to_save, ctx);
 
@@ -2922,6 +2947,13 @@ void lisp_print_collect_stats(LispContext ctx) {
           (size_t)lisp_table_size(ctx.p->symbols));
 }
 
+void lisp_set_roots(void (*roots)(LispRootVisitor visit, LispContext ctx),
+                    LispContext ctx) {
+  ctx.p->roots = roots;
+}
+
+size_t lisp_heap_size(LispContext ctx) { return ctx.p->heap.size; }
+
 Lisp lisp_env(LispContext ctx) { return ctx.p->env; }
 
 void lisp_set_env(Lisp env, LispContext ctx) {
@@ -2981,6 +3013,7 @@ LispContext lisp_init(void) {
   ctx.p->stack = galloc(sizeof(Lisp) * LISP_STACK_DEPTH);
   ctx.p->gc_stat_freed = 0;
   ctx.p->gc_stat_time = 0;
+  ctx.p->roots = NULL;
 
   heap_init(&ctx.p->heap);
 
