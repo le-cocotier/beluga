@@ -1145,7 +1145,7 @@ static void lsp_on_signature_help_response(LspClient *lsp, const char *result_js
              doc_text ? "\n\n" : "", doc_text ? doc_text : "");
 
     lsp_cursor_screen_pos(&x, &y);
-    lspUiSetInfo(&E.lsp_info, LSP_INFO_SIGNATURE, text, x, y);
+    lspUiSetInfo(&E.lsp_info, LSP_INFO_SIGNATURE, text, x, y - 1);
     if (E.lsp_info.count > 0 && hl_end > hl_start &&
         hl_end <= (int) strlen(E.lsp_info.lines[0]))
     {
