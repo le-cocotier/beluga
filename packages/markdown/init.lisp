@@ -206,9 +206,10 @@
 ;; CTRL-b toggles **bold** and CTRL-x i *italic* on the selection, or with no
 ;; selection on the word under the cursor: wrapped if it isn't, unwrapped if
 ;; it is. Outside any word, it inserts the pair of markers with the cursor
-;; between them, ready to type. (Not ALT-b/ALT-i: the terminal input only
-;; knows ALT-x, and ESC b already means ALT-ARROW-LEFT. Inside tmux, whose
-;; prefix is CTRL-b, rebind markdown-toggle-bold to something else.)
+;; between them, ready to type. (Not ALT-b: ESC b is what Terminal.app
+;; sends for Option+Left, and an unbound ALT-b acts as ALT-ARROW-LEFT.
+;; Inside tmux, whose prefix is CTRL-b, rebind markdown-toggle-bold to
+;; something else.)
 ;;
 ;; Positions go through (buffer-text ...) one column at a time rather than
 ;; string-ref on (line-text): columns count characters, and a line with an

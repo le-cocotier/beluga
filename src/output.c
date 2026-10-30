@@ -1141,6 +1141,8 @@ void editorRefreshScreen() {
     // rows of. Repeated with each frame: harmless, and how a new daemon
     // window or a changed MOUSE setting gets it.
     screenWrite(E.constantes.MOUSE ? MOUSE_ON_SEQ : MOUSE_OFF_SEQ, MOUSE_SEQ_LEN);
+    screenWrite(E.constantes.EXTENDED_KEYS ? EXTENDED_KEYS_ON_SEQ : EXTENDED_KEYS_OFF_SEQ,
+                EXTENDED_KEYS_SEQ_LEN);
     screenDiffWrite(ab.b, ab.len, E.screenrows + 2, E.screencols);
     screenFrameCache(ab.b, ab.len);
   }

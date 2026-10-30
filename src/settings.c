@@ -55,6 +55,8 @@ static Setting s_settings[] = {
      "While the debugger is paused, show the variables' values after the lines that use them."},
     {"MOUSE", SETTING_BOOL, 1, 0, &E.constantes.MOUSE,
      "Mouse wheel scrolls the pane under the pointer, a left click places the cursor."},
+    {"EXTENDED-KEYS", SETTING_BOOL, 1, 0, &E.constantes.EXTENDED_KEYS,
+     "Ask the terminal to report Ctrl+digit, Ctrl+punctuation and Ctrl+Shift+letter keys too."},
 };
 
 #define SETTING_COUNT ((int)(sizeof(s_settings) / sizeof(s_settings[0])))

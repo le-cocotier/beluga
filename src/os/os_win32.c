@@ -1118,6 +1118,53 @@ static int vkSequence(const WORD vk, const DWORD state, char *out, const size_t 
 }
 
 /**
+ * @brief Writes xterm's modifyOtherKeys report (ESC [27;<mod>;<code>~) for
+ * a key whose modifiers its character alone loses: Ctrl+digit,
+ * Ctrl+punctuation, Ctrl+Shift+letter, Ctrl/Shift+Enter, Ctrl+Tab, and
+ * Shift+Tab as ESC [Z. 0 for any other key.
+ * @details The key parser reads these as it does from a terminal, so
+ * "CTRL-1", "CTRL-SHIFT-a", "SHIFT-ENTER" bind the same on every platform.
+ * AltGr (Ctrl+Alt typing a character) is left alone.
+ */
+static int modifiedKeyReport(const KEY_EVENT_RECORD *k, char *out, const size_t out_size)
+{
+    const WORD vk = k->wVirtualKeyCode;
+    const wchar_t c = k->uChar.UnicodeChar;
+    const int shift = (k->dwControlKeyState & SHIFT_PRESSED) != 0;
+    const int alt = (k->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+    const int ctrl = (k->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+    UINT code = 0;
+
+    if (ctrl && alt && c >= 0x20)
+        return 0; // AltGr
+    if (vk == VK_TAB && shift && !ctrl && !alt)
+        return snprintf(out, out_size, "\x1b[Z");
+    if ((vk == VK_RETURN || vk == VK_TAB) && (ctrl || shift))
+        code = vk == VK_RETURN ? '\r' : '\t';
+    else if (vk == VK_BACK && (ctrl || shift))
+        code = 127;
+    else if (!ctrl)
+        return 0;
+    else if (vk >= '0' && vk <= '9' && vk != '2') // Ctrl+2 is Ctrl+Space's NUL
+        code = vk;
+    else if (vk >= 'A' && vk <= 'Z' && shift)
+        code = vk | 0x20;
+    else if ((vk >= VK_OEM_1 && vk <= VK_OEM_3) || (vk >= VK_OEM_4 && vk <= VK_OEM_8) ||
+             vk == VK_OEM_102)
+    {
+        // The key's character on this layout, unshifted ("," "." "-" ...);
+        // Ctrl+[ \ ] keep the bytes they already have.
+        code = MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR) & 0x7FFF;
+        if (c != 0 || code == 0)
+            return 0;
+    }
+    if (code == 0)
+        return 0;
+    return snprintf(out, out_size, "\x1b[27;%d;%u~",
+                    1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0), code);
+}
+
+/**
  * @brief Turns one console key event into input bytes.
  */
 static void translateKeyEvent(const KEY_EVENT_RECORD *k)
@@ -1138,12 +1185,19 @@ static void translateKeyEvent(const KEY_EVENT_RECORD *k)
 
     while (repeat-- > 0)
     {
-        if (c)
+        // With VT input the console encodes keys itself; one it had no
+        // sequence for still arrives with no character.
+        if ((!s_vt_input || !c) && modifiedKeyReport(k, seq, sizeof(seq)))
+            inputQueuePush((const unsigned char *) seq, strlen(seq));
+        else if (!s_vt_input && c == 8 && k->wVirtualKeyCode == VK_BACK)
+            inputQueuePush((const unsigned char *) "\x7f", 1); // Backspace, as terminals send it
+        else if (c)
         {
             // Without VT input, Alt+key arrives as the bare character with
             // ALT set; a terminal sends ESC first ("ALT-x" in keybindings).
-            // (AltGr reports Ctrl+Alt and types a real character: no ESC.)
-            if (!s_vt_input && alt && !ctrl)
+            // (AltGr reports Ctrl+Alt and types a real character: no ESC;
+            // a real Ctrl+Alt+letter gives a control character.)
+            if (!s_vt_input && alt && (!ctrl || c < 0x20))
                 inputQueuePush((const unsigned char *) "\x1b", 1);
             inputQueuePushChar(c);
         }

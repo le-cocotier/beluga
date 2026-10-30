@@ -85,6 +85,7 @@ class Beluga:
         self.fd = None
         self.status = None
         self.screen = pyte.Screen(cols, rows) if pyte else None
+        self.output = bytearray()  # everything the editor wrote
         self.stream = pyte.ByteStream(self.screen) if pyte else None
 
     # ── Lifecycle ──────────────────────────────────────────────────────
@@ -182,6 +183,7 @@ class Beluga:
                 return False
             if not data:
                 return False
+            self.output += data
             if self.stream:
                 self.stream.feed(data)
 

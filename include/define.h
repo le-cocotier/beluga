@@ -71,10 +71,6 @@
 #define DEL_KEY      0x86
 #define BEG_LINE     0x87   // HOME
 #define END_LINE     0x88   // END
-#define ALT_X        0x89   // Alt/Option-x — "execute command" (M-x style)
-#define ALT_ARROW_LEFT   0x8A   // Alt/Option + Left  — "ALT-ARROW-LEFT"  to map-key
-#define ALT_ARROW_RIGHT  0x8B   // Alt/Option + Right — "ALT-ARROW-RIGHT" to map-key
-#define CTRL_DEL_KEY     0x8C   // Ctrl + Delete (\x1b[3;5~) — "CTRL-DEL" to map-key
 #define UNKNOWN_KEY      0x8F   // a recognized-but-unbound sequence (F-keys, Insert, ...):
                                 // not printable, so it does nothing instead of
                                 // being typed or acting as ESC
@@ -101,6 +97,29 @@
 #define MOUSE_ON_SEQ     "\x1b[?1000h\x1b[?1006h"
 #define MOUSE_OFF_SEQ    "\x1b[?1006l\x1b[?1000l"
 #define MOUSE_SEQ_LEN    16
+
+// A key with modifiers no plain byte can carry: Alt/Option+anything,
+// Ctrl+arrows/Home/F-keys/digits/punctuation, Shift+Tab, ... It is one
+// Utf8Char of length 1 whose character[0] is MOD_KEY, character[1] the
+// KEY_MOD_* bits and character[2] the key without them: a character
+// ('x', 'X', '1', ' ', '\r', '\t', ESC, BACKSPACE) or one of the codes
+// above (ARROW_LEFT, FUNCTION_KEY + n, ...). keyMake() builds it, and
+// keyToString() names it "CTRL-ALT-SHIFT-<key>" ("ALT-x", "CTRL-ARROW-UP",
+// "SHIFT-TAB"), modifiers always in that order. Plain Ctrl+letter stays
+// its control byte ("CTRL-a"), Shift+letter the capital, and Alt+Shift+
+// letter is "ALT-X".
+#define MOD_KEY          0xBE
+#define KEY_MOD_SHIFT    1
+#define KEY_MOD_ALT      2      // Alt, Option, Meta
+#define KEY_MOD_CTRL     4
+#define IS_MOD_KEY(k)    ((k)->length == 1 && (k)->character[0] == MOD_KEY)
+// Asks the terminal to report keys that otherwise all look the same
+// (Ctrl+1, Ctrl+., Ctrl+Shift+a, ...) with xterm's modifyOtherKeys, level
+// 1: keys that already have a code (Ctrl+a, Alt+x) keep it. Sent with
+// every frame like MOUSE_ON_SEQ; terminals without it ignore it.
+#define EXTENDED_KEYS_ON_SEQ   "\x1b[>4;1m"
+#define EXTENDED_KEYS_OFF_SEQ  "\x1b[>4;0m"
+#define EXTENDED_KEYS_SEQ_LEN  7
 
 #define BACKSPACE    127    // 0x7F (DEL byte many terminals send for Backspace)
 

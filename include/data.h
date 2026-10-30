@@ -156,6 +156,7 @@ struct const_t
     int INLAY_HINTS;        // (define INLAY-HINTS #t) — parameter names / types inside the line
     int DEBUG_INLINE_VALUES; // (define DEBUG-INLINE-VALUES #t) — variables' values after the lines, while paused
     int MOUSE;              // (define MOUSE #t) — wheel scrolling and click-to-place
+    int EXTENDED_KEYS;      // (define EXTENDED-KEYS #t) — ask for modifyOtherKeys (Ctrl+1, Ctrl+.)
 };
 
 /**

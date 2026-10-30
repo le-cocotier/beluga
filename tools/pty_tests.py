@@ -737,6 +737,52 @@ def terminal_app_shift_function_keys(binary, repo):
         ed.quit()
 
 
+def modified_keys(binary, repo):
+    """Alt/Option and Ctrl combinations bind under any of their names
+    (OPTION-q is ALT-q); an unbound Alt+letter still types the letter; the
+    editor asks for modifyOtherKeys and turns it off on the way out."""
+    with Beluga(binary, repo) as ed:
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(map-key "OPTION-q" \'(editor-insert-char "A") "no-prefix")'
+                    '\n(map-key "CTRL-1" \'(editor-insert-char "B") "no-prefix")'
+                    '\n(map-key "CTRL-ARROW-UP" \'(editor-insert-char "C") "no-prefix")'
+                    '\n(map-key "C-M-k" \'(editor-insert-char "D") "no-prefix")'
+                    '\n(map-key "SHIFT-TAB" \'(editor-insert-char "E") "no-prefix")'
+                    '\n(map-key "ALT-SHIFT-p" \'(editor-insert-char "F") "no-prefix")'
+                    '\n(map-key "CTRL-SHIFT-a" \'(editor-insert-char "G") "no-prefix")'
+                    '\n(map-key "ALT-F5" \'(editor-insert-char "H") "no-prefix")\n')
+        with open(ed.path('k.txt'), 'w') as f:
+            f.write('\n')
+        ed.start('k.txt')
+        ed.wait_for('k.txt')
+        assert b'\x1b[>4;1m' in ed.output, ed.output[-200:]
+        ed.keys('\x1bq', '\x1b[27;5;49~', '\x1b[1;5A', '\x1b\x0b', '\x1b[Z', '\x1bP',
+                '\x1b[97;6u', '\x1b\x1b[15~', '\x1bz', '\x1b[1;5C', 'y', delay=0.3)
+        # Unbound: Alt+z types "z", Ctrl+Right moves right like Right.
+        ed.wait_for('ABCDEFGHzy')
+        for _ in range(10):
+            ed.keys(CTRL_X, 'u', delay=0.1)
+        ed.quit()
+        ed.pump(0.2)
+        assert ed.output.rfind(b'\x1b[>4;0m') > ed.output.rfind(b'\x1b[>4;1m')
+
+
+def terminal_modified_keys(binary, repo):
+    """A terminal pane's program gets modified keys as xterm sends them."""
+    if not shutil.which('od'):
+        raise Skip('no od')
+    with Beluga(binary, repo) as ed:
+        ed.start()
+        open_terminal(ed)
+        shell(ed, "stty raw -echo; head -c 20 | od -An -c; stty sane")
+        ed.pump(0.5)
+        # Alt+j, Ctrl+Left, Ctrl+1, Ctrl+Alt+a: 20 bytes, od's 16 a line.
+        ed.keys('\x1bj', '\x1b[1;5D', '\x1b[27;5;49~', '\x1b\x01', delay=0.2)
+        ed.wait_for('033   j 033   [   1   ;   5   D 033   [   2   7   ;   5   ;   4')
+        ed.wait_for("9   ~ 033 001")
+        ed.quit()
+
+
 def daemon_name(tag):
     return 'test-%s-%d' % (tag, os.getpid())
 
@@ -981,6 +1027,8 @@ TESTS = [
     ('debugger-exceptions', debugger_exceptions),
     ('debugger-watches', debugger_watches),
     ('terminal-app-shift-function-keys', terminal_app_shift_function_keys),
+    ('modified-keys', modified_keys),
+    ('terminal-modified-keys', terminal_modified_keys),
     ('tab-completion-list', tab_completion_list),
     ('project-root-start', project_root_start),
     ('terminal-alternate-screen', terminal_alternate_screen),

@@ -136,7 +136,7 @@ static int sameExtensions(const char *a, const char *b) {
  * @note Updates global editor state E (key_binds array)
  */
 Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
-  const char *key_sequence = lisp_string(lisp_car(args));
+  char key_sequence[64];
   int i;
   void *memory_temp;
   Lisp func;
@@ -144,6 +144,9 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
   struct prefix_t prefix;
   char *extensions;
   size_t key_len;
+  // "M-x", "OPTION-x" and "SHIFT-ALT-a" bind what keyToString() calls
+  // "ALT-x" and "ALT-A".
+  keyCanonicalName(lisp_string(lisp_car(args)), key_sequence, sizeof(key_sequence));
   args = lisp_cdr(args);
   // second argument
   func = lisp_car(args);

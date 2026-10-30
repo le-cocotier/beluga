@@ -31,6 +31,32 @@
 ;; Terminal.app). Omitting this leaves it on.
 (define MOUSE #t)
 
+;; Keys with modifiers. Every Alt/Option and Ctrl combination has a name
+;; for map-key, modifiers in the order CTRL-ALT-SHIFT-:
+;;   "ALT-x" "ALT-X" (Alt+Shift+x) "ALT-1" "ALT-." "ALT-ENTER" "ALT-SPACE"
+;;   "ALT-BACKSPACE" "CTRL-ALT-k" "CTRL-1" "CTRL-." "CTRL-SHIFT-a"
+;;   "CTRL-ENTER" "SHIFT-ENTER" "SHIFT-TAB" "CTRL-\\" "CTRL-]"
+;;   "CTRL-ARROW-UP" "ALT-ARROW-LEFT" "CTRL-SHIFT-ARROW-RIGHT" "CTRL-HOME"
+;;   "ALT-DEL" "CTRL-PAGE-UP" "CTRL-F5" "CTRL-ALT-F12" ...
+;; OPTION-, META-, OPT- and Emacs's C-/M-/S- are accepted too ("M-x" is
+;; "ALT-x"). An unbound one acts as before: CTRL-ARROW-UP as ARROW-UP, an
+;; unbound ALT-a types "a" (so AZERTY's Option+( still gives "{"), ALT-f
+;; and ALT-b as ALT-ARROW-RIGHT/LEFT. describe-key (CTRL-x h k) shows
+;; what a key is called.
+;;
+;; macOS: Option types special characters (Option+f is "ƒ") unless the
+;; terminal sends it as Meta: Terminal.app > Settings > Profiles >
+;; Keyboard > "Use Option as Meta key"; iTerm2 > Settings > Profiles >
+;; Keys > Left/Right Option key: "Esc+". Then Option+key is ALT-key.
+;;
+;; Ctrl+1, Ctrl+., Ctrl+Shift+a, Ctrl+Enter only exist where the terminal
+;; can report them: beluga asks for xterm's modifyOtherKeys (xterm,
+;; WezTerm, foot, Ghostty; iTerm2's "Report keys using CSI u" works too)
+;; and reads them from the Windows console's key events. Terminal.app and
+;; the Linux console can't: there Ctrl+1 is just "1". (define EXTENDED-KEYS
+;; #f) stops asking. Omitting this leaves it on.
+(define EXTENDED-KEYS #t)
+
 ;; Every AUTOSAVE-INTERVAL seconds, files with unsaved changes are copied to
 ;; ~/.beluga/autosave/. Saving (or killing the buffer) removes the copy; after
 ;; a crash or a closed terminal, opening the file again offers to recover it.
@@ -367,7 +393,7 @@
 (map-key "CTRL-SPACE" editor-set-mark "no-prefix")
 (map-key "CTRL-DEL" editor-kill-region "no-prefix")
 (map-key "CTRL-w" editor-cut-region "no-prefix")
-(map-key "ALT-w" '(editor-insert-char "a") "no-prefix")
+(map-key "ALT-w" editor-copy-region "no-prefix")
 
 ;; user
 (map-key "p" '(editor-set-prefix "project") "user")
