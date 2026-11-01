@@ -14,6 +14,7 @@
 
 (lsp-server "yaml" "yaml" "yaml-language-server" "--stdio")
 (lsp-server "yml" "yaml" "yaml-language-server" "--stdio")
+(lsp-server-install "yaml-language-server" "any" "npm install -g yaml-language-server")
 
 ;; ─── Comment toggle ─────────────────────────────────────────────────────────
 ;; Dispatches on the file's extension rather than hardcoding "# ". The

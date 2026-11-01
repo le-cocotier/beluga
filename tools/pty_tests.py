@@ -1012,6 +1012,73 @@ def project_root_start(binary, repo):
         ed.quit()
 
 
+FAKE_SERVER_INSTALL = """printf 'Password: '
+read answer
+mkdir -p "$HOME/bin"
+printf '#!/bin/sh\\ncat >/dev/null\\n' > "$HOME/bin/beluga-fake-ls"
+chmod +x "$HOME/bin/beluga-fake-ls"
+echo "installed with $answer"
+"""
+
+
+def lsp_install(binary, repo):
+    """A file whose language server isn't on PATH: beluga offers the
+    registered install command, runs it in *lsp-install* (where it can be
+    answered), and once the server is there asks to start it."""
+    with Beluga(binary, repo, rows=30, cols=140) as ed:
+        ed.extra_env = {'PATH': ed.path('bin') + ':' + os.environ.get('PATH', '')}
+        with open(ed.path('install.sh'), 'w') as f:
+            f.write(FAKE_SERVER_INSTALL)
+        with open(ed.path('a.zz'), 'w') as f:
+            f.write('hello\n')
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(lsp-server "zz" "zz" "beluga-fake-ls")\n'
+                    '(lsp-server-install "beluga-fake-ls" "any" "beluga-no-such-tool x"'
+                    ' "any" "sh install.sh")\n')
+        ed.start('a.zz')
+        ed.wait_for("beluga-fake-ls isn't installed. Install it with `sh install.sh`? (y/n)")
+        ed.write('y\r')
+        ed.wait_for('Password:')
+        ed.wait_for('$ sh install.sh')
+        ed.write('hunter2\r')
+        ed.wait_for('installed with hunter2')
+        ed.wait_for('Start the beluga-fake-ls language server for this project? (y/n)')
+        ed.write('n\r')
+        ed.pump(0.3)
+        assert any('hello' in line for line in ed.text()), ed.text()
+        ed.quit()
+
+
+def lsp_install_declined(binary, repo):
+    """Saying no to the install: nothing runs, and it isn't asked again
+    for the next file of that server. With no command that can run, the
+    message names what installing it needs."""
+    with Beluga(binary, repo, rows=30, cols=140) as ed:
+        for name in ('a.zz', 'b.zz', 'c.yy'):
+            with open(ed.path(name), 'w') as f:
+                f.write('x\n')
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(lsp-server "zz" "zz" "beluga-fake-ls")\n'
+                    '(lsp-server-install "beluga-fake-ls" "any" "sh -c true")\n'
+                    '(lsp-server "yy" "yy" "beluga-other-ls")\n'
+                    '(lsp-server-install "beluga-other-ls" "any" "beluga-no-such-tool i")\n')
+        ed.start('a.zz')
+        ed.wait_for("Install it with `sh -c true`? (y/n)")
+        ed.write('n\r')
+        ed.wait_for('Not installing beluga-fake-ls')
+        ed.keys(CTRL_X, 'f', delay=0.4)
+        ed.wait_for('Open :')
+        ed.write('b.zz\r')
+        ed.pump(0.8)
+        assert not any('Install it with' in line for line in ed.text()), ed.text()
+        assert not any('*lsp-install*' in line for line in ed.text()), ed.text()
+        ed.keys(CTRL_X, 'f', delay=0.4)
+        ed.wait_for('Open :')
+        ed.write('c.yy\r')
+        ed.wait_for("beluga-other-ls isn't installed, and installing it needs beluga-no-such-tool")
+        ed.quit()
+
+
 TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
     ('pane-cursors', pane_cursors),
@@ -1031,6 +1098,8 @@ TESTS = [
     ('terminal-modified-keys', terminal_modified_keys),
     ('tab-completion-list', tab_completion_list),
     ('project-root-start', project_root_start),
+    ('lsp-install', lsp_install),
+    ('lsp-install-declined', lsp_install_declined),
     ('terminal-alternate-screen', terminal_alternate_screen),
     ('terminal-vim', terminal_vim),
     ('terminal-colors', terminal_colors),

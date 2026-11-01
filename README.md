@@ -167,6 +167,21 @@ Here is some few command that you will need :
 | Ctrl-x Ctrl-s | Save a file      |
 | Ctrl-x f      | open file        |
 
+### Language servers
+
+Each language package (`c`, `python`, `rust`, ...) names its server. The first time you open a
+file of that language, beluga asks whether to start it. When the server isn't installed, it
+offers to install it first, with the command the package registers for your system (for
+example `npm install -g pyright`, or `sudo apt-get install -y clangd`). The install runs in a
+terminal pane, `*lsp-install*`, where you can type a sudo password. Once it ends and the server
+is on PATH, beluga asks to start it. To use your own install command, put it in personal-config:
+
+```lisp
+(lsp-server-install "pyright-langserver" "any" "pipx install pyright")
+```
+
+The os is `"linux"`, `"darwin"`, `"windows"`, `"unix"` (everything but Windows) or `"any"`.
+
 ### Daemon mode: several windows on one editor
 
 ```

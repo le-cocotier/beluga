@@ -221,6 +221,18 @@ int os_proc_wait(OsProc *p, int timeout_ms, int *exit_code);
 void os_proc_free(OsProc *p);
 
 /**
+ * @brief Where `name` would be found to run it: a path (one with a '/') is
+ * checked as given, a bare name is looked up on PATH (on Windows with
+ * PATHEXT too, the same lookup os_proc_spawn() does).
+ * @details On Windows, a name not found on this process's PATH is looked
+ * up again on the PATH in the registry (the user's and the machine's), and
+ * when that finds it the process's PATH is updated: an installer such as
+ * winget changes the registry, never an editor already running.
+ * @return The full path (galloc'd), or NULL if it isn't installed there.
+ */
+char *os_find_program(const char *name);
+
+/**
  * @brief The argv that runs `command` in the platform's shell: /bin/sh -c
  * on Unix, PowerShell on Windows (pwsh if installed). For os_proc_spawn();
  * release with os_free_argv().

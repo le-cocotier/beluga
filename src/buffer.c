@@ -4,6 +4,7 @@
  */
 
 #include "../include/buffer.h"
+#include "../include/lsp_install.h"
 #include "../include/breakpoints.h"
 #include "../include/ansi_parser.h"
 #include "../include/autosave.h"
@@ -1405,24 +1406,39 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   cfg = lspServerConfigFor(buf->filename);
   if (!cfg)
     return; // no server registered for this extension
-  if (lspClientForConfig(cfg))
+  lsp = lspClientForConfig(cfg);
+  if (lsp && lsp->state != LSP_NOT_STARTED)
     return; // already asked about this server: running, starting or declined
 
-  lsp = lspNewClient(cfg);
+  // LSP_NOT_STARTED: never asked yet, or asked again now that an install
+  // offered for it has ended (lsp_install.c).
+  if (!lsp)
+    lsp = lspNewClient(cfg);
   if (!lsp) {
     editorSetStatusMessage("Too many language servers (%d) - not starting %s",
                            LSP_MAX_CLIENTS, cfg->argv[0]);
     return;
   }
 
+  // Declined in this project (or its LSP-ROOT is #f): not even an install.
   known = projectLspRoot(buf, cfg->argv[0], known_root, sizeof(known_root));
   if (known == 0) {
     lsp->state = LSP_SHUTDOWN;
     return;
   }
+
+  // Not on PATH: offer to install it instead. A yes starts the install,
+  // and asks the question below once it's done.
+  if (lspInstallOffer(buf, cfg)) {
+    lsp->state = LSP_SHUTDOWN;
+    return;
+  }
+
   if (known == 1) {
-    if (lspStart(lsp, known_root, cfg->argv) != 0)
+    if (lspStart(lsp, known_root, cfg->argv) != 0) {
       editorSetStatusMessage("Failed to start %s", cfg->argv[0]);
+      lsp->state = LSP_SHUTDOWN; // don't ask again this session
+    }
     return;
   }
 
@@ -1457,10 +1473,12 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   root_str = (char *)utf8ToString(root);
   gfree(root);
 
-  if (lspStart(lsp, root_str, cfg->argv) != 0)
+  if (lspStart(lsp, root_str, cfg->argv) != 0) {
     editorSetStatusMessage("Failed to start %s", cfg->argv[0]);
-  else
+    lsp->state = LSP_SHUTDOWN; // don't ask again this session
+  } else {
     projectLspRemember(buf, cfg->argv[0], root_str);
+  }
 
   gfree(root_str);
 }

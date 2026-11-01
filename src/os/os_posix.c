@@ -719,6 +719,45 @@ void os_proc_free(OsProc *p) {
   gfree(p);
 }
 
+/**
+ * @brief Is `path` a regular file this user may execute?
+ */
+static int isExecutableFile(const char *path) {
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISREG(st.st_mode) && access(path, X_OK) == 0;
+}
+
+char *os_find_program(const char *name) {
+  const char *path = getenv("PATH");
+  const char *dir;
+  const char *end;
+  char full[OS_PATH_MAX];
+  size_t dir_len;
+
+  if (!name || !*name)
+    return NULL;
+  if (strchr(name, '/'))
+    return isExecutableFile(name) ? gstrdup(name) : NULL;
+  if (!path)
+    path = "/usr/bin:/bin";
+  for (dir = path; *dir; dir = *end ? end + 1 : end) {
+    end = strchr(dir, ':');
+    if (!end)
+      end = dir + strlen(dir);
+    dir_len = (size_t)(end - dir);
+    // An empty entry is the current directory, which execvp() would
+    // search: the same here, so the answer matches what spawning does.
+    if (dir_len == 0)
+      snprintf(full, sizeof(full), "./%s", name);
+    else if (snprintf(full, sizeof(full), "%.*s/%s", (int)dir_len, dir, name) >=
+             (int)sizeof(full))
+      continue;
+    if (isExecutableFile(full))
+      return gstrdup(full);
+  }
+  return NULL;
+}
+
 char **os_shell_argv(const char *command) {
   char **argv = gcalloc(4, sizeof(char *));
   if (!argv)

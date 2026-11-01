@@ -6,6 +6,7 @@
 #include "../include/color.h"
 #include "../include/cJSON.h"
 #include "../include/completion.h"
+#include "../include/lsp_install.h"
 #include "../include/config_load.h"
 #include "../include/data.h"
 #include "../include/describe.h"
@@ -157,6 +158,7 @@ void initBuiltins(void) {
   registerBuiltin("buffer-line-count", bufferLineCountLisp);
   registerBuiltin("buffer-filename", bufferFilenameLisp);
   registerBuiltin("lsp-server", lspRegisterServer);
+  registerBuiltin("lsp-server-install", lspRegisterInstall);
   registerBuiltin("execute-command", editorExecuteCommand);
   registerBuiltin("editor-copy-end-line", editorCopyEndLine);
   registerBuiltin("editor-switch-buffer-popup", editorSwitchBufferPopup);
