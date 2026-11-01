@@ -540,6 +540,9 @@
 (map-key "n" project-add "project")
 (map-key "x" project-remove "project")
 (map-key "X" project-prune "project")
+;; Starting a language server in a project is asked once and remembered;
+;; L forgets the answers, so the next session asks again.
+(map-key "L" project-lsp-forget "project")
 
 ;; term
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "term")

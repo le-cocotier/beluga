@@ -11,6 +11,7 @@
 #include "../include/editor_op.h"
 #include "../include/file_io.h"
 #include "../include/galloc.h"
+#include "../include/project.h"
 #include "../include/split_screen.h"
 #include "../include/utils.h"
 
@@ -1379,6 +1380,9 @@ static LspClient *lspNewClient(const struct lspServerConfig_t *cfg) {
  * is. Asked once per server: each language gets its own server, running
  * side by side, and a decline (or ESC) leaves that server's client in
  * LSP_SHUTDOWN so it isn't asked about again this session.
+ * @details Inside a project the answer is remembered (project.c), so
+ * the next session starts the server, or doesn't, without asking; the
+ * project's LSP-ROOT answers for it. ESC isn't remembered.
  * @note Called before editorOpen() loads the buffer's content — it only
  * needs the filename, not the text. See bufferMaybeSyncLsp() for buffers
  * created *after* their server's already running, which does need the text
@@ -1389,9 +1393,12 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   LspClient *lsp;
   Utf8Char *answer;
   Utf8Char *default_root;
+  Utf8Char *project_root;
   Utf8Char *root;
   char *root_str;
   char question[256];
+  char known_root[OS_PATH_MAX];
+  int known;
   if (!E.constantes.LSP)
     return;
 
@@ -1408,6 +1415,17 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
     return;
   }
 
+  known = projectLspRoot(buf, cfg->argv[0], known_root, sizeof(known_root));
+  if (known == 0) {
+    lsp->state = LSP_SHUTDOWN;
+    return;
+  }
+  if (known == 1) {
+    if (lspStart(lsp, known_root, cfg->argv) != 0)
+      editorSetStatusMessage("Failed to start %s", cfg->argv[0]);
+    return;
+  }
+
   // The server's name in the question: with several languages it's no
   // longer obvious which one is meant. No % from the command: the
   // question is a format string.
@@ -1417,15 +1435,20 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   answer = editorPrompt(question, NULL, 0);
   if (!answer || answer->length != 1 ||
       (answer->character[0] != 'y' && answer->character[0] != 'Y')) {
+    if (answer) // a no, not ESC: not asked again in this project either
+      projectLspRemember(buf, cfg->argv[0], NULL);
     gfree(answer);
     lsp->state = LSP_SHUTDOWN; // declined — don't ask again this session
     return;
   }
   gfree(answer);
 
-  default_root = buf->path ? buf->path : buf->fullname;
+  // The project's root when there is one, else the file's directory.
+  project_root = known_root[0] ? stringToUtf8((unsigned char *)known_root) : NULL;
+  default_root = project_root ? project_root : buf->path ? buf->path : buf->fullname;
   root = editorPrompt("Project root: %u", default_root,
                       1); // bPathMode=1: Tab completes paths
+  gfree(project_root);
   if (!root) {
     lsp->state = LSP_SHUTDOWN;
     return;
@@ -1436,6 +1459,8 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
 
   if (lspStart(lsp, root_str, cfg->argv) != 0)
     editorSetStatusMessage("Failed to start %s", cfg->argv[0]);
+  else
+    projectLspRemember(buf, cfg->argv[0], root_str);
 
   gfree(root_str);
 }
