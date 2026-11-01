@@ -558,30 +558,6 @@ int splitScreenSwitchPane(void) {
 }
 
 /**
- * @brief Updates the active pane's buffer
- * @param buffer_id New buffer ID for active pane
- * @return 0 on success, -1 on failure
- */
-int splitScreenSetPaneBuffer(const int buffer_id) {
-  EditorPane *active;
-  if (bufferFindById(buffer_id) == NULL) {
-    editorSetStatusMessage("Error: invalid buffer ID");
-    return -1;
-  }
-
-  active = &E.layout.panes[E.layout.active_pane];
-  active->buffer_id = buffer_id;
-  active->cursor_x = 0;
-  active->cursor_y = 0;
-  active->origin_x = 0;
-  active->origin_y = 0;
-
-  editorSetStatusMessage("Pane %d now showing buffer %d", E.layout.active_pane,
-                         buffer_id);
-  return 0;
-}
-
-/**
  * @brief Gets current screen layout
  * @return Pointer to current ScreenLayout
  */
@@ -690,12 +666,3 @@ void splitScreenLinesShifted(const struct buffer_t *buf, const int at,
       pane->saved_y += delta;
   }
 }
-
-void freeScreenLayout(ScreenLayout *layout) {
-  if (layout) {
-    gfree(layout->panes);
-    layout->panes = NULL;
-  }
-}
-
-void freePane(EditorPane *pane) { gfree(pane); }

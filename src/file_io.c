@@ -44,33 +44,6 @@ extern EditorConfig E;
 
 
 /**
- * @brief Closes the current file and resets editor state
- * @details Clears all rows, resets cursor position, scroll offsets, and file
- * metadata. Does not prompt to save unsaved changes.
- * @note Updates global editor state E
- */
-void editorCloseFile(void) {
-  EditorPane *active = splitScreenGetActivePane();
-  struct buffer_t *buf = bufferFindById(active->buffer_id);
-  int i;
-  active->cursor_x = 0;
-  active->cursor_y = 0;
-  active->x_offset = 0;
-  active->y_offset = 0;
-  for (i = 0; i < buf->numrows; ++i) {
-    gfree(buf->row[i].characters);
-  }
-  buf->numrows = 0;
-  gfree(buf->row);
-  buf->row = NULL;
-  buf->dirty = 0;
-  gfree(buf->filename);
-  buf->filename = NULL;
-  END_OF_STRING(E.status_msg[0]);
-  E.status_msg_time = 0;
-}
-
-/**
  * @brief Expands raw tab bytes (0x09) in one line into spaces, aligned to
  * real tab stops (every TAB_LENGTH columns), before the line ever reaches
  * a Row.

@@ -675,21 +675,6 @@ Utf8Char* utf8ReadFile(const Utf8Char* file_name)
 }
 
 /**
- * @brief concat the src in the dest
- * @param dest second utf8 string
- * @param src first utf8 string
- */
-void utf8Cat(Utf8Char** dest, const Utf8Char* src)
-{
-    Utf8Char* temp = NULL;
-    temp = (Utf8Char*) grealloc(*dest, (utf8StringLen(src) + utf8StringLen(*dest) - 1) * sizeof(Utf8Char));
-    if (temp == NULL)
-        return;
-    *dest = temp;
-    memcpy(*dest + utf8StringLen(*dest) - 1, src, utf8StringLen(src) * sizeof(Utf8Char));
-}
-
-/**
  * @brief Return a pointer to the last slash of the given string or NULL if no slash is found
  */
 const Utf8Char *lastSlashUtf8(const Utf8Char * string){

@@ -20,8 +20,6 @@ void memoryInspectorRefresh(void);
 // underlying gutils list itself is never reordered.
 void memoryInspectorCycleSort(void);
 
-void memoryReport(void);
-
 // Prompts for a file path (ESC cancels) and writes the current sorted
 // snapshot to it as plain text.
 void memoryInspectorExport(void);

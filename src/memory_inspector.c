@@ -234,42 +234,6 @@ void memoryInspectorCycleSort(void) {
   memoryInspectorRefresh();
 }
 
-void memoryReport(void) {
-  char *memory_report_location;
-  FILE *f;
-  int count;
-  struct dataBlock_t **sorted;
-  size_t total;
-  int i;
-  char row[160];
-
-  memory_report_location = utilFormat("%s/memory_report.log", utilBelugaDir());
-
-  f = fopen(memory_report_location, "w");
-  if (!f) {
-    gfree(memory_report_location);
-    return;
-  }
-
-  sorted = collectSortedBlocks(&count);
-  total = 0;
-  for (i = 0; i < count; i++)
-    total += sorted[i]->size;
-
-  fprintf(f, "%d tracked block%s, %zu bytes total, sorted by %s\n\n", count,
-          count == 1 ? "" : "s", total, sortModeLabel(s_sort_mode));
-  for (i = 0; i < count; i++) {
-    formatRow(row, sizeof(row), sorted[i]);
-    fprintf(f, "%s\n", row);
-  }
-  gfree(sorted);
-  fclose(f);
-
-  editorSetStatusMessage("wrote %d block%s to %s", count, count == 1 ? "" : "s",
-                         memory_report_location);
-  gfree(memory_report_location);
-}
-
 void memoryInspectorExport(void) {
   Utf8Char *input =
       editorPrompt("Export memory snapshot to: %u (ESC to cancel)", NULL, 0);

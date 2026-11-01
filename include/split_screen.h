@@ -82,13 +82,6 @@ int splitScreenPaneAt(int row, int col);
 void splitScreenFocusPane(int index);
 
 /**
- * @brief Updates the active pane's buffer
- * @param buffer_id New buffer ID for active pane
- * @return 0 on success, -1 on failure
- */
-int splitScreenSetPaneBuffer(int buffer_id);
-
-/**
  * @brief Gets current screen layout
  * @return Pointer to current ScreenLayout
  */
@@ -111,9 +104,5 @@ void splitScreenSaveCursor(void);
 // Rows were inserted (delta > 0) or removed (delta < 0) at row `at` of
 // `buf`: the cursors the other panes keep in it move with their lines.
 void splitScreenLinesShifted(const struct buffer_t *buf, int at, int delta);
-
-void freePane(EditorPane *pane);
-void freeScreenLayout(ScreenLayout *layout);
-
 
 #endif

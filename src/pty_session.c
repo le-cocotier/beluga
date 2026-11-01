@@ -68,11 +68,6 @@ long ptySessionPid(const struct buffer_t* buf)
     return buf->pty ? os_pty_pid(buf->pty) : -1;
 }
 
-int ptySessionIsAlive(struct buffer_t* buf)
-{
-    return buf->pty && os_pty_alive(buf->pty);
-}
-
 void ptySessionClose(struct buffer_t* buf)
 {
     if (buf->pty)

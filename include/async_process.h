@@ -27,10 +27,6 @@ int asyncProcessStreams(OsStream **streams, int max);
 // process whose output has reached its end. Call once per loop iteration.
 void asyncProcessPoll(void);
 
-// Number of processes still running — shown in the status bar by callers
-// that want to say "working…".
-int asyncProcessCount(void);
-
 // The callbacks of the running processes, for the collector (lisp_gc.c).
 void asyncProcessVisitLispRoots(LispRootVisitor visit, LispContext ctx);
 

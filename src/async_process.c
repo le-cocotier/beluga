@@ -74,15 +74,6 @@ int asyncProcessStreams(OsStream **streams, const int max) {
   return n;
 }
 
-int asyncProcessCount(void) {
-  int i;
-  int count = 0;
-  for (i = 0; i < MAX_ASYNC_PROCESSES; i++)
-    if (s_procs[i].in_use)
-      count++;
-  return count;
-}
-
 /**
  * @brief Appends a chunk to a process's collected output, up to the cap.
  */

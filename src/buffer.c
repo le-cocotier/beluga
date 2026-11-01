@@ -1296,15 +1296,6 @@ int bufferClose(int buff_id) {
 }
 
 /**
- * @brief Gets the current active buffer
- * @return Pointer to current buffer_t, NULL if none
- */
-struct buffer_t *bufferGetCurrent(void) {
-  EditorPane *active = splitScreenGetActivePane();
-  return bufferFindById(active->buffer_id);
-}
-
-/**
  * @brief Finds the registered lsp-server config matching a filename's
  * extension (see the Lisp `lsp-server` builtin), or NULL if none was
  * registered for it.
@@ -1483,40 +1474,6 @@ void bufferMaybeSyncLsp(struct buffer_t *buf) {
 }
 
 /**
- * @brief Lists all open buffers
- * @details Prints buffer information to status message
- * @return Number of open buffers
- */
-int bufferListAll(void) {
-  char buf[256] = "";
-  int offset;
-  EditorPane *active;
-  int first_buffer_id;
-  struct buffer_t *b;
-  char marker;
-  char *name;
-  if (E.number_of_buffer == 0) {
-    editorSetStatusMessage("No buffers open");
-    return 0;
-  }
-
-  offset = 0;
-  active = splitScreenGetActivePane();
-  first_buffer_id = E.buffers->buffer_id;
-  b = E.buffers;
-  do {
-    marker = (b->buffer_id == active->buffer_id) ? '*' : ' ';
-    name = b->filename ? (char *)utf8ToString(b->filename) : NULL;
-    offset += snprintf(&buf[offset], sizeof(buf) - offset, "%c%d:%s ", marker,
-                       b->buffer_id, name ? name : "[No Name]");
-    gfree(name);
-    b = b->next;
-  } while (b->buffer_id != first_buffer_id && offset < (int)sizeof(buf) - 1);
-  editorSetStatusMessage("Buffers: %s", buf);
-  return E.number_of_buffer;
-}
-
-/**
  * @brief Saves current buffer to disk
  * @return 0 on success, -1 on failure
  */
@@ -1529,33 +1486,6 @@ int bufferSave(void) {
 
   editorSave();
   return 0;
-}
-
-/**
- * @brief Saves all buffers to disk
- * @details Iterates through all buffers, saves each one
- * @return 0 on success, -1 on failure
- */
-int bufferSaveAll(void) {
-  int saved = 0;
-  int failed = 0;
-
-  int first_buffer_id = E.buffers[0].buffer_id;
-  struct buffer_t *b = E.buffers;
-
-  do {
-    if (bufferSwitch(b->buffer_id) == 0) {
-      if (E.dirty && bufferSave() == 0) {
-        saved++;
-      }
-    } else {
-      failed++;
-    }
-    b = b->next;
-  } while (b->buffer_id != first_buffer_id);
-
-  editorSetStatusMessage("Saved %d buffers (%d failed)", saved, failed);
-  return (failed == 0) ? 0 : -1;
 }
 
 /**
