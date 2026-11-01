@@ -12,6 +12,7 @@
 #include "../include/ansi_parser.h"
 #include "../include/buffer.h"
 #include "../include/completion.h"
+#include "../include/lsp_install.h"
 #include "../include/dap.h"
 #include "../include/data.h"
 #include "../include/input.h"
@@ -201,6 +202,7 @@ void editorTick(void) {
     lspCompletionDebounceTick();
     lspSyncDebounceTick();
     lspDecorationsTick();
+    lspInstallTick();
   }
   dapTick();
   autosaveTick();

@@ -128,6 +128,17 @@
 ;; bundled, so enabling one is just uncommenting it (or adding the line to
 ;; personal-config). Calling (lsp-server ...) directly here also works fine
 ;; for a language with no package of its own yet.
+;;
+;; When a file's server isn't on PATH, beluga offers to install it, if the
+;; package says how with
+;; (lsp-server-install "command" "os" "shell command" ["os" "shell command"]...)
+;; where os is "linux", "darwin", "windows", "unix" (all but Windows) or
+;; "any". Of the commands for your system, the first whose own program is
+;; installed (npm, brew, apt-get...) is offered; it runs in a terminal pane,
+;; *lsp-install*, where a sudo password can be typed. A later call's
+;; commands are tried first, so one in personal-config, e.g.
+;; (lsp-server-install "pyright-langserver" "any" "pipx install pyright"),
+;; is offered instead of the package's.
 ;; (add-package "c")
 ;; (add-package "python")   ; needs pyright-langserver on PATH
 ;; (add-package "rust")     ; needs rust-analyzer on PATH

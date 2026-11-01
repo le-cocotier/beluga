@@ -38,6 +38,7 @@
 
 #include "../include/buffer_switcher.h"
 #include "../include/completion.h"
+#include "../include/lsp_install.h"
 #include "../include/config_load.h"
 #include "../include/init.h"
 #include "../include/list_popup.h"
@@ -280,6 +281,7 @@ void bFree_structs(void) {
   gfree(E.lsp_servers);
   E.lsp_servers = NULL;
   E.number_of_lsp_servers = 0;
+  lspInstallFree(); // (lsp-server-install ...) registrations
 
   editorFreeScreenCache();
 }

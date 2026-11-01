@@ -6,6 +6,9 @@
 ;; Needs pyright-langserver on PATH: `npm install -g pyright`.
 
 (lsp-server "py" "python" "pyright-langserver" "--stdio")
+(lsp-server-install "pyright-langserver"
+                    "any" "npm install -g pyright"
+                    "any" "pipx install pyright")
 ;; The debugger (F5, with the script's path as the program): debugpy,
 ;; `pip install debugpy`.
 (dap-adapter "py" (if (string=? (system-type) "windows") "python" "python3")

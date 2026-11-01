@@ -35,6 +35,8 @@
 (lsp-server "mts" "typescript"      "typescript-language-server" "--stdio")
 (lsp-server "cts" "typescript"      "typescript-language-server" "--stdio")
 (lsp-server "tsx" "typescriptreact" "typescript-language-server" "--stdio")
+(lsp-server-install "typescript-language-server"
+                    "any" "npm install -g typescript-language-server typescript")
 
 ;; .json is deliberately not registered here: tsserver isn't a JSON
 ;; language server. If you want schema-aware JSON, that's a separate

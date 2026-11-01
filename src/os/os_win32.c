@@ -471,6 +471,69 @@ static int resolveProgram(const char *name, wchar_t *out, const DWORD out_len, i
     return found;
 }
 
+/**
+ * @brief The Path value under `root`\`subkey` in the registry, with its
+ * %VARIABLES% expanded, appended to `b` (after a ';' if `b` isn't empty).
+ */
+static void appendRegistryPath(HKEY root, const wchar_t *subkey, WBuf *b)
+{
+    const DWORD max_chars = 32767; // an environment variable's limit
+    wchar_t *raw = galloc(max_chars * sizeof(wchar_t));
+    wchar_t *expanded = galloc(max_chars * sizeof(wchar_t));
+    DWORD size = max_chars * sizeof(wchar_t);
+    DWORD n;
+
+    if (raw && expanded &&
+        RegGetValueW(root, subkey, L"Path", RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
+                     NULL, raw, &size) == ERROR_SUCCESS)
+    {
+        n = ExpandEnvironmentStringsW(raw, expanded, max_chars);
+        if (n > 0 && n <= max_chars)
+        {
+            if (b->len > 0)
+                wbufAppend(b, L";");
+            wbufAppend(b, expanded);
+        }
+    }
+    gfree(raw);
+    gfree(expanded);
+}
+
+char *os_find_program(const char *name)
+{
+    wchar_t found[MAX_PATH * 2];
+    WBuf path;
+    int is_batch;
+    char *utf8;
+
+    if (!name || !*name)
+        return NULL;
+    if (!resolveProgram(name, found, sizeof(found) / sizeof(found[0]), &is_batch))
+    {
+        // Installed since the editor started? Installers change the PATH
+        // in the registry, which a running process never sees. The
+        // registry's entries go after this process's own, so whatever the
+        // shell beluga started from added (a venv, ...) still comes first.
+        memset(&path, 0, sizeof(path));
+        if (_wgetenv(L"PATH"))
+            wbufAppend(&path, _wgetenv(L"PATH"));
+        appendRegistryPath(HKEY_LOCAL_MACHINE,
+                           L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+                           &path);
+        appendRegistryPath(HKEY_CURRENT_USER, L"Environment", &path);
+        if (!path.s)
+            return NULL;
+        SetEnvironmentVariableW(L"PATH", path.s);
+        _wputenv_s(L"PATH", path.s); // _wgetenv() reads the CRT's copy
+        gfree(path.s);
+        if (!resolveProgram(name, found, sizeof(found) / sizeof(found[0]), &is_batch))
+            return NULL;
+    }
+    utf8 = toUtf8(found);
+    backslashesToSlashes(utf8);
+    return utf8;
+}
+
 static int comspec(wchar_t *out, const DWORD out_len)
 {
     DWORD n = GetEnvironmentVariableW(L"ComSpec", out, out_len);

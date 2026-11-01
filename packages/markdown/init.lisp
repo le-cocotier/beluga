@@ -11,6 +11,9 @@
 
 (lsp-server "md" "markdown" "marksman" "server")
 (lsp-server "markdown" "markdown" "marksman" "server")
+(lsp-server-install "marksman"
+                    "unix"  "brew install marksman"
+                    "linux" "sudo snap install marksman")
 
 (define markdown--extensions (list "md" "markdown"))
 

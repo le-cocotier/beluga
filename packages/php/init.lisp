@@ -13,6 +13,7 @@
 ;; nothing beluga's LSP integration calls into needs a license.
 
 (lsp-server "php" "php" "intelephense" "--stdio")
+(lsp-server-install "intelephense" "any" "npm install -g intelephense")
 
 (define (php--line-starts-with? s prefix)
   (let ((s-len (string-length s)) (p-len (string-length prefix)))

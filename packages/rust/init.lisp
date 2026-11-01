@@ -7,6 +7,9 @@
 ;; `rustup component add rust-analyzer`).
 
 (lsp-server "rs" "rust" "rust-analyzer")
+(lsp-server-install "rust-analyzer"
+                    "any"    "rustup component add rust-analyzer"
+                    "darwin" "brew install rust-analyzer")
 
 (define (rust--line-starts-with? s prefix)
   (let ((s-len (string-length s)) (p-len (string-length prefix)))
