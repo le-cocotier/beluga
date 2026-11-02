@@ -19,9 +19,16 @@ void lspUiDrawDiagnostics(struct abuf *ab, DiagnosticList *diags,
 // Input handling — returns 1 if the key was consumed by the popup
 int lspUiHandleKey(CompletionPopup *popup, const Utf8Char *key);
 
-// Parse clangd JSON into our structs
+// Parse a completion response into the popup. `typed` is the word before
+// the cursor: items that don't match it are dropped and the rest ranked
+// (prefix first, then sortText), since most servers leave that to the
+// client. NULL or "" keeps everything.
 void lspParseCompletion(const char *json, CompletionPopup *popup,
-                        int screen_x, int screen_y);
+                        int screen_x, int screen_y, const char *typed);
+
+// 0/1/2 for how well `candidate` matches `typed` (exact-case prefix,
+// prefix, subsequence), -1 when it doesn't.
+int lspCompletionMatchScore(const char *candidate, const char *typed);
 void lspParseDiagnostics(const char *json, DiagnosticList *diags, int buffer_id);
 
 // git_status is drawn when there's no diagnostic on this line — pass

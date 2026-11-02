@@ -6,6 +6,8 @@
 #include "../include/data.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include "../include/galloc.h"
 
 // We use cJSON — drop cJSON.c + cJSON.h into src/ and include/
 #include "../include/cJSON.h"
@@ -452,19 +454,81 @@ const char *lspUiDiagnosticAtCursor(DiagnosticList *diags,
 
 // ─── Parse clangd JSON → our structs ─────────────────────────────────────────
 
+// One item while the response is being ranked: the popup's fields, plus
+// what it is sorted and filtered on.
+typedef struct {
+    CompletionItem item;
+    char sort_text[64];
+    int score;   // 0 exact-case prefix, 1 prefix, 2 subsequence
+    int index;   // position in the server's list, the last tie-break
+} RankedCompletion;
+
+static int asciiLower(const int c) {
+    return (c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c;
+}
+
+/**
+ * @brief How well `candidate` matches what was typed, or -1 for not at all.
+ * @details 0: starts with `typed` as typed. 1: starts with it ignoring
+ * case. 2: the typed characters appear in it in order, the first one at
+ * its start (ignoring case) — "gEBI" for getElementById. Nothing typed
+ * matches everything with 0.
+ */
+int lspCompletionMatchScore(const char *candidate, const char *typed) {
+    size_t n = strlen(typed);
+    const char *c;
+    const char *t;
+    if (n == 0)
+        return 0;
+    if (strncmp(candidate, typed, n) == 0)
+        return 0;
+    for (c = candidate, t = typed; *t && *c; c++, t++)
+        if (asciiLower((unsigned char) *c) != asciiLower((unsigned char) *t))
+            break;
+    if (*t == '\0')
+        return 1;
+    if (asciiLower((unsigned char) candidate[0]) != asciiLower((unsigned char) typed[0]))
+        return -1;
+    for (c = candidate, t = typed; *c && *t; c++)
+        if (asciiLower((unsigned char) *c) == asciiLower((unsigned char) *t))
+            t++;
+    return *t == '\0' ? 2 : -1;
+}
+
+static int compareRanked(const void *a, const void *b) {
+    const RankedCompletion *x = (const RankedCompletion *) a;
+    const RankedCompletion *y = (const RankedCompletion *) b;
+    int cmp;
+    if (x->score != y->score)
+        return x->score - y->score;
+    cmp = strcmp(x->sort_text, y->sort_text);
+    if (cmp != 0)
+        return cmp;
+    return x->index - y->index;
+}
+
 void lspParseCompletion(const char *json, CompletionPopup *popup,
-                        const int screen_x, const int screen_y) {
+                        const int screen_x, const int screen_y,
+                        const char *typed) {
     cJSON *root;
     cJSON *result;
     cJSON *items;
     cJSON *item;
     CompletionItem *ci;
+    RankedCompletion *ranked;
+    int capacity;
+    int count = 0;
+    int score;
+    int i;
     cJSON *label;
     cJSON *insertText;
     cJSON *detail;
     cJSON *kind;
+    cJSON *filter_text;
+    cJSON *sort_text;
     const char *raw_label;
     const char *raw_insert;
+    const char *filter;
     cJSON *text_edit;
     cJSON *new_text;
     cJSON *range;
@@ -473,6 +537,7 @@ void lspParseCompletion(const char *json, CompletionPopup *popup,
     cJSON *line_it;
     cJSON *scol_it;
     cJSON *ecol_it;
+    if (!typed) typed = "";
     popup->count    = 0;
     popup->selected = 0;
     popup->origin_x = screen_x + 1;
@@ -488,14 +553,27 @@ void lspParseCompletion(const char *json, CompletionPopup *popup,
                  : cJSON_GetObjectItem(result, "items");
     if (!items) { cJSON_Delete(root); return; }
 
+    // The popup holds COMPLETION_MAX_ITEMS, and which ones make it matters.
+    // clangd filters and ranks on its side, so its list is already the
+    // right one. typescript-language-server (like most servers) sends
+    // every name in scope, unfiltered, and leaves filtering by the typed
+    // word and ordering by sortText to the client: taking its first 16
+    // showed `_construct`, `_destroy`, ... for `res.st`. So: keep the items
+    // that match the word before the cursor, rank them, then take the top.
+    capacity = cJSON_GetArraySize(items);
+    if (capacity <= 0) { cJSON_Delete(root); return; }
+    ranked = (RankedCompletion *) galloc((size_t) capacity * sizeof(RankedCompletion));
+    if (!ranked) { cJSON_Delete(root); return; }
+
     cJSON_ArrayForEach(item, items) {
-        if (popup->count >= COMPLETION_MAX_ITEMS) break;
-        ci = &popup->items[popup->count++];
+        if (count >= capacity) break;
 
         label = cJSON_GetObjectItem(item, "label");
         insertText = cJSON_GetObjectItem(item, "insertText");
         detail = cJSON_GetObjectItem(item, "detail");
         kind = cJSON_GetObjectItem(item, "kind");
+        filter_text = cJSON_GetObjectItem(item, "filterText");
+        sort_text = cJSON_GetObjectItem(item, "sortText");
 
         raw_label = (label && cJSON_IsString(label)) ? label->valuestring : "";
         // clangd prefixes labels with a space, or with "•" (U+2022) when
@@ -504,7 +582,21 @@ void lspParseCompletion(const char *json, CompletionPopup *popup,
         if (raw_label[0] == ' ') raw_label++;
         else if (strncmp(raw_label, "\xe2\x80\xa2", 3) == 0) raw_label += 3;
 
-        memset(ci, 0, sizeof(*ci));
+        filter = (filter_text && cJSON_IsString(filter_text) && filter_text->valuestring[0])
+                     ? filter_text->valuestring : raw_label;
+        score = lspCompletionMatchScore(filter, typed);
+        if (score < 0)
+            continue;
+
+        memset(&ranked[count], 0, sizeof(ranked[count]));
+        ranked[count].score = score;
+        ranked[count].index = count;
+        // No sortText: the label is the order, as the spec says.
+        strncpy(ranked[count].sort_text,
+                (sort_text && cJSON_IsString(sort_text)) ? sort_text->valuestring : raw_label,
+                sizeof(ranked[count].sort_text) - 1);
+
+        ci = &ranked[count].item;
         strncpy(ci->label,  raw_label,                          127);
         strncpy(ci->detail, (detail && cJSON_IsString(detail)) ? detail->valuestring : "", 63);
 
@@ -546,7 +638,14 @@ void lspParseCompletion(const char *json, CompletionPopup *popup,
             ci->kind = 0;
         else
             ci->kind = kind->valueint;
+        count++;
     }
+
+    qsort(ranked, (size_t) count, sizeof(RankedCompletion), compareRanked);
+    for (i = 0; i < count && i < COMPLETION_MAX_ITEMS; i++)
+        popup->items[i] = ranked[i].item;
+    popup->count = i;
+    gfree(ranked);
 
     popup->visible = (popup->count > 0);
     cJSON_Delete(root);

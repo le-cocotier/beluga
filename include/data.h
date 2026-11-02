@@ -318,6 +318,11 @@ struct lsp_client_t
     // ── State ─────────────────────────────────────────────────────────────────
     LspState state;
     int next_id;
+    // What the server answered `initialize` with when it refused to start
+    // (e.g. typescript-language-server without a TypeScript it accepts),
+    // "" otherwise. Reported again, and the server retried, at the next
+    // file of its language (bufferMaybeStartLsp()).
+    char start_error[256];
 
     // ── Pending requests ──────────────────────────────────────────────────────
     LspPending pending[LSP_MAX_PENDING];

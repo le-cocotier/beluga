@@ -160,7 +160,7 @@ test('galloc', find_program('tools/check_galloc.sh'),
 # code; test/test.c stands in for main.c's globals. On Windows they get
 # beluga.exe's manifest too, so file names are UTF-8 for them as well.
 foreach t : ['utf8', 'keys', 'buffer', 'ansi_parser', 'os', 'completion', 'packages', 'highlight', 'lsp_symbols', 'breakpoints', 'lisp_lib',
-           'utils', 'jsonrpc_stream', 'daemon_frame', 'macro', 'settings', 'lsp_install']
+           'utils', 'jsonrpc_stream', 'daemon_frame', 'macro', 'settings', 'lsp_install', 'lsp_completion', 'lsp_start']
   test(t, executable('test_' + t,
     files('test/test_' + t + '.c', 'test/test.c') + extra_sources,
     c_args : core_args,

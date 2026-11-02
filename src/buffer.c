@@ -1407,6 +1407,12 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   if (!cfg)
     return; // no server registered for this extension
   lsp = lspClientForConfig(cfg);
+  if (lsp && lsp->state == LSP_SHUTDOWN && lsp->start_error[0] && !lsp->proc) {
+    // It refused to initialize last time (lsp_on_initialize_error()):
+    // whatever it lacked may be there now, so try again. Still failing,
+    // it says why again.
+    lsp->state = LSP_NOT_STARTED;
+  }
   if (lsp && lsp->state != LSP_NOT_STARTED)
     return; // already asked about this server: running, starting or declined
 
