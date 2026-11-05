@@ -370,3 +370,7 @@ the file and line that allocated them, and a debug build (`install.sh --debug`,
 `install.ps1 -DebugBuild`) writes what is still allocated at exit to
 `~/.beluga/memory-at-exit.log`, grouped by allocation site.
 
+
+## License
+
+MIT, see [LICENSE](LICENSE). `include/lisp.h` and `src/cJSON.c` are vendored, also under MIT.

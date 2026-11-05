@@ -55,7 +55,7 @@ jobs:
         run: |
           PKG="beluga-${{ github.ref_name }}-windows-x64"
           mkdir -p "dist/$PKG"
-          cp build-windows/beluga.exe install.ps1 "dist/$PKG/"
+          cp build-windows/beluga.exe install.ps1 LICENSE "dist/$PKG/"
           cp windows/README.txt "dist/$PKG/README.txt"
           cp -r assets config packages "dist/$PKG/"
           # The editor writes this next to wherever it runs; never ship one.
