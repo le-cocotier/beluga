@@ -21,6 +21,7 @@
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
+#include "../include/os.h"
 #include "../include/utils.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,6 +81,7 @@ void initBuiltins(void) {
   registerBuiltin("package-state", l_packageState);
   registerBuiltin("package-version", l_packageVersion);
   registerBuiltin("package-directory", l_packageDirectory);
+  registerBuiltin("bundled-package-directory", l_bundledPackageDirectory);
   registerBuiltin("beluga-directory", l_belugaDirectory);
   registerBuiltin("beluga-version", l_belugaVersion);
   registerBuiltin("version-compare", l_versionCompare);
@@ -421,6 +423,47 @@ static void initBreakpointStore(void) {
   breakpointsSetStore(path);
 }
 
+/**
+ * @brief Copies one file of an installed beluga's data into ~/.beluga,
+ * unless it's there already: never overwrites what the user has.
+ */
+static void seedFile(const char *data_dir, const char *from, const char *to) {
+  OsFileInfo info;
+  char err[256];
+  char parent[OS_PATH_MAX];
+  char *src = utilFormat("%s/%s", data_dir, from);
+  char *dest = utilFormat("%s/%s", utilBelugaDir(), to);
+  const char *sources[1];
+
+  if (src && dest && os_file_info(dest, &info) != 0 && os_file_info(src, &info) == 0) {
+    utilDirname(dest, parent, sizeof(parent));
+    sources[0] = src;
+    if (os_mkdirs(parent, err, sizeof(err)) != 0 ||
+        os_copy_tree(sources, 1, dest, err, sizeof(err)) != 0)
+      appDebug("[INIT] couldn't create %s from %s: %s\n", dest, src, err);
+  }
+  gfree(src);
+  gfree(dest);
+}
+
+/**
+ * @brief A beluga installed by a package manager (Homebrew, winget, a
+ * .deb, ...) gets no install.sh to set up ~/.beluga, so its first start
+ * does it: the default config/init.lisp, a personal-config to edit and the
+ * splash screen, each only when missing. The bundled packages are not
+ * copied: add-package finds them in the install itself (utilDataDir()), so
+ * they stay in step with the editor through upgrades, and a copy in
+ * ~/.beluga/packages still wins.
+ */
+static void seedUserDir(void) {
+  const char *data_dir = utilDataDir();
+  if (!data_dir || !utilBelugaDir())
+    return;
+  seedFile(data_dir, "config/init.lisp", "config/init.lisp");
+  seedFile(data_dir, "config/personal-config.lisp", "packages/personal-config/init.lisp");
+  seedFile(data_dir, "assets/beluga.txt", "assets/beluga.txt");
+}
+
 void initEditor() {
   char *home;
   EditorPane *active = NULL;
@@ -456,6 +499,7 @@ void initEditor() {
   }
   gfree(home);
 
+  seedUserDir();
   E.init_file_path = utilFormat("%s/config/init.lisp", utilBelugaDir());
   if (!E.init_file_path) {
     die("out of memory");

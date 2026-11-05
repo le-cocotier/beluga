@@ -1,0 +1,62 @@
+# GitHub release, for the mirror of this repository on GitHub.
+#
+# Pushing a tag that starts with "v" builds the same files as the Gitea
+# release (.gitea/workflows/release-windows.yml), with the same scripts,
+# and attaches them to a GitHub release for that tag:
+#   beluga-<tag>-windows-x64.zip     packaging/windows/build-zip.sh
+#   beluga-<version>.tar.gz          packaging/source-tarball.sh
+#   beluga_<version>_amd64.deb       packaging/linux/build-packages.sh
+#   beluga-<version>-1.x86_64.rpm    packaging/linux/build-packages.sh
+#
+# It only builds and releases: the Gitea workflow is the one that publishes
+# to Gitea's package registries, and the Homebrew, winget and AUR recipes
+# point at the Gitea release. Gitea itself never runs this file: it uses
+# .gitea/workflows when that folder exists.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build gcc mingw-w64 zip rpm
+
+      - name: Check the OS boundary
+        run: tools/check_os_boundary.sh .
+
+      - name: Build the Windows zip
+        run: packaging/windows/build-zip.sh "$GITHUB_REF_NAME" dist
+
+      - name: Build the source tarball, .deb and .rpm
+        run: |
+          packaging/source-tarball.sh "$GITHUB_REF_NAME" dist
+          packaging/linux/build-packages.sh "$GITHUB_REF_NAME" dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Reuse the release on a re-run (or one made by hand, with notes),
+          # replacing files of the same name.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.zip dist/*.tar.gz dist/*.deb dist/*.rpm --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.tar.gz dist/*.deb dist/*.rpm \
+              --title "Beluga $GITHUB_REF_NAME" --verify-tag \
+              --notes "Windows: winget install ArthurBarraux.Beluga, or download the zip, unzip it and run install.ps1. Linux: the .deb or .rpm below. macOS: brew (see the README)."
+          fi

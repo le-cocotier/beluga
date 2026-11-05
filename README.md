@@ -1,173 +1,149 @@
 # Beluga
 
-Beluga is a project of CLI text editor that uses lisp as configuration language.
+**A terminal text editor written in C and configured in Lisp.** Language servers, a
+debugger, git, a package manager and terminal panes, in one small binary that runs the same
+on Linux, macOS and Windows.
 
-## Requirements
+<!-- Not to be confused with the Beluga proof environment (logic/type theory), the
+     Beluga web framework, or the Airbus aircraft. -->
 
-You will only need **meson** and a **C compiler** to compile the editor.
+<!-- TODO: a screenshot or GIF of an editing session (LSP completion, the *debug* panel),
+     saved as docs/screenshot.png (not assets/, which is installed with the editor), then:
+![Beluga editing C, with LSP completion and the debugger panel](docs/screenshot.png)
+-->
 
-## Installation
+```sh
+winget install ArthurBarraux.Beluga                    # Windows
+brew install beluga                                    # macOS, Linux (after the tap below)
+sudo apt install beluga / sudo dnf install beluga      # Debian, Ubuntu / Fedora (after adding the repository below)
+yay -S beluga-editor                                   # Arch Linux (AUR)
+```
+
+## Features
+
+- **Configured in Lisp.** `~/.beluga/config/init.lisp` is a program: settings, key bindings,
+  hooks and whole packages are Lisp. Errors in it are reported with file and line, and the rest
+  still loads.
+- **Language servers (LSP)**: completion, signature help, go to definition, find references,
+  diagnostics inline and as a list, document outline, project-wide symbols, inlay hints, sticky
+  scroll and breadcrumbs. One server per language, side by side; beluga offers to install a
+  missing one.
+- **Debugger (DAP)**: gdb, lldb-dap, debugpy or any Debug Adapter Protocol server.
+  Breakpoints in the gutter that follow your edits, conditions, hit counts, logpoints, watches,
+  inline variable values.
+- **git**: status, hunk staging, commits, push and pull, log and branches, colored diffs.
+- **Package manager**: `use-package` with versions, a lockfile and dependencies.
+- **Projects**: per-project config, project search, query-replace across a project, a file finder.
+- **Daemon mode**: several terminal windows on one editor, a project per window.
+- **Terminal panes** that run full-screen programs, keyboard macros, mouse support, autosave and
+  crash recovery, `describe-key` and friends.
+- **Native everywhere**: plain C99, no dependencies beyond the C library. Windows 10/11 runs it
+  in Windows Terminal without WSL.
+
+## Install
+
+### macOS and Linux: Homebrew
+
+```sh
+brew tap arthur/beluga https://git.giorgio-nas.fr/arthur/homebrew-beluga.git
+brew install beluga
+```
+
+### Windows: winget
+
+```powershell
+winget install ArthurBarraux.Beluga
+```
+
+Or download `beluga-<version>-windows-x64.zip` from the
+[Releases](https://git.giorgio-nas.fr/arthur/beluga/releases) page, unzip it and run
+`install.ps1` in it (right-click → *Run with PowerShell*). `README.txt` in the zip has the
+details.
+
+### Debian and Ubuntu
+
+```sh
+sudo curl -fsSL https://git.giorgio-nas.fr/api/packages/arthur/debian/repository.key \
+     -o /etc/apt/keyrings/beluga.asc
+echo "deb [signed-by=/etc/apt/keyrings/beluga.asc] https://git.giorgio-nas.fr/api/packages/arthur/debian stable main" \
+  | sudo tee /etc/apt/sources.list.d/beluga.list
+sudo apt update && sudo apt install beluga
+```
+
+### Fedora, RHEL and openSUSE
+
+```sh
+sudo curl -fsSL https://git.giorgio-nas.fr/api/packages/arthur/rpm.repo -o /etc/yum.repos.d/beluga.repo
+sudo dnf install beluga
+# openSUSE: sudo zypper addrepo https://git.giorgio-nas.fr/api/packages/arthur/rpm.repo && sudo zypper install beluga
+```
+
+The `.deb` and `.rpm` files are also attached to every
+[release](https://git.giorgio-nas.fr/arthur/beluga/releases), for x86_64.
+
+### Arch Linux
+
+From the AUR, as `beluga-editor`:
+
+```sh
+yay -S beluga-editor     # or paru, or git clone https://aur.archlinux.org/beluga-editor.git && makepkg -si
+```
+
 ### From source
-Here is the installation line for development version:
 
-```git clone https://git.giorgio-nas.fr/arthur/beluga.git && cd beluga && meson setup build && meson compile -C build```
+You need **meson**, **ninja** and a **C compiler**. The install script builds beluga, installs it
+to `/usr/local/bin` and sets up `~/.beluga`, offering to install anything missing with your
+package manager (Homebrew, apt, dnf, pacman, zypper or apk):
 
-The executable file will be `build/beluga`. Feel free to add it to your path.
+```sh
+git clone https://git.giorgio-nas.fr/arthur/beluga.git && cd beluga && ./install.sh
+```
 
-### From installation script ( prefered )
-
-Just clone the repo and execute the script `install.sh`. It builds beluga, installs it to
-`/usr/local/bin` (`--bindir DIR` for somewhere else; it tells you if that isn't on your PATH)
-and sets up `~/.beluga`. It offers to install anything missing (meson, ninja, git, a C compiler)
-with your package manager: Homebrew, apt, dnf, pacman, zypper or apk.
-Run `./install.sh --help` to see its options (custom install location, non-interactive mode, skipping packages, debug builds, ...).
-
+- `./install.sh --help` lists its options (install location, non-interactive mode, skipping
+  packages, debug builds, ...).
 - `./install.sh --update` pulls the latest version of your clone and installs it.
 - `./install.sh --uninstall` removes the binary but keeps your config and packages in
   `~/.beluga`; add `--purge` to delete those too.
 
-### Windows
+Or by hand: `meson setup build && meson compile -C build` gives `build/beluga`, and
+`meson install -C build` installs it with its default config and packages (in
+`<prefix>/share/beluga`), like the packages above do.
 
-Beluga runs natively on Windows 10 (1809 or later) and 11, in Windows Terminal or any
-Windows console — no WSL needed.
+On Windows, from PowerShell in a clone: `powershell -ExecutionPolicy Bypass -File .\install.ps1`.
+It is the Windows counterpart of `install.sh` (`Get-Help .\install.ps1 -Detailed` lists its
+options) and offers to install what's missing with `winget`: [Meson](https://mesonbuild.com)
+(Ninja included) and MinGW-w64 gcc ([WinLibs](https://winlibs.com); MSYS2's UCRT64 gcc works
+too; MSVC isn't supported). Already have a `beluga.exe`, e.g. from CI?
+`.\install.ps1 -Binary path\to\beluga.exe` installs it without compiling anything.
 
-The simplest way: download `beluga-<version>-windows-x64.zip` from the
-[Releases](https://git.giorgio-nas.fr/arthur/beluga/releases) page, unzip it, and run
-`install.ps1` in it (right-click → *Run with PowerShell*). No compiler needed; `README.txt`
-in the zip has the details.
+### Your configuration
 
-To build it yourself instead, from PowerShell in a clone of the repo:
+Whichever way you install it, the first start sets up `~/.beluga` (`%USERPROFILE%\.beluga` on
+Windows; `BELUGA_HOME` moves it). Put your own settings in
+`~/.beluga/packages/personal-config/init.lisp`: it is created once and never touched by updates.
+With a package manager, the bundled packages stay in the install and upgrade with beluga; a copy
+of one in `~/.beluga/packages/` takes precedence.
 
-```
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
+## Getting started
 
-`install.ps1` is the Windows counterpart of `install.sh` (same config and package handling;
-`Get-Help .\install.ps1 -Detailed` lists its options). It builds `beluga.exe`, offering to
-install what's missing with `winget`: [Meson](https://mesonbuild.com) (Ninja included) and
-MinGW-w64 gcc ([WinLibs](https://winlibs.com); MSYS2's UCRT64 gcc works too — MSVC isn't
-supported). Already have a `beluga.exe`, e.g. from CI? `.\install.ps1 -Binary path\to\beluga.exe`
-installs it without compiling anything. `-Update` and `-Uninstall` (plus `-Purge`) work as
-they do with `install.sh`.
-
-Things that work differently on Windows:
-
-- **Your files** live in `%USERPROFILE%\.beluga`, the Windows equivalent of `~/.beluga`.
-- **Terminal panes** run PowerShell (`pwsh` if installed, else Windows PowerShell). Set
-  `BELUGA_SHELL` to use another shell, e.g. `cmd.exe`.
-- **dired's `!`** (and `shell-run` in Lisp) runs its command in PowerShell rather than `sh`.
-- **Git integration** needs [Git for Windows](https://gitforwindows.org) (`winget install Git.Git`).
-  Without it, project search and the file finder still work, on plain directories.
-- **Language servers** installed with npm (`typescript-language-server`, `pyright-langserver`, ...)
-  are found as usual: their `.cmd` launchers work.
-
-**Publishing a Windows release** (maintainers): push a tag starting with `v`
-(`git tag v3.3 && git push origin v3.3`). CI cross-compiles `beluga.exe` and attaches the zip
-to a release for that tag (`.gitea/workflows/release-windows.yml`).
-
-To cross-compile `beluga.exe` from Linux: `meson setup --cross-file cross/mingw-w64.ini build-windows && meson compile -C build-windows`
-(needs the `mingw-w64` package).
-Adding `--cross-file cross/wine.ini` to that setup lets `meson test -C build-windows` run the
-Windows test programs under Wine.
-
-**Checking memory** (developers): build with AddressSanitizer and UndefinedBehaviorSanitizer:
-`meson setup -Db_sanitize=address,undefined -Dbuildtype=debug build-asan && meson compile -C build-asan`.
-Everything outside `src/os/` is the same code on every platform, so Linux or macOS catches
-most problems. For the Windows layer, do the same from an MSYS2 **CLANG64** shell (gcc has no
-AddressSanitizer on Windows), and run `build-asan\beluga.exe` with `C:\msys64\clang64\bin` on
-`PATH` (the sanitizer runtime is a DLL). Dr. Memory doesn't start on Windows 11 24H2.
-Leaks: every `galloc` is tracked. `CTRL-x m` (memory inspector) lists the live blocks with
-the file and line that allocated them, and a debug build (`install.sh --debug`,
-`install.ps1 -DebugBuild`) writes what is still allocated at exit to
-`~/.beluga/memory-at-exit.log`, grouped by allocation site.
-
-## Packages
-
-Everything beyond the core editor is a package: a folder with an `init.lisp`, loaded by
-`(add-package "name")`. The bundled ones (`packages/` here) are installed by `install.sh` /
-`install.ps1` and versioned with the editor. For other packages, declare them in
-`~/.beluga/packages/personal-config/init.lisp`:
-
-```lisp
-(use-package "rainbow" "https://example.org/rainbow.git")           ; default branch
-(use-package "rainbow" "https://example.org/rainbow.git" "v1.2.0")  ; a tag, branch or commit
-(use-package "rainbow" "https://example.org/rainbow.git" "latest")  ; the highest version tag
-(use-package "mine" "~/code/beluga-mine")                           ; a folder, loaded in place
+```sh
+beluga path/to/file
 ```
 
-A declared package that's missing is cloned when beluga starts, then loaded in the order the
-lines are written. The commit each one is at goes to `personal-config/packages.lock`; with that
-folder on another machine, `beluga --sync-packages` installs exactly the same commits without
-opening the editor. `CTRL-x c l` lists every package (version, commit, loaded or not) and
-installs (`i`), updates after showing the new commits (`u`, `U` for all), rolls back (`r`) and
-removes (`d`) them. Updates apply at the next start.
+| keybind       | command                                         |
+|---------------|-------------------------------------------------|
+| Ctrl-x Ctrl-s | save                                            |
+| Ctrl-x Ctrl-c | quit                                            |
+| Ctrl-x f      | open a file                                     |
+| Ctrl-x h k    | what does this key do?                          |
+| Ctrl-x h b    | every key binding                               |
+| Ctrl-x c s    | every setting, with its default                 |
+| Ctrl-x c l    | the packages                                    |
 
-A package can describe itself in a `package.lisp` next to its `init.lisp` (read, never run):
+After a prefix like Ctrl-x, pause and the keys available under it appear at the bottom of the
+screen.
 
-```lisp
-(define-package "git-blame"
-  (version "1.2.0")
-  (description "Blame annotations in the gutter")
-  (requires ("beluga" "3.4") ("git" "3.3"))
-  (sources ("git" "https://example.org/beluga-git.git")))
-```
-
-`add-package` then loads what it requires first and refuses it on an older beluga, and
-installing it installs its missing requirements. `(define package-index-url "...")` points at a
-git repository whose `index.lisp` lists packages by name, for `use-package` without a URL and
-`M-x package-search`. All the details are at the top of
-[`packages/package/init.lisp`](packages/package/init.lisp).
-
-`BELUGA_HOME` moves `~/.beluga` elsewhere (tests, a portable copy). `meson test` runs the
-package manager end to end against throwaway repositories (`test/test_packages.sh`).
-
-## How beluga talks to the operating system
-
-Everything beluga needs from the OS — the terminal, waiting for input, running programs,
-terminal panes, files and directories, the clipboard, time — is declared in
-[`include/os.h`](include/os.h) and implemented by one of two small libraries:
-
-| Library               | Source                 | For                       |
-|-----------------------|------------------------|---------------------------|
-| `libbeluga-os-posix`  | `src/os/os_posix.c`    | Linux, macOS, BSD         |
-| `libbeluga-os-win32`  | `src/os/os_win32.c`    | Windows 10 (1809+) and 11 |
-
-The rest of the editor is plain C99 plus `os.h`: no `<unistd.h>`, no `<windows.h>`, no
-`#ifdef _WIN32`. That's checked, not just intended — the editor is compiled without any
-feature-test macros and with `-Werror=implicit-function-declaration`, so calling a POSIX or
-Windows function outside `src/os/` doesn't build, and `meson test` runs
-`tools/check_os_boundary.sh` to catch OS headers and platform `#ifdef`s.
-It also runs the unit tests in `test/` (UTF-8 helpers, buffer edits with undo/redo, the
-terminal output parser), which link the editor's code without `main.c`.
-
-As a result, behaviour is the same everywhere:
-
-- Programs are always started from an argument list, never a shell string: git, language
-  servers, `process-run`. Only `shell-run` (dired's `!`) goes through a shell, on purpose.
-- dired's delete, rename, copy and mkdir are the editor's own file operations, not `rm`, `mv`,
-  `cp` and `mkdir`.
-- Project search and the file finder use git inside a repository, and their own directory walk
-  and search elsewhere — no `find` or `grep` needed.
-- Files using CRLF line endings are edited without stray `^M`s and saved back as CRLF; new
-  files are saved with LF.
-
-Porting beluga to another system means writing one more `os_*.c` against `os.h` (and a line in
-`meson.build` to pick it).
-
-## Getting start
-
-To open an existing file just type :
-```./build/beluga path_to_my_file```
-
-Here is some few command that you will need :
-
-| keybind       | command          |
-|---------------|------------------|
-| Ctrl-x Ctrl-c | leave the editor |
-| Ctrl-x Ctrl-s | Save a file      |
-| Ctrl-x f      | open file        |
-
-### Language servers
+## Language servers
 
 Each language package (`c`, `python`, `rust`, ...) names its server. The first time you open a
 file of that language, beluga asks whether to start it. When the server isn't installed, it
@@ -182,7 +158,8 @@ is on PATH, beluga asks to start it. To use your own install command, put it in 
 
 The os is `"linux"`, `"darwin"`, `"windows"`, `"unix"` (everything but Windows) or `"any"`.
 
-### Daemon mode: several windows on one editor
+
+## Daemon mode: several windows on one editor
 
 ```
 beluga --daemon          # start the daemon in the background (--foreground: in this terminal)
@@ -210,7 +187,8 @@ and `beluga --kill=work`. On Unix the windows reach the daemon through a socket 
 directory (`$XDG_RUNTIME_DIR/beluga/`, else `/tmp/beluga-<uid>/`); on Windows through a named
 pipe only the current user can open.
 
-### Debugging
+
+## Debugging
 
 Beluga talks the Debug Adapter Protocol, so it debugs with whatever adapter a language has:
 `gdb` 14 or later for C (`gdb -i dap`), `lldb-dap` on macOS, `debugpy` for Python. Each
@@ -280,3 +258,120 @@ for lldb-dap. gdb has no such option; its program's output arrives in the panel.
 
 The hooks `debug-stopped` (path line reason) and `debug-exited` (exit-code) let a config react,
 and `debug-frames`, `debug-breakpoints`, `debug-watches` and `debug-state` read the session from Lisp.
+
+## Packages
+
+Everything beyond the core editor is a package: a folder with an `init.lisp`, loaded by
+`(add-package "name")`. The bundled ones (`packages/` here) are installed by `install.sh` /
+`install.ps1` and versioned with the editor. For other packages, declare them in
+`~/.beluga/packages/personal-config/init.lisp`:
+
+```lisp
+(use-package "rainbow" "https://example.org/rainbow.git")           ; default branch
+(use-package "rainbow" "https://example.org/rainbow.git" "v1.2.0")  ; a tag, branch or commit
+(use-package "rainbow" "https://example.org/rainbow.git" "latest")  ; the highest version tag
+(use-package "mine" "~/code/beluga-mine")                           ; a folder, loaded in place
+```
+
+A declared package that's missing is cloned when beluga starts, then loaded in the order the
+lines are written. The commit each one is at goes to `personal-config/packages.lock`; with that
+folder on another machine, `beluga --sync-packages` installs exactly the same commits without
+opening the editor. `CTRL-x c l` lists every package (version, commit, loaded or not) and
+installs (`i`), updates after showing the new commits (`u`, `U` for all), rolls back (`r`) and
+removes (`d`) them. Updates apply at the next start.
+
+A package can describe itself in a `package.lisp` next to its `init.lisp` (read, never run):
+
+```lisp
+(define-package "git-blame"
+  (version "1.2.0")
+  (description "Blame annotations in the gutter")
+  (requires ("beluga" "3.4") ("git" "3.3"))
+  (sources ("git" "https://example.org/beluga-git.git")))
+```
+
+`add-package` then loads what it requires first and refuses it on an older beluga, and
+installing it installs its missing requirements. `(define package-index-url "...")` points at a
+git repository whose `index.lisp` lists packages by name, for `use-package` without a URL and
+`M-x package-search`. All the details are at the top of
+[`packages/package/init.lisp`](packages/package/init.lisp).
+
+`BELUGA_HOME` moves `~/.beluga` elsewhere (tests, a portable copy). `meson test` runs the
+package manager end to end against throwaway repositories (`test/test_packages.sh`).
+
+## Windows notes
+
+Things that work differently on Windows:
+
+- **Your files** live in `%USERPROFILE%\.beluga`, the Windows equivalent of `~/.beluga`.
+- **Terminal panes** run PowerShell (`pwsh` if installed, else Windows PowerShell). Set
+  `BELUGA_SHELL` to use another shell, e.g. `cmd.exe`.
+- **dired's `!`** (and `shell-run` in Lisp) runs its command in PowerShell rather than `sh`.
+- **Git integration** needs [Git for Windows](https://gitforwindows.org) (`winget install Git.Git`).
+  Without it, project search and the file finder still work, on plain directories.
+- **Language servers** installed with npm (`typescript-language-server`, `pyright-langserver`, ...)
+  are found as usual: their `.cmd` launchers work.
+
+## How beluga talks to the operating system
+
+Everything beluga needs from the OS — the terminal, waiting for input, running programs,
+terminal panes, files and directories, the clipboard, time — is declared in
+[`include/os.h`](include/os.h) and implemented by one of two small libraries:
+
+| Library               | Source                 | For                       |
+|-----------------------|------------------------|---------------------------|
+| `libbeluga-os-posix`  | `src/os/os_posix.c`    | Linux, macOS, BSD         |
+| `libbeluga-os-win32`  | `src/os/os_win32.c`    | Windows 10 (1809+) and 11 |
+
+The rest of the editor is plain C99 plus `os.h`: no `<unistd.h>`, no `<windows.h>`, no
+`#ifdef _WIN32`. That's checked, not just intended — the editor is compiled without any
+feature-test macros and with `-Werror=implicit-function-declaration`, so calling a POSIX or
+Windows function outside `src/os/` doesn't build, and `meson test` runs
+`tools/check_os_boundary.sh` to catch OS headers and platform `#ifdef`s.
+It also runs the unit tests in `test/` (UTF-8 helpers, buffer edits with undo/redo, the
+terminal output parser), which link the editor's code without `main.c`.
+
+As a result, behaviour is the same everywhere:
+
+- Programs are always started from an argument list, never a shell string: git, language
+  servers, `process-run`. Only `shell-run` (dired's `!`) goes through a shell, on purpose.
+- dired's delete, rename, copy and mkdir are the editor's own file operations, not `rm`, `mv`,
+  `cp` and `mkdir`.
+- Project search and the file finder use git inside a repository, and their own directory walk
+  and search elsewhere — no `find` or `grep` needed.
+- Files using CRLF line endings are edited without stray `^M`s and saved back as CRLF; new
+  files are saved with LF.
+
+Porting beluga to another system means writing one more `os_*.c` against `os.h` (and a line in
+`meson.build` to pick it).
+
+## Development
+
+**Publishing a release** (maintainers): push a tag starting with `v`
+(`git tag v3.5 && git push origin v3.5`). CI attaches the Windows zip, a source tarball, a
+`.deb` and an `.rpm` to the release and publishes the Linux packages to Gitea's Debian and RPM
+registries (`.gitea/workflows/release-windows.yml`). A GitHub mirror builds the same files with the same
+scripts and attaches them to a GitHub release (`.github/workflows/release.yml`). Then `packaging/render.sh 3.5` fills in the
+Homebrew formula, the winget manifest and the AUR PKGBUILD; [packaging/README.md](packaging/README.md)
+says where each goes.
+
+To cross-compile `beluga.exe` from Linux: `meson setup --cross-file cross/mingw-w64.ini build-windows && meson compile -C build-windows`
+(needs the `mingw-w64` package).
+Adding `--cross-file cross/wine.ini` to that setup lets `meson test -C build-windows` run the
+Windows test programs under Wine.
+
+**Checking memory** (developers): build with AddressSanitizer and UndefinedBehaviorSanitizer:
+`meson setup -Db_sanitize=address,undefined -Dbuildtype=debug build-asan && meson compile -C build-asan`.
+Everything outside `src/os/` is the same code on every platform, so Linux or macOS catches
+most problems. For the Windows layer, do the same from an MSYS2 **CLANG64** shell (gcc has no
+AddressSanitizer on Windows), and run `build-asan\beluga.exe` with `C:\msys64\clang64\bin` on
+`PATH` (the sanitizer runtime is a DLL). Dr. Memory doesn't start on Windows 11 24H2.
+Leaks: every `galloc` is tracked. `CTRL-x m` (memory inspector) lists the live blocks with
+the file and line that allocated them, and a debug build (`install.sh --debug`,
+`install.ps1 -DebugBuild`) writes what is still allocated at exit to
+`~/.beluga/memory-at-exit.log`, grouped by allocation site.
+
+
+## License
+
+MIT, see [LICENSE](LICENSE). `include/lisp.h` and `src/cJSON.c` are vendored, also under MIT.
