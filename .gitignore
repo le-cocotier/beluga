@@ -12,3 +12,4 @@ beluga.wiki
 *.err
 __pycache__/
 dist/
+build-windows-release/

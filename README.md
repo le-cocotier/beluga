@@ -350,7 +350,8 @@ Porting beluga to another system means writing one more `os_*.c` against `os.h` 
 **Publishing a release** (maintainers): push a tag starting with `v`
 (`git tag v3.5 && git push origin v3.5`). CI attaches the Windows zip, a source tarball, a
 `.deb` and an `.rpm` to the release and publishes the Linux packages to Gitea's Debian and RPM
-registries (`.gitea/workflows/release-windows.yml`). Then `packaging/render.sh 3.5` fills in the
+registries (`.gitea/workflows/release-windows.yml`). A GitHub mirror builds the same files with the same
+scripts and attaches them to a GitHub release (`.github/workflows/release.yml`). Then `packaging/render.sh 3.5` fills in the
 Homebrew formula, the winget manifest and the AUR PKGBUILD; [packaging/README.md](packaging/README.md)
 says where each goes.
 

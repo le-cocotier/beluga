@@ -41,28 +41,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y meson ninja-build mingw-w64 zip curl jq
 
-      - name: Cross-compile beluga.exe
-        run: |
-          meson setup --cross-file cross/mingw-w64.ini --buildtype=release build-windows
-          meson compile -C build-windows
-          # Debug info is useless to users and doubles the size.
-          x86_64-w64-mingw32-strip build-windows/beluga.exe
-
       - name: Check the OS boundary
         run: tools/check_os_boundary.sh .
 
-      - name: Assemble the zip
+      - name: Build the zip
         run: |
-          PKG="beluga-${{ github.ref_name }}-windows-x64"
-          mkdir -p "dist/$PKG"
-          cp build-windows/beluga.exe install.ps1 LICENSE "dist/$PKG/"
-          cp windows/README.txt "dist/$PKG/README.txt"
-          cp -r assets config packages "dist/$PKG/"
-          # The editor writes this next to wherever it runs; never ship one.
-          find "dist/$PKG" -name lisp_log.err -delete
-          (cd dist && zip -qr9 "$PKG.zip" "$PKG")
-          ls -l "dist/$PKG.zip"
-          echo "PKG=$PKG" >> "$GITHUB_ENV"
+          packaging/windows/build-zip.sh "${{ github.ref_name }}" dist
+          echo "PKG=beluga-${{ github.ref_name }}-windows-x64" >> "$GITHUB_ENV"
 
       - name: Publish the release
         shell: bash
@@ -155,7 +140,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
-          git archive --format=tar.gz --prefix="beluga-$VERSION/" -o "dist/beluga-$VERSION.tar.gz" HEAD
+          packaging/source-tarball.sh "$VERSION" dist
           packaging/linux/build-packages.sh "$VERSION" dist
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
