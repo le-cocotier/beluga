@@ -237,4 +237,9 @@ if not is_windows
     args : [beluga_exe.full_path(), meson.current_source_dir()],
     depends : beluga_exe,
     timeout : 300)
+  # An installed beluga sets up ~/.beluga and loads the bundled packages
+  # from its install (test/test_installed.sh).
+  test('installed', find_program('test/test_installed.sh'),
+    args : [beluga_exe.full_path(), meson.current_source_dir()],
+    depends : beluga_exe)
 endif
