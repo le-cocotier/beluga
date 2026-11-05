@@ -8,6 +8,7 @@
  */
 
 #include "test.h"
+#include "../include/galloc.h"
 #include "../include/os.h"
 
 #include <stdlib.h>
@@ -142,6 +143,20 @@ static void testMissingProgram(void) {
   os_proc_free(proc);
 }
 
+static void testFindProgram(const char *self) {
+  char *found = os_find_program(isWindows() ? "cmd" : "sh");
+  CHECK(found != NULL);
+  CHECK(found && os_path_is_absolute(found));
+  gfree(found);
+  CHECK(os_find_program("beluga-no-such-program") == NULL);
+  CHECK(os_find_program("") == NULL);
+  // A path is checked as given: this test program is there, nothing else.
+  found = os_find_program(self);
+  CHECK(found != NULL);
+  gfree(found);
+  CHECK(os_find_program("./beluga-no-such-program") == NULL);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1 && strcmp(argv[1], "--child") == 0) {
     printf("hello from the child\n");
@@ -154,5 +169,6 @@ int main(int argc, char **argv) {
   testPaths();
   testProcess(argv[0]);
   testMissingProgram();
+  testFindProgram(argv[0]);
   return testDone();
 }

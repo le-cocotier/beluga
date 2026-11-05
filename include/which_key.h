@@ -29,8 +29,5 @@ void whichKeyInvalidate(void);
 // "editor-set-prefix user", "?" when it can't be named), from the same
 // cache the panel uses. NULL for an index out of range.
 const char *whichKeyBindingName(int index);
-// The symbol a function value is bound to globally, or NULL. Walks the
-// environment: for one-off lookups, not per frame.
-const char *whichKeyCommandName(Lisp value);
 
 #endif // BELUGA_WHICH_KEY_H

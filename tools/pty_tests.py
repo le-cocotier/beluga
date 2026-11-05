@@ -2,7 +2,8 @@
 """Headless tests that look at beluga's screen: the editor runs in a
 pseudo-terminal (tools/pty_harness.py) and pyte emulates the terminal.
 
-    tools/pty_tests.py BELUGA_BINARY REPO_DIR
+    tools/pty_tests.py BELUGA_BINARY REPO_DIR [TEST...]
+    tools/pty_tests.py --list
 
 POSIX only. Exits 77 (meson's "skipped") when pyte isn't installed
 (python3-pyte, or pip install pyte). A test that needs a program the
@@ -18,7 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pty_harness  # noqa: E402
-from pty_harness import Beluga, run_tests  # noqa: E402
+from pty_harness import Beluga, Skip, run_tests  # noqa: E402
 
 CTRL_X = '\x18'
 DOWN = '\x1b[B'
@@ -37,10 +38,6 @@ int main(void) {
   return total % 7;
 }
 """
-
-
-class Skip(Exception):
-    pass
 
 
 def open_terminal(ed):
@@ -285,6 +282,87 @@ def pane_cursors(binary, repo):
         for _ in range(3):
             ed.keys(CTRL_X, 'u', delay=0.2)
         ed.quit()
+
+
+MOUSE_MODE = 1000 << 5  # pyte keeps private modes shifted left by 5
+
+
+def wheel(row, col, up=False):
+    """An SGR wheel notch at 1-based screen cell (row, col)."""
+    return '\x1b[<%d;%d;%dM' % (64 if up else 65, col, row)
+
+
+def click(row, col):
+    """An SGR left press and release at 1-based screen cell (row, col)."""
+    return ('\x1b[<0;%d;%dM' % (col, row), '\x1b[<0;%d;%dm' % (col, row))
+
+
+def mouse_wheel_and_click(binary, repo):
+    """The editor asks for mouse reports; a wheel notch scrolls the view 3
+    lines with the cursor kept on screen; a click past a line's end puts
+    the cursor at its end, one on the gutter at its start; nothing of a
+    report is ever typed. Quitting turns the reports off again."""
+    with Beluga(binary, repo) as ed:
+        with open(ed.path('m.txt'), 'w') as f:
+            f.write(''.join('line %d\n' % i for i in range(1, 101)))
+        ed.start('m.txt')
+        ed.wait_for('line 20')
+        assert MOUSE_MODE in ed.screen.mode, sorted(ed.screen.mode)
+        ed.keys(wheel(5, 20), wheel(5, 20), delay=0.3)
+        lines = ed.text()
+        assert lines[0].split()[-1] == '7', lines[:3]
+        assert ed.screen.cursor.y == 0, ed.screen.cursor.y  # rode along on line 7
+        ed.keys(wheel(5, 20, up=True), delay=0.3)
+        assert ed.text()[0].split()[-1] == '4', ed.text()[:3]
+        ed.keys(*click(10, 90), 'X', delay=0.3)  # row 10 shows line 13
+        assert ed.text()[9].endswith('line 13X'), ed.text()[9]
+        ed.keys(*click(12, 1), 'Y', delay=0.3)
+        assert 'Yline 15' in ed.text()[11], ed.text()[11]
+        assert not any('65;' in line or '<0' in line for line in ed.text()), ed.text()
+        ed.keys(CTRL_X, 'u', delay=0.2)
+        ed.keys(CTRL_X, 'u', delay=0.2)
+        ed.quit()
+        ed.pump(0.2)
+        assert MOUSE_MODE not in ed.screen.mode, sorted(ed.screen.mode)
+
+
+def mouse_split_panes(binary, repo):
+    """A click in the other pane gives it focus and its cursor goes where
+    clicked; the wheel scrolls the pane under the pointer only."""
+    with Beluga(binary, repo, rows=30, cols=100) as ed:
+        with open(ed.path('p.txt'), 'w') as f:
+            f.write(''.join('line %d\n' % i for i in range(1, 101)))
+        ed.start('p.txt')
+        ed.wait_for('line 20')
+        ed.keys(CTRL_X, '"', delay=0.4)        # side by side, right one focused
+        ed.keys(*click(5, 30), 'L', delay=0.3)  # left pane, line 5
+        assert ed.text()[4].split('│')[0].rstrip().endswith('line 5L'), ed.text()[4]
+        assert ed.screen.cursor.x < 50, ed.screen.cursor.x
+        ed.keys(wheel(5, 80), delay=0.3)       # the right pane scrolls
+        left, right = ed.text()[0].split('│')
+        assert left.split()[-1] == '1' and right.split()[-1] == '4', ed.text()[0]
+        ed.keys(CTRL_X, 'u', delay=0.2)
+        ed.quit()
+
+
+def daemon_mouse(binary, repo):
+    """A daemon window gets mouse reports too: the request goes out with
+    what the daemon draws, and the client turns it off when it closes."""
+    name = daemon_name('mouse')
+    with Beluga(binary, repo) as ed:
+        try:
+            with open(ed.path('m.txt'), 'w') as f:
+                f.write(''.join('line %d\n' % i for i in range(1, 101)))
+            ed.start('-c', '--name=' + name, 'm.txt')
+            ed.wait_for('line 20')
+            assert MOUSE_MODE in ed.screen.mode, sorted(ed.screen.mode)
+            ed.keys(wheel(5, 20), delay=0.4)
+            assert ed.text()[0].split()[-1] == '4', ed.text()[:3]
+            ed.quit()
+            ed.pump(0.2)
+            assert MOUSE_MODE not in ed.screen.mode, sorted(ed.screen.mode)
+        finally:
+            ed.run('--kill', '--force', '--name=' + name)
 
 
 def gdb_with_dap():
@@ -659,6 +737,52 @@ def terminal_app_shift_function_keys(binary, repo):
         ed.quit()
 
 
+def modified_keys(binary, repo):
+    """Alt/Option and Ctrl combinations bind under any of their names
+    (OPTION-q is ALT-q); an unbound Alt+letter still types the letter; the
+    editor asks for modifyOtherKeys and turns it off on the way out."""
+    with Beluga(binary, repo) as ed:
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(map-key "OPTION-q" \'(editor-insert-char "A") "no-prefix")'
+                    '\n(map-key "CTRL-1" \'(editor-insert-char "B") "no-prefix")'
+                    '\n(map-key "CTRL-ARROW-UP" \'(editor-insert-char "C") "no-prefix")'
+                    '\n(map-key "C-M-k" \'(editor-insert-char "D") "no-prefix")'
+                    '\n(map-key "SHIFT-TAB" \'(editor-insert-char "E") "no-prefix")'
+                    '\n(map-key "ALT-SHIFT-p" \'(editor-insert-char "F") "no-prefix")'
+                    '\n(map-key "CTRL-SHIFT-a" \'(editor-insert-char "G") "no-prefix")'
+                    '\n(map-key "ALT-F5" \'(editor-insert-char "H") "no-prefix")\n')
+        with open(ed.path('k.txt'), 'w') as f:
+            f.write('\n')
+        ed.start('k.txt')
+        ed.wait_for('k.txt')
+        assert b'\x1b[>4;1m' in ed.output, ed.output[-200:]
+        ed.keys('\x1bq', '\x1b[27;5;49~', '\x1b[1;5A', '\x1b\x0b', '\x1b[Z', '\x1bP',
+                '\x1b[97;6u', '\x1b\x1b[15~', '\x1bz', '\x1b[1;5C', 'y', delay=0.3)
+        # Unbound: Alt+z types "z", Ctrl+Right moves right like Right.
+        ed.wait_for('ABCDEFGHzy')
+        for _ in range(10):
+            ed.keys(CTRL_X, 'u', delay=0.1)
+        ed.quit()
+        ed.pump(0.2)
+        assert ed.output.rfind(b'\x1b[>4;0m') > ed.output.rfind(b'\x1b[>4;1m')
+
+
+def terminal_modified_keys(binary, repo):
+    """A terminal pane's program gets modified keys as xterm sends them."""
+    if not shutil.which('od'):
+        raise Skip('no od')
+    with Beluga(binary, repo) as ed:
+        ed.start()
+        open_terminal(ed)
+        shell(ed, "stty raw -echo; head -c 20 | od -An -c; stty sane")
+        ed.pump(0.5)
+        # Alt+j, Ctrl+Left, Ctrl+1, Ctrl+Alt+a: 20 bytes, od's 16 a line.
+        ed.keys('\x1bj', '\x1b[1;5D', '\x1b[27;5;49~', '\x1b\x01', delay=0.2)
+        ed.wait_for('033   j 033   [   1   ;   5   D 033   [   2   7   ;   5   ;   4')
+        ed.wait_for("9   ~ 033 001")
+        ed.quit()
+
+
 def daemon_name(tag):
     return 'test-%s-%d' % (tag, os.getpid())
 
@@ -860,9 +984,107 @@ def daemon_debug_per_project(binary, repo):
             ed.run('--kill', '--force', '--name=' + name)
 
 
+def project_root_start(binary, repo):
+    """With a project open, the open-file prompt, dired's prompt and a new
+    terminal start at the project root, not where beluga was started.
+    Wide, so a long $TMPDIR (macOS) fits on the prompt line."""
+    with Beluga(binary, repo, cols=250) as ed:
+        os.makedirs(ed.path('proj/.git'))
+        os.makedirs(ed.path('proj/sub'))
+        os.makedirs(ed.path('elsewhere'))
+        with open(ed.path('proj/sub/a.txt'), 'w') as f:
+            f.write('x\n')
+        ed.start('../proj/sub/a.txt', cwd='elsewhere')
+        ed.keys(CTRL_X, 'f', delay=0.4)
+        ed.wait_for('Open :')
+        prompt = [line for line in ed.text() if line.startswith('Open :')]
+        assert prompt and prompt[0].endswith('/proj/'), prompt
+        ed.keys('\x1b', delay=0.3)
+        ed.keys(CTRL_X, 'd', delay=0.4)
+        ed.wait_for('Dired (directory):')
+        prompt = [line for line in ed.text() if line.startswith('Dired')]
+        assert prompt and prompt[0].rstrip('/').endswith('/proj'), prompt
+        ed.keys('\x1b', delay=0.3)
+        open_terminal(ed)
+        shell(ed, 'pwd')
+        ed.wait_for('/proj', 5)
+        assert not any('elsewhere' in line for line in ed.text()), ed.text()
+        ed.quit()
+
+
+FAKE_SERVER_INSTALL = """printf 'Password: '
+read answer
+mkdir -p "$HOME/bin"
+printf '#!/bin/sh\\ncat >/dev/null\\n' > "$HOME/bin/beluga-fake-ls"
+chmod +x "$HOME/bin/beluga-fake-ls"
+echo "installed with $answer"
+"""
+
+
+def lsp_install(binary, repo):
+    """A file whose language server isn't on PATH: beluga offers the
+    registered install command, runs it in *lsp-install* (where it can be
+    answered), and once the server is there asks to start it."""
+    with Beluga(binary, repo, rows=30, cols=140) as ed:
+        ed.extra_env = {'PATH': ed.path('bin') + ':' + os.environ.get('PATH', '')}
+        with open(ed.path('install.sh'), 'w') as f:
+            f.write(FAKE_SERVER_INSTALL)
+        with open(ed.path('a.zz'), 'w') as f:
+            f.write('hello\n')
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(lsp-server "zz" "zz" "beluga-fake-ls")\n'
+                    '(lsp-server-install "beluga-fake-ls" "any" "beluga-no-such-tool x"'
+                    ' "any" "sh install.sh")\n')
+        ed.start('a.zz')
+        ed.wait_for("beluga-fake-ls isn't installed. Install it with `sh install.sh`? (y/n)")
+        ed.write('y\r')
+        ed.wait_for('Password:')
+        ed.wait_for('$ sh install.sh')
+        ed.write('hunter2\r')
+        ed.wait_for('installed with hunter2')
+        ed.wait_for('Start the beluga-fake-ls language server for this project? (y/n)')
+        ed.write('n\r')
+        ed.pump(0.3)
+        assert any('hello' in line for line in ed.text()), ed.text()
+        ed.quit()
+
+
+def lsp_install_declined(binary, repo):
+    """Saying no to the install: nothing runs, and it isn't asked again
+    for the next file of that server. With no command that can run, the
+    message names what installing it needs."""
+    with Beluga(binary, repo, rows=30, cols=140) as ed:
+        for name in ('a.zz', 'b.zz', 'c.yy'):
+            with open(ed.path(name), 'w') as f:
+                f.write('x\n')
+        with open(ed.path('.beluga/packages/personal-config/init.lisp'), 'a') as f:
+            f.write('\n(lsp-server "zz" "zz" "beluga-fake-ls")\n'
+                    '(lsp-server-install "beluga-fake-ls" "any" "sh -c true")\n'
+                    '(lsp-server "yy" "yy" "beluga-other-ls")\n'
+                    '(lsp-server-install "beluga-other-ls" "any" "beluga-no-such-tool i")\n')
+        ed.start('a.zz')
+        ed.wait_for("Install it with `sh -c true`? (y/n)")
+        ed.write('n\r')
+        ed.wait_for('Not installing beluga-fake-ls')
+        ed.keys(CTRL_X, 'f', delay=0.4)
+        ed.wait_for('Open :')
+        ed.write('b.zz\r')
+        ed.pump(0.8)
+        assert not any('Install it with' in line for line in ed.text()), ed.text()
+        assert not any('*lsp-install*' in line for line in ed.text()), ed.text()
+        ed.keys(CTRL_X, 'f', delay=0.4)
+        ed.wait_for('Open :')
+        ed.write('c.yy\r')
+        ed.wait_for("beluga-other-ls isn't installed, and installing it needs beluga-no-such-tool")
+        ed.quit()
+
+
 TESTS = [
     ('breakpoint-gutter', breakpoint_gutter),
     ('pane-cursors', pane_cursors),
+    ('mouse-wheel-and-click', mouse_wheel_and_click),
+    ('mouse-split-panes', mouse_split_panes),
+    ('daemon-mouse', daemon_mouse),
     ('debugger-gdb', debugger_gdb),
     ('debugger-attach', debugger_attach),
     ('debugger-lldb', debugger_lldb),
@@ -872,7 +1094,12 @@ TESTS = [
     ('debugger-exceptions', debugger_exceptions),
     ('debugger-watches', debugger_watches),
     ('terminal-app-shift-function-keys', terminal_app_shift_function_keys),
+    ('modified-keys', modified_keys),
+    ('terminal-modified-keys', terminal_modified_keys),
     ('tab-completion-list', tab_completion_list),
+    ('project-root-start', project_root_start),
+    ('lsp-install', lsp_install),
+    ('lsp-install-declined', lsp_install_declined),
     ('terminal-alternate-screen', terminal_alternate_screen),
     ('terminal-vim', terminal_vim),
     ('terminal-colors', terminal_colors),
@@ -890,18 +1117,23 @@ TESTS = [
 
 
 def main():
+    """pty_tests.py --list prints the tests' names (meson.build makes one
+    test of each); pty_tests.py BINARY REPO [NAME...] runs the named tests,
+    or all of them."""
+    if sys.argv[1:] == ['--list']:
+        print('\n'.join(name for name, _ in TESTS))
+        return 0
     if pty_harness.pyte is None:
         print('pty tests skipped: pyte is not installed (python3-pyte)')
         return 77
-    tests = []
-    for name, test in TESTS:
-        def run(binary, repo, test=test, name=name):
-            try:
-                test(binary, repo)
-            except Skip as e:
-                print('skip  %s: %s' % (name, e))
-        tests.append((name, run))
-    return run_tests(tests, sys.argv[1], sys.argv[2])
+    binary, repo, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+    known = dict(TESTS)
+    unknown = [name for name in names if name not in known]
+    if unknown:
+        print('no such test: %s' % ', '.join(unknown))
+        return 2
+    tests = [(name, known[name]) for name in names] if names else TESTS
+    return run_tests(tests, binary, repo)
 
 
 if __name__ == '__main__':

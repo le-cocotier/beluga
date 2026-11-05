@@ -186,6 +186,7 @@
 (map-key "q" explorer-close "explorer")
 (map-key "e" explorer-toggle "user")
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "explorer")
+(map-key "CTRL-x" '(editor-set-prefix "user") "explorer")
 
 ;; ─── static tree dump ───────────────────────────────────────────────────────
 
@@ -213,7 +214,8 @@
         (cons line (append child-lines (tree--build-entries (cdr entries) dir-path prefix))))))
 
 (define (project-tree)
-  (let* ((root (editor-pwd))
+  (let* ((project (project-root))
+         (root (if (string=? project "") (editor-pwd) project))
          (lines (cons (string-append root "/") (tree--build root "")))
          (buf-id (editor-scratch-open "*tree*")))
     (editor-scratch-set-lines buf-id lines)

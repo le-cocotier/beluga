@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdarg.h>
 
+extern EditorConfig E;
 
 /**
  * @brief Reads `n` key bytes, waiting up to 100ms for each — the timing
@@ -60,6 +61,313 @@ static int shiftedFunctionKeyFromTilde(const int number)
 }
 
 /**
+ * @brief Turns a mouse report's button code into a key, and remembers
+ * where the pointer was.
+ * @param button xterm's button byte: 0-2 left/middle/right, +4 Shift,
+ * +8 Alt, +16 Ctrl, +32 motion, +64 wheel (64 up, 65 down)
+ * @param col, row 1-based screen cell
+ * @param press 0 for a release (SGR's final 'm')
+ */
+static unsigned char mouseKey(const int button, const int col, const int row, const int press)
+{
+    const int b = button & ~(4 | 8 | 16); // modifiers aren't bound (yet)
+
+    E.mouse_col = col - 1;
+    E.mouse_row = row - 1;
+    if (b == 64)
+        return WHEEL_UP;
+    if (b == 65)
+        return WHEEL_DOWN;
+    if (b == 0 && press)
+        return MOUSE_LEFT;
+    return MOUSE_OTHER;
+}
+
+/**
+ * @brief Reads the rest of an SGR (1006) mouse report, ESC [ < b ; x ; y M
+ * (press) or ...m (release), after the '<'.
+ */
+static unsigned char readSgrMouse(void)
+{
+    int values[3] = {0, 0, 0};
+    int n = 0;
+    int seq_len = 0;
+    char c;
+
+    for (;;)
+    {
+        if (readKeyBytes(&c, 1) != 1 || ++seq_len > 16)
+            return MOUSE_OTHER; // truncated or runaway: drop it
+        if (c >= '0' && c <= '9')
+            values[n] = values[n] * 10 + (c - '0');
+        else if (c == ';' && n < 2)
+            n++;
+        else
+            break;
+    }
+    if (n != 2 || (c != 'M' && c != 'm'))
+        return MOUSE_OTHER;
+    return mouseKey(values[0], values[1], values[2], c == 'M');
+}
+
+/**
+ * @brief Reads the rest of a legacy X10 mouse report, ESC [ M b x y, each
+ * byte offset by 32 — what a terminal without SGR mode support sends.
+ * Columns past 223 can't be encoded in it; those clicks land on the edge.
+ */
+static unsigned char readX10Mouse(void)
+{
+    unsigned char bytes[3];
+    if (readKeyBytes(bytes, 3) != 3)
+        return MOUSE_OTHER;
+    // Release is button 3 here: which button went up isn't reported.
+    return mouseKey(bytes[0] - 32, bytes[1] - 32, bytes[2] - 32, (bytes[0] & 3) != 3);
+}
+
+/**
+ * @brief xterm's modifier parameter (1 + 1 Shift, 2 Alt, 4 Ctrl, 8 Meta)
+ * as KEY_MOD_* bits; Meta counts as Alt. Caps and Num Lock are dropped.
+ */
+static int modsFromXterm(const long param)
+{
+    const long bits = param - 1;
+    int mods = 0;
+
+    if (bits <= 0)
+        return 0;
+    if (bits & 1)
+        mods |= KEY_MOD_SHIFT;
+    if (bits & (2 | 8))
+        mods |= KEY_MOD_ALT;
+    if (bits & 4)
+        mods |= KEY_MOD_CTRL;
+    return mods;
+}
+
+/**
+ * @brief The key a CSI or SS3 sequence's final letter names (arrows,
+ * Home/End, F1-F4), or 0.
+ */
+static unsigned char keyFromFinal(const char final)
+{
+    switch (final)
+    {
+        case 'A': return ARROW_UP;
+        case 'B': return ARROW_DOWN;
+        case 'C': return ARROW_RIGHT;
+        case 'D': return ARROW_LEFT;
+        case 'H': return BEG_LINE;
+        case 'F': return END_LINE;
+        case 'P': case 'Q': case 'R': case 'S':
+            return (unsigned char) (FUNCTION_KEY + (final - 'P'));
+        default:  return 0;
+    }
+}
+
+/**
+ * @brief The key for a character reported by its codepoint, as
+ * modifyOtherKeys (CSI 27 ; m ; c ~) and CSI u (CSI c ; m u) do.
+ * Modifiers on a non-ASCII character are dropped: it's typed.
+ */
+static void keyFromCodepoint(Utf8Char *key, const long cp, const int mods)
+{
+    if (cp > 0 && cp < 0x80)
+        keyMake(key, mods, (unsigned char) cp);
+    else if (cp >= 0x80 && cp < 0x110000 && !(cp >= 0xE000 && cp < 0xF900))
+    {
+        // (The private use area is where kitty puts its functional keys.)
+        memset(key, 0, sizeof(*key));
+        if (cp < 0x800)
+        {
+            key->character[0] = (unsigned char) (0xC0 | (cp >> 6));
+            key->character[1] = (unsigned char) (0x80 | (cp & 0x3F));
+            key->length = 2;
+        }
+        else if (cp < 0x10000)
+        {
+            key->character[0] = (unsigned char) (0xE0 | (cp >> 12));
+            key->character[1] = (unsigned char) (0x80 | ((cp >> 6) & 0x3F));
+            key->character[2] = (unsigned char) (0x80 | (cp & 0x3F));
+            key->length = 3;
+        }
+        else
+        {
+            key->character[0] = (unsigned char) (0xF0 | (cp >> 18));
+            key->character[1] = (unsigned char) (0x80 | ((cp >> 12) & 0x3F));
+            key->character[2] = (unsigned char) (0x80 | ((cp >> 6) & 0x3F));
+            key->character[3] = (unsigned char) (0x80 | (cp & 0x3F));
+            key->length = 4;
+        }
+    }
+    else
+        keyMake(key, 0, UNKNOWN_KEY);
+}
+
+/**
+ * @brief The key a CSI <number> ~ sequence names, without its modifiers
+ * (which it adds to `mods`): Home, Delete, Page Up, F5..., or UNKNOWN_KEY.
+ */
+static unsigned char keyFromTilde(const long number, int *mods)
+{
+    int fkey;
+
+    switch (number)
+    {
+        case 1: case 7: return BEG_LINE;
+        case 3:         return DEL_KEY;
+        case 4: case 8: return END_LINE;
+        case 5:         return PAGE_UP;
+        case 6:         return PAGE_DOWN;
+        default:
+            break;
+    }
+    // F1-F12: 11-15, 17-21, 23, 24 (the gaps are history); Shift+F5-F12
+    // on Terminal.app: 25-34; Insert (2) and the rest are unbound.
+    fkey = functionKeyFromTilde((int) number);
+    if (fkey < 0 && (fkey = shiftedFunctionKeyFromTilde((int) number)) >= 0)
+        *mods |= KEY_MOD_SHIFT;
+    return fkey >= 0 ? (unsigned char) (FUNCTION_KEY + fkey) : UNKNOWN_KEY;
+}
+
+/**
+ * @brief Reads a CSI sequence's parameters up to its final byte, after
+ * ESC [ and its first byte `first` (a digit or ';').
+ * @details Read to the final byte however long the sequence is: stopping
+ * early left the rest in the input to be typed as text (Ctrl+Delete used
+ * to insert "5~"). Sub-parameters after ':' (kitty's) are skipped.
+ * @return the final byte, 0 for a truncated or runaway sequence
+ */
+static char readCsiParams(const char first, long *params, int *count)
+{
+    int n = 0;
+    int in_sub = 0;
+    int seq_len = 0;
+    char c = first;
+
+    params[0] = params[1] = params[2] = params[3] = 0;
+    for (;;)
+    {
+        if (c >= '0' && c <= '9')
+        {
+            if (!in_sub && params[n] < 0x1000000)
+                params[n] = params[n] * 10 + (c - '0');
+        }
+        else if (c == ':')
+            in_sub = 1;
+        else if (c == ';')
+        {
+            if (n < 3)
+                n++;
+            in_sub = 0;
+        }
+        else
+            break;
+        if (readKeyBytes(&c, 1) != 1 || ++seq_len > 32)
+            return 0;
+    }
+    *count = n + 1;
+    return c;
+}
+
+/**
+ * @brief Decodes the rest of a CSI (ESC [) or SS3 (ESC O) sequence into
+ * `key`, after ESC and `intro`.
+ */
+static void readEscapeSequence(Utf8Char *key, const char intro)
+{
+    char seq1;
+    char final;
+    long params[4];
+    int count;
+    int mods;
+    unsigned char base;
+
+    if (readKeyBytes(&seq1, 1) != 1)
+    {
+        keyMake(key, 0, '\x1b'); // incomplete sequence, treat as lone ESC
+        return;
+    }
+
+    if (intro == 'O')
+    {
+        // ESC O 5 P: Ctrl+F1 on some terminals.
+        mods = 0;
+        if (seq1 >= '2' && seq1 <= '9')
+        {
+            mods = modsFromXterm(seq1 - '0');
+            if (readKeyBytes(&seq1, 1) != 1)
+                seq1 = 0;
+        }
+        if ((base = keyFromFinal(seq1)) != 0)
+            // \x1bOP-\x1bOS: F1-F4 on xterm and most terminals; \x1bOA:
+            // the arrows in application cursor mode.
+            keyMake(key, mods, base);
+        else if (seq1 >= 'a' && seq1 <= 'd')
+            // rxvt's Ctrl+arrows.
+            keyMake(key, KEY_MOD_CTRL, keyFromFinal((char) (seq1 - 'a' + 'A')));
+        else
+            keyMake(key, 0, '\x1b');
+        return;
+    }
+
+    if (seq1 == '<')
+        keyMake(key, 0, readSgrMouse());
+    else if (seq1 == 'M')
+        keyMake(key, 0, readX10Mouse());
+    else if ((seq1 >= '0' && seq1 <= '9') || seq1 == ';')
+    {
+        // CSI <number> [; <modifier> [; <code>]] <final>: \x1b[3~ (Delete),
+        // \x1b[15~ (F5), \x1b[3;5~ (Ctrl+Delete), \x1b[1;3C (Alt+Right),
+        // \x1b[27;5;49~ (Ctrl+1, modifyOtherKeys), \x1b[49;5u (CSI u).
+        final = readCsiParams(seq1, params, &count);
+        mods = count > 1 ? modsFromXterm(params[1]) : 0;
+        if (final == '~' && params[0] == 27 && count > 2)
+            keyFromCodepoint(key, params[2], mods);
+        else if (final == 'u')
+            keyFromCodepoint(key, params[0], mods);
+        else if (final == '~' || final == '^' || final == '$' || final == '@')
+        {
+            // rxvt marks Ctrl with ^, Shift with $, both with @.
+            if (final == '^' || final == '@')
+                mods |= KEY_MOD_CTRL;
+            if (final == '$' || final == '@')
+                mods |= KEY_MOD_SHIFT;
+            base = keyFromTilde(params[0], &mods);
+            keyMake(key, base == UNKNOWN_KEY ? 0 : mods, base);
+        }
+        else if (final == 'Z')
+            keyMake(key, mods | KEY_MOD_SHIFT, '\t');
+        else if ((base = keyFromFinal(final)) != 0)
+            keyMake(key, mods, base);
+        else
+            keyMake(key, 0, UNKNOWN_KEY);
+    }
+    else if ((base = keyFromFinal(seq1)) != 0)
+        keyMake(key, 0, base);
+    else if (seq1 == 'Z')
+        keyMake(key, KEY_MOD_SHIFT, '\t'); // Shift+Tab
+    else if (seq1 >= 'a' && seq1 <= 'd')
+        // rxvt's Shift+arrows.
+        keyMake(key, KEY_MOD_SHIFT, keyFromFinal((char) (seq1 - 'a' + 'A')));
+    else
+        keyMake(key, 0, '\x1b');
+}
+
+/**
+ * @brief Adds Alt to `key`, unless it's ESC itself or a key Alt can't
+ * modify (mouse reports, UNKNOWN_KEY).
+ */
+static void addAlt(Utf8Char *key)
+{
+    unsigned char base;
+    const int mods = keySplit(key, &base);
+
+    if (key->length != 1 || base == '\x1b' || IS_MOUSE_KEY(base) || base == UNKNOWN_KEY)
+        return;
+    keyMake(key, mods | KEY_MOD_ALT, base);
+}
+
+/**
  * @fn readUtf8Char
  * @brief get an utf8 char in keyboard input.
  *
@@ -71,17 +379,6 @@ Utf8Char* readUtf8Char(void) {
     Utf8Char* new_char = gcalloc(1, sizeof(Utf8Char));
     char seq0;
     char m1;
-    char m2;
-    char seq1;
-    char final;
-    int is_alt;
-    int is_ctrl;
-    int is_shift;
-    int fkey;
-    int number;
-    int modifier;
-    int in_modifier;
-    int seq_len;
     readKeyBytes(&new_char->character[0], 1);
 
     if (new_char->character[0]) {
@@ -91,183 +388,44 @@ Utf8Char* readUtf8Char(void) {
     // Escape sequence handling
     if (new_char->character[0] == '\x1b')
     {
-
-        if (readKeyBytes(&seq0, 1) != 1) {
-            new_char->length = 1;
-            return new_char; // lone ESC, nothing followed in time
-        }
-
-        // CSI ('[') and SS3 ('O') sequences need a second byte before
-        // they mean anything; anything else following ESC directly is a
-        // terminal's usual way of sending an Alt/Option-modified key.
-        if (seq0 != '[' && seq0 != 'O')
-        {
-            if (seq0 == 'x' || seq0 == 'X')
-                new_char->character[0] = ALT_X;
-            else if (seq0 == 'f')
-                // ESC f / ESC b — readline's forward-word / backward-word,
-                // which is exactly what Terminal.app and iTerm2 send for
-                // Option+Right / Option+Left with their default settings.
-                new_char->character[0] = ALT_ARROW_RIGHT;
-            else if (seq0 == 'b')
-                new_char->character[0] = ALT_ARROW_LEFT;
-            else if (seq0 == '\x1b')
-            {
-                // ESC ESC [ C  /  ESC ESC O C — a plain arrow sequence
-                // behind a Meta prefix, the form a terminal in "Option as
-                // Meta key" mode uses for Option+arrow.
-                if (readKeyBytes(&m1, 1) == 1 && (m1 == '[' || m1 == 'O') &&
-                    readKeyBytes(&m2, 1) == 1)
-                {
-                    switch (m2)
-                    {
-                        case 'C': new_char->character[0] = ALT_ARROW_RIGHT; break;
-                        case 'D': new_char->character[0] = ALT_ARROW_LEFT;  break;
-                        case 'A': new_char->character[0] = ARROW_UP;        break;
-                        case 'B': new_char->character[0] = ARROW_DOWN;      break;
-                        default:  new_char->character[0] = '\x1b';          break;
-                    }
-                }
-                else
-                    new_char->character[0] = '\x1b';
-            }
-            else
-                // No general Alt+<key> encoding yet — the ones above are
-                // the keys actually bound. Falling back to a bare ESC here
-                // (instead of the actual character) used to silently
-                // swallow every other Option-modified key: on many non-US
-                // layouts (e.g. French AZERTY), typing symbols like "{",
-                // "}", "[", "]" requires holding Option too, so with
-                // "Option as Meta" enabled in the terminal, that keystroke
-                // arrives as ESC+<char> and looked exactly like an
-                // unrecognized Alt binding — the character itself is still
-                // the best fallback.
-                new_char->character[0] = seq0;
-            new_char->length = 1;
-            return new_char;
-        }
-
-        if (readKeyBytes(&seq1, 1) != 1) {
-            new_char->character[0] = '\x1b';
-            new_char->length = 1;
-            return new_char; // incomplete sequence, treat as lone ESC
-        }
-
-        if (seq0 == '[')
-        {
-            if (seq1 >= '0' && seq1 <= '9')
-            {
-                // CSI <number> [; <modifier>] <final>: \x1b[3~ (Delete),
-                // \x1b[15~ (F5), \x1b[3;5~ (Ctrl+Delete), \x1b[1;3C
-                // (Alt+Right). Read to the final byte however long the
-                // sequence is: stopping early (as this used to, after one
-                // digit and one more byte) left the rest in the input to be
-                // typed as text — Ctrl+Delete inserted "5~", F5 a "~".
-                // modifier is xterm's 1 + (1 Shift, 2 Alt, 4 Ctrl, 8 Meta).
-                number = seq1 - '0';
-                modifier = 1;
-                in_modifier = 0;
-                seq_len = 0;
-                for (;;)
-                {
-                    if (readKeyBytes(&final, 1) != 1 || ++seq_len > 16)
-                    {
-                        final = 0; // truncated or runaway: give up on it
-                        break;
-                    }
-                    if (final >= '0' && final <= '9')
-                    {
-                        if (in_modifier)
-                            modifier = modifier * 10 + (final - '0');
-                        else
-                            number = number * 10 + (final - '0');
-                    }
-                    else if (final == ';' && !in_modifier)
-                    {
-                        in_modifier = 1;
-                        modifier = 0;
-                    }
-                    else
-                        break;
-                }
-                is_alt = (modifier == 3 || modifier == 9);
-                is_ctrl = (modifier == 5);
-                is_shift = (modifier == 2);
-
-                if (final == '~')
-                {
-                    switch (number)
-                    {
-                        case 1: case 7: new_char->character[0] = BEG_LINE;  break;
-                        case 3: new_char->character[0] = is_ctrl ? CTRL_DEL_KEY : DEL_KEY; break;
-                        case 4: case 8: new_char->character[0] = END_LINE;  break;
-                        case 5: new_char->character[0] = PAGE_UP;           break;
-                        case 6: new_char->character[0] = PAGE_DOWN;         break;
-                        default:
-                            // F1-F12: 11-15, 17-21, 23, 24 (the gaps are
-                            // history); Shift+F5-F12 on Terminal.app: 25-34;
-                            // Insert (2) and the rest are unbound.
-                            fkey = functionKeyFromTilde(number);
-                            if (fkey < 0 && (fkey = shiftedFunctionKeyFromTilde(number)) >= 0)
-                                is_shift = 1;
-                            if (fkey >= 0)
-                                new_char->character[0] = (unsigned char)
-                                    ((is_shift ? SHIFT_FUNCTION_KEY : FUNCTION_KEY) + fkey);
-                            else
-                                new_char->character[0] = UNKNOWN_KEY;
-                            break;
-                    }
-                }
-                else
-                {
-                    // Shift/Ctrl on these aren't bound, so they fall
-                    // through to the plain key.
-                    switch (final)
-                    {
-                        case 'C': new_char->character[0] = is_alt ? ALT_ARROW_RIGHT : ARROW_RIGHT; break;
-                        case 'D': new_char->character[0] = is_alt ? ALT_ARROW_LEFT  : ARROW_LEFT;  break;
-                        case 'A': new_char->character[0] = ARROW_UP;   break;
-                        case 'B': new_char->character[0] = ARROW_DOWN; break;
-                        case 'H': new_char->character[0] = BEG_LINE;   break;
-                        case 'F': new_char->character[0] = END_LINE;   break;
-                        // \x1b[1;2P: xterm's Shift+F1-F4.
-                        case 'P': case 'Q': case 'R': case 'S':
-                            new_char->character[0] = (unsigned char)
-                                ((is_shift ? SHIFT_FUNCTION_KEY : FUNCTION_KEY) + (final - 'P'));
-                            break;
-                        default:  new_char->character[0] = UNKNOWN_KEY; break;
-                    }
-                }
-            }
-            else
-            {
-                switch (seq1)
-                {
-                    case 'A': new_char->character[0] = ARROW_UP;    break;
-                    case 'B': new_char->character[0] = ARROW_DOWN;  break;
-                    case 'C': new_char->character[0] = ARROW_RIGHT; break;
-                    case 'D': new_char->character[0] = ARROW_LEFT;  break;
-                    case 'H': new_char->character[0] = BEG_LINE;    break;
-                    case 'F': new_char->character[0] = END_LINE;    break;
-                    default:  new_char->character[0] = '\x1b';      break;
-                }
-            }
-        }
-        else // seq0 == 'O'
-        {
-            switch (seq1)
-            {
-                case 'H': new_char->character[0] = BEG_LINE; break;
-                case 'F': new_char->character[0] = END_LINE; break;
-                // \x1bOP-\x1bOS: F1-F4 on xterm and most terminals.
-                case 'P': case 'Q': case 'R': case 'S':
-                    new_char->character[0] = (unsigned char)(FUNCTION_KEY + (seq1 - 'P'));
-                    break;
-                default:  new_char->character[0] = '\x1b';   break;
-            }
-        }
-
         new_char->length = 1;
+        if (readKeyBytes(&seq0, 1) != 1)
+            return new_char; // lone ESC, nothing followed in time
+
+        if (seq0 == '[' || seq0 == 'O')
+            readEscapeSequence(new_char, seq0);
+        else if (seq0 == '\x1b')
+        {
+            // ESC ESC [ C  /  ESC ESC O C — a whole sequence behind a
+            // Meta prefix, the form a terminal in "Option as Meta key"
+            // mode uses for Option+arrow.
+            if (readKeyBytes(&m1, 1) == 1 && (m1 == '[' || m1 == 'O'))
+            {
+                readEscapeSequence(new_char, m1);
+                addAlt(new_char);
+            }
+        }
+        else if ((unsigned char) seq0 >= 0x80)
+        {
+            // ESC + a non-ASCII character: Option+é and the like have no
+            // name, so it's typed, as before Alt was decoded.
+            new_char->character[0] = (unsigned char) seq0;
+            new_char->length = (unsigned char) seq0 < 0xC0 ? 1 : (unsigned char) seq0 < 0xE0 ? 2 :
+                               (unsigned char) seq0 < 0xF0 ? 3 : 4;
+            if (new_char->length > 1)
+                readKeyBytes(&new_char->character[1], new_char->length - 1);
+        }
+        else
+        {
+            // Anything else following ESC directly is a terminal's usual
+            // way of sending an Alt/Option-modified key: ESC x is ALT-x,
+            // ESC CTRL-a CTRL-ALT-a, ESC DEL ALT-BACKSPACE. If it isn't
+            // bound, the key without Alt is tried (keyFallback()): on
+            // layouts such as French AZERTY, "{" needs Option, and with
+            // "Option as Meta" it arrives as ESC {.
+            new_char->character[0] = (unsigned char) seq0;
+            addAlt(new_char);
+        }
         return new_char;
     }
 
@@ -514,21 +672,6 @@ Utf8Char* utf8ReadFile(const Utf8Char* file_name)
     END_OF_STRING(file_data[count]);
 
     return file_data;
-}
-
-/**
- * @brief concat the src in the dest
- * @param dest second utf8 string
- * @param src first utf8 string
- */
-void utf8Cat(Utf8Char** dest, const Utf8Char* src)
-{
-    Utf8Char* temp = NULL;
-    temp = (Utf8Char*) grealloc(*dest, (utf8StringLen(src) + utf8StringLen(*dest) - 1) * sizeof(Utf8Char));
-    if (temp == NULL)
-        return;
-    *dest = temp;
-    memcpy(*dest + utf8StringLen(*dest) - 1, src, utf8StringLen(src) * sizeof(Utf8Char));
 }
 
 /**

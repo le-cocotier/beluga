@@ -12,9 +12,11 @@
 #include "../include/ansi_parser.h"
 #include "../include/buffer.h"
 #include "../include/completion.h"
+#include "../include/lsp_install.h"
 #include "../include/dap.h"
 #include "../include/data.h"
 #include "../include/input.h"
+#include "../include/lisp_gc.h"
 #include "../include/output.h"
 #include "../include/project.h"
 #include "../include/pty_session.h"
@@ -200,6 +202,7 @@ void editorTick(void) {
     lspCompletionDebounceTick();
     lspSyncDebounceTick();
     lspDecorationsTick();
+    lspInstallTick();
   }
   dapTick();
   autosaveTick();
@@ -256,6 +259,9 @@ void editorRunLoop(void) {
   getWindowSize(&last_rows, &last_cols);
 
   while (!E.exit_requested) {
+    // Between two ticks no Lisp value is held in a C local.
+    lispGcMaybeCollect();
+
     if (getWindowSize(&rows, &cols) == 0 &&
         (rows != last_rows || cols != last_cols)) {
       last_rows = rows;

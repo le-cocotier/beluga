@@ -43,6 +43,18 @@ int editorMoveCursor(int key);
 int executeKeyBind(char *key_sequence);
 int keyBindScope(const struct keyBind_t *kb, const struct buffer_t *buf);
 
+// Scrolls the active pane's view by `lines` (negative: up); the cursor
+// only moves if it would otherwise leave the pane.
+void editorScrollView(int lines);
+
+// Focuses the pane under the last mouse report (E.mouse_row/mouse_col).
+// Returns 0 if the pointer wasn't over a pane.
+int editorMouseFocusPane(void);
+
+// Focuses the pane under the last mouse report and moves the cursor to
+// the character there.
+void editorMouseSetCursor(void);
+
 /**
  * \fn void editorProcessKeypress()
  * \brief Get the last key input and do the proper action.

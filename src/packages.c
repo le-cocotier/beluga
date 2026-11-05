@@ -347,6 +347,32 @@ static int loadRequires(const char *name, Lisp requires, LispContext ctx) {
 }
 
 /**
+ * @brief Where add-package looks for a package named without a folder:
+ * <beluga dir>/packages/<name> when it has an init.lisp, else the copy
+ * bundled with an installed beluga (utilDataDir()/packages/<name>), else
+ * the first one (for the "isn't installed" message).
+ * @param from_install set to 1 when the bundled copy was picked
+ */
+static char *defaultPackageDir(const char *name, int *from_install) {
+  char *dir = utilFormat("%s/packages/%s", utilBelugaDir(), name);
+  const char *data_dir = utilDataDir();
+  char *bundled;
+  OsFileInfo info;
+
+  *from_install = 0;
+  if (!dir || !data_dir || fileExists(dir, "init.lisp") || os_file_info(dir, &info) == 0)
+    return dir;
+  bundled = utilFormat("%s/packages/%s", data_dir, name);
+  if (bundled && fileExists(bundled, "init.lisp")) {
+    gfree(dir);
+    *from_install = 1;
+    return bundled;
+  }
+  gfree(bundled);
+  return dir;
+}
+
+/**
  * @brief Loads one package, once: its requires first, then its init.lisp.
  * @param dir_arg the package's directory, or NULL for
  * <beluga dir>/packages/<name>
@@ -362,6 +388,7 @@ static int loadPackage(const char *name, const char *dir_arg, LispContext ctx) {
   const char *version;
   LispError package_error = LISP_ERROR_NONE;
   int ok = 0;
+  int from_install = 0;
 
   if (entry && (entry->state == PACKAGE_LOADED || entry->state == PACKAGE_LOADING))
     return 1;
@@ -369,7 +396,7 @@ static int loadPackage(const char *name, const char *dir_arg, LispContext ctx) {
   if (dir_arg)
     dir = utilFormat("%s", dir_arg);
   else
-    dir = utilFormat("%s/packages/%s", utilBelugaDir(), name);
+    dir = defaultPackageDir(name, &from_install);
   if (!dir)
     return 0;
   os_path_to_slashes(dir);
@@ -405,7 +432,7 @@ static int loadPackage(const char *name, const char *dir_arg, LispContext ctx) {
   version = manifestString(manifest, "version");
   // A bundled package without a version of its own is as new as the
   // editor it was installed with.
-  if (!version && fileExists(dir, ".bundled"))
+  if (!version && (from_install || fileExists(dir, ".bundled")))
     version = BELUGA_VERSION;
   setString(&entry->version, version);
 
@@ -557,6 +584,30 @@ Lisp l_packageDirectory(const Lisp args, LispError *e, LispContext ctx) {
   (void)e;
   path = name ? utilFormat("%s/packages/%s", utilBelugaDir(), name)
               : utilFormat("%s/packages", utilBelugaDir());
+  if (!path)
+    return lisp_make_bool(0);
+  result = lisp_make_string2(path, ctx);
+  gfree(path);
+  return result;
+}
+
+/**
+ * @brief Lisp function: (bundled-package-directory ["name"]) — the
+ * packages that came with an installed beluga (Homebrew, winget, a .deb,
+ * ...), or that package's folder in it; #f for a beluga that has none
+ * (built from source, set up by install.sh). Read-only: add-package falls
+ * back to it for a package missing from (package-directory).
+ */
+Lisp l_bundledPackageDirectory(const Lisp args, LispError *e, LispContext ctx) {
+  const char *name = stringArg(args, 0);
+  const char *data_dir = utilDataDir();
+  char *path;
+  Lisp result;
+  (void)e;
+  if (!data_dir)
+    return lisp_make_bool(0);
+  path = name ? utilFormat("%s/packages/%s", data_dir, name)
+              : utilFormat("%s/packages", data_dir);
   if (!path)
     return lisp_make_bool(0);
   result = lisp_make_string2(path, ctx);

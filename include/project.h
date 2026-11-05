@@ -49,13 +49,29 @@ void projectSyncActive(void);
 // window has its own current project (daemon.c).
 void projectSwapLastBuffer(int *other);
 
+// Where language server `server` (its lsp-server command) starts for
+// `buffer`'s file, in `out`. 1: start it there without asking (the
+// project's LSP-ROOT, or what was answered before). 0: don't start it
+// (LSP-ROOT #f, or declined before). -1: ask; `out` holds the root to
+// suggest, the project's, or "" for a file outside any project.
+// Makes the buffer's project current.
+int projectLspRoot(Buffer *buffer, const char *server, char *out,
+                   size_t out_size);
+
+// Remembers in ~/.beluga/lsp-roots that `server` starts at `lsp_root` in
+// `buffer`'s project, or with NULL that it doesn't. Nothing for a file
+// outside any project.
+void projectLspRemember(Buffer *buffer, const char *server,
+                        const char *lsp_root);
+
 // The current project's root, or NULL when there is none. Owned by the
 // project list.
 const char *projectCurrentRoot(void);
 
 // The current project's root, or the working directory without one, as a
 // galloc'd string (free with gfree). NULL only if both are unavailable.
-// What find-file and project-search start from.
+// What find-file, project-search, the open-file prompt and new terminals
+// start from.
 char *projectRootOrCwd(void);
 
 #endif // BELUGA_PROJECT_H_

@@ -216,6 +216,7 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
   Utf8Char *buf = gcalloc(PATH_MAX, sizeof(Utf8Char));
   int buf_len = 0;
   Utf8Char *c = NULL;
+  Utf8Char fallback;
   Utf8Char path[PATH_MAX];
   char *pwd;
   char *buf_str;
@@ -238,6 +239,9 @@ Utf8Char *editorPromptEx(const char *prompt, Utf8Char *placeHolder,
     editorSetStatusMessage(prompt, buf);
     editorRefreshScreen();
     c = editorReadKey();
+    // Alt+a types "a" here too, Shift+Tab completes like TAB.
+    if (keyFallback(c, &fallback))
+      *c = fallback;
     if (*c->character == DEL_KEY || *c->character == BACKSPACE) {
       if (buf_len != 0) {
         --buf_len;
@@ -375,74 +379,139 @@ int executeKeyBind(char *key_sequence) {
 }
 
 /**
- * @brief The xterm sequence for function key `c` (FUNCTION_KEY + n or
- * SHIFT_FUNCTION_KEY + n). @return its length.
+ * @brief Scrolls the active pane's view by `lines` (negative: up), keeping
+ * the cursor where it is unless it would leave the pane, in which case it
+ * stays on the pane's first/last line.
+ * @details Sets both halves of editorScroll()'s invariant (buf->y ==
+ * cursor_y + y_offset) together, as editor-recenter does, so its per-frame
+ * fixup doesn't scroll the view back to where the cursor was. Stops once
+ * the last line reaches the bottom of the pane. A terminal pane is left
+ * alone: its rows follow the shell, not a cursor the editor moves.
  */
-static int functionKeySequence(const unsigned char c, char *out, const size_t size) {
-  static const int tilde[12] = {11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 23, 24};
-  const int shift = c >= SHIFT_FUNCTION_KEY;
-  const int n = c - (shift ? SHIFT_FUNCTION_KEY : FUNCTION_KEY);
-  if (n < 4)
-    return snprintf(out, size, shift ? "\x1b[1;2%c" : "\x1bO%c", 'P' + n);
-  return snprintf(out, size, shift ? "\x1b[%d;2~" : "\x1b[%d~", tilde[n]);
+void editorScrollView(const int lines) {
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf;
+  int offset;
+  int max_offset;
+
+  if (!active || active->height < 1)
+    return;
+  buf = bufferFindById(active->buffer_id);
+  if (!buf || buf->type == TERMINAL_BUFF || buf->numrows == 0)
+    return;
+
+  max_offset = buf->numrows - active->height;
+  if (max_offset < active->y_offset)
+    max_offset = active->y_offset; // already past it (editor-recenter): don't jump
+  offset = active->y_offset + lines;
+  if (offset > max_offset)
+    offset = max_offset;
+  if (offset < 0)
+    offset = 0;
+
+  if (buf->y < offset)
+    buf->y = offset;
+  if (buf->y > offset + active->height - 1)
+    buf->y = offset + active->height - 1;
+  if (buf->y > buf->numrows - 1)
+    buf->y = buf->numrows - 1;
+  if (buf->x > buf->row[buf->y].size)
+    buf->x = buf->row[buf->y].size;
+
+  active->y_offset = offset;
+  active->cursor_y = buf->y - offset;
+}
+
+/**
+ * @brief Gives focus to the pane under the last mouse report.
+ * @return 1 if the pointer was over a pane, 0 otherwise (a divider, the
+ * status bar, the message line).
+ */
+int editorMouseFocusPane(void) {
+  const int index = splitScreenPaneAt(E.mouse_row, E.mouse_col);
+  if (index < 0)
+    return 0;
+  splitScreenFocusPane(index);
+  // The buffer's x/y become this pane's cursor before anything moves it.
+  splitScreenSyncCursor();
+  return 1;
+}
+
+/**
+ * @brief Focuses the pane under the last mouse report and puts the cursor
+ * on the character there: past the end of a line, at its end; below the
+ * last line, on the last line; on the line-number gutter, at the first
+ * column shown. A click on a sticky-scroll row goes to the definition
+ * line it shows.
+ */
+void editorMouseSetCursor(void) {
+  EditorPane *active;
+  struct buffer_t *buf;
+  int sticky_rows[STICKY_MAX];
+  int sticky_n;
+  int pane_row;
+  int column;
+  int y;
+
+  if (!editorMouseFocusPane())
+    return;
+  active = splitScreenGetActivePane();
+  buf = bufferFindById(active->buffer_id);
+  if (!buf || buf->type == TERMINAL_BUFF || buf->numrows == 0)
+    return;
+
+  pane_row = E.mouse_row - active->origin_y;
+  sticky_n = editorPaneStickyRows(active, buf, sticky_rows);
+  if (pane_row < sticky_n) {
+    // editorScroll() brings the definition into view.
+    buf->y = sticky_rows[pane_row];
+    buf->x = 0;
+    return;
+  }
+  y = pane_row + active->y_offset;
+  if (y > buf->numrows - 1)
+    y = buf->numrows - 1;
+  column = E.mouse_col - active->origin_x - editorGutterWidth(buf);
+  if (column < 0)
+    column = 0;
+  column += active->x_offset;
+
+  // The target is on screen (or the line end left of it), so
+  // editorScroll() walks the cursor there without scrolling.
+  buf->y = y;
+  buf->x = utf8IndexAtColumn(buf->row[y].characters, buf->row[y].size, column);
+}
+
+/**
+ * @brief What a mouse key does when no keybind claims it: the wheel
+ * scrolls the pane under the pointer (focusing it), a left click places
+ * the cursor, anything else is dropped.
+ */
+static void mouseDefault(const unsigned char key) {
+  switch (key) {
+  case WHEEL_UP:
+    if (editorMouseFocusPane())
+      editorScrollView(-MOUSE_SCROLL_LINES);
+    break;
+  case WHEEL_DOWN:
+    if (editorMouseFocusPane())
+      editorScrollView(MOUSE_SCROLL_LINES);
+    break;
+  case MOUSE_LEFT:
+    editorMouseSetCursor();
+    break;
+  default:
+    break;
+  }
 }
 
 static void ptyForwardKey(struct buffer_t *buf, Utf8Char *key) {
-  unsigned char seq[8];
-  int len;
-
-  switch (key->character[0]) {
-  case ARROW_UP:
-    memcpy(seq, "\x1b[A", 3);
-    len = 3;
-    break;
-  case ARROW_DOWN:
-    memcpy(seq, "\x1b[B", 3);
-    len = 3;
-    break;
-  case ARROW_RIGHT:
-    memcpy(seq, "\x1b[C", 3);
-    len = 3;
-    break;
-  case ARROW_LEFT:
-    memcpy(seq, "\x1b[D", 3);
-    len = 3;
-    break;
-  case DEL_KEY:
-    memcpy(seq, "\x1b[3~", 4);
-    len = 4;
-    break;
-  case PAGE_UP:
-    memcpy(seq, "\x1b[5~", 4);
-    len = 4;
-    break;
-  case PAGE_DOWN:
-    memcpy(seq, "\x1b[6~", 4);
-    len = 4;
-    break;
-  case BEG_LINE:
-    memcpy(seq, "\x1b[H", 3);
-    len = 3;
-    break;
-  case END_LINE:
-    memcpy(seq, "\x1b[F", 3);
-    len = 3;
-    break;
-  default:
-    if (key->length == 1 && IS_FUNCTION_KEY(key->character[0])) {
-      // Back to what the terminal sent: xterm's sequences, so the program
-      // in the pane sees F5 as F5.
-      len = functionKeySequence(key->character[0], (char *)seq, sizeof(seq));
-      break;
-    }
-    if (key->length == 1 && key->character[0] == UNKNOWN_KEY)
-      return; // nothing the program could make sense of
-    memcpy(seq, key->character, key->length);
-    len = (int)key->length;
-    break;
-  }
-
-  ptySessionWrite(buf, (char *)seq, len);
+  char seq[24];
+  // Back to what the terminal sent (xterm's sequences), so the program in
+  // the pane sees F5 as F5 and Alt+f as ESC f.
+  const int len = keyEscapeSequence(key, seq, sizeof(seq));
+  if (len > 0)
+    ptySessionWrite(buf, seq, len);
 }
 
 /**
@@ -479,6 +548,8 @@ static void maybeRequestSignatureHelp(struct buffer_t *buf, const Utf8Char *key)
  */
 void editorProcessKeypress() {
   Utf8Char *c;
+  Utf8Char *typed;
+  Utf8Char fallback;
   EditorPane *active;
   struct buffer_t *buf;
   CompletionItem *item;
@@ -551,6 +622,16 @@ void editorProcessKeypress() {
     return;
   }
 
+  // Mouse reports: a keybind ("WHEEL-UP", "MOUSE-LEFT", ...) wins,
+  // otherwise the built-in behavior. Never typed, and never forwarded to
+  // a terminal buffer's shell as a stray byte.
+  if (c->length == 1 && IS_MOUSE_KEY(c->character[0])) {
+    if (!executeKeyBind(keyToString(c)))
+      mouseDefault(c->character[0]);
+    gfree(c);
+    return;
+  }
+
   E.dirty = 0;
   if (E.buffers != NULL) {
     first_buffer_id = E.buffers->buffer_id;
@@ -572,11 +653,24 @@ void editorProcessKeypress() {
     return;
   }
 
+  // An unbound modified key acts as it did before keys carried every
+  // modifier (keyFallback()): Ctrl+Up as Up, Alt+a types "a". A terminal
+  // pane still gets the whole key.
+  typed = c;
+  if (keyFallback(c, &fallback)) {
+    typed = &fallback;
+    if (executeKeyBind(keyToString(typed))) {
+      gfree(c);
+      return;
+    }
+  }
+
   if (buf->type == TERMINAL_BUFF) {
     ptyForwardKey(buf, c);
     gfree(c);
     return;
   }
+  *c = *typed;
 
   // A prefix is pending (e.g. CTRL-x's "user") and this key isn't bound
   // under it — it's not a valid continuation of whatever command was

@@ -543,8 +543,6 @@ void screenDiffWrite(const char *frame, int len, int rows, int cols) {
   s_valid = 1;
 }
 
-void screenDiffInvalidate(void) { s_valid = 0; }
-
 void screenDiffFree(void) {
   gfree(s_shown.cells);
   gfree(s_next.cells);

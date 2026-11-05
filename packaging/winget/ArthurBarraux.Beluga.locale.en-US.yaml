@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+PackageIdentifier: ArthurBarraux.Beluga
+PackageVersion: "@VERSION@"
+PackageLocale: en-US
+Publisher: Arthur Barraux
+PublisherUrl: https://git.giorgio-nas.fr/arthur
+PackageName: Beluga
+PackageUrl: https://git.giorgio-nas.fr/arthur/beluga
+License: MIT
+LicenseUrl: https://git.giorgio-nas.fr/arthur/beluga/src/branch/main/LICENSE
+ShortDescription: Terminal text editor configured in Lisp, with LSP and a debugger.
+Description: |-
+  Beluga is a terminal text editor for Windows, Linux and macOS, written in C
+  and configured in Lisp. It runs natively in Windows Terminal (no WSL) and
+  has language servers (LSP), a debugger (DAP), a git client, a package
+  manager, terminal panes and a daemon mode several windows connect to.
+Moniker: beluga
+Tags:
+  - editor
+  - text-editor
+  - terminal
+  - lisp
+  - lsp
+  - cli
+ReleaseNotesUrl: https://git.giorgio-nas.fr/arthur/beluga/releases/tag/v@VERSION@
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0

@@ -22,6 +22,7 @@
 #include "../include/input.h"
 #include "../include/memory_inspector.h"
 #include "../include/output.h"
+#include "../include/project.h"
 #include "../include/project_search.h"
 #include "../include/replace.h"
 #include "../include/split_screen.h"
@@ -37,6 +38,7 @@
 
 #include "../include/buffer_switcher.h"
 #include "../include/completion.h"
+#include "../include/lsp_install.h"
 #include "../include/config_load.h"
 #include "../include/init.h"
 #include "../include/list_popup.h"
@@ -135,7 +137,7 @@ static int sameExtensions(const char *a, const char *b) {
  * @note Updates global editor state E (key_binds array)
  */
 Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
-  const char *key_sequence = lisp_string(lisp_car(args));
+  char key_sequence[64];
   int i;
   void *memory_temp;
   Lisp func;
@@ -143,6 +145,9 @@ Lisp mapKey(Lisp args, LispError *e, const LispContext ctx) {
   struct prefix_t prefix;
   char *extensions;
   size_t key_len;
+  // "M-x", "OPTION-x" and "SHIFT-ALT-a" bind what keyToString() calls
+  // "ALT-x" and "ALT-A".
+  keyCanonicalName(lisp_string(lisp_car(args)), key_sequence, sizeof(key_sequence));
   args = lisp_cdr(args);
   // second argument
   func = lisp_car(args);
@@ -276,6 +281,7 @@ void bFree_structs(void) {
   gfree(E.lsp_servers);
   E.lsp_servers = NULL;
   E.number_of_lsp_servers = 0;
+  lspInstallFree(); // (lsp-server-install ...) registrations
 
   editorFreeScreenCache();
 }
@@ -598,9 +604,9 @@ Lisp editorOpenFile(Lisp args, LispError *e, LispContext ctx) {
   EditorPane *active;
   char *cwd;
   appDebug("[EDITOR OPEN FILE]\n");
-  // The working directory as the starting point (getcwd, not $PWD, which
-  // Windows shells don't set).
-  cwd = editorGetCwd();
+  // The current project's root as the starting point, else the working
+  // directory (getcwd, not $PWD, which Windows shells don't set).
+  cwd = projectRootOrCwd();
   // With a trailing slash, so typing a name right away completes inside
   // the directory instead of appending to its name.
   slashed = utilFormat("%s%s", cwd ? cwd : "",
@@ -719,9 +725,8 @@ Lisp editorOpenFilePath(const Lisp args, LispError *e, LispContext ctx) {
 /**
  * @brief Lisp function returning the process's actual current working
  * directory (via getcwd(), not the possibly-stale $PWD env var)
- * @details (editor-pwd) — used as the default project root for the file
- * explorer and tree dump, same role editor-open-file's own prompt
- * placeholder already plays for picking a file interactively.
+ * @details (editor-pwd) — the fallback when there is no current project
+ * (project-root is ""), for the file explorer, dired and the tree dump.
  * @param args Lisp arguments (unused)
  * @return Lisp string, or "" if getcwd() fails
  */
@@ -2485,6 +2490,50 @@ Lisp l_paneWidth(Lisp args, LispError *e, LispContext ctx) {
   (void)e;
   (void)ctx;
   return lisp_make_int(active ? active->width : 0);
+}
+
+/**
+ * @brief Lisp function: scroll the active pane's view
+ * @details (editor-scroll-view lines) — negative scrolls up. The cursor
+ * keeps its place unless it would leave the pane, then it rides along on
+ * the first/last line shown. What the mouse wheel does by default (3 lines
+ * a notch), for binding "WHEEL-UP"/"WHEEL-DOWN" to something else.
+ * @return lisp_null()
+ */
+Lisp l_editorScrollView(Lisp args, LispError *e, LispContext ctx) {
+  (void)e;
+  (void)ctx;
+  if (lisp_is_pair(args) && lisp_type(lisp_car(args)) == LISP_INT)
+    editorScrollView((int)lisp_int(lisp_car(args)));
+  return lisp_null();
+}
+
+/**
+ * @brief Lisp functions: act where the last mouse report was
+ * @details (mouse-focus-pane) gives focus to the pane under the pointer,
+ * #f if it wasn't over one (a divider, the status bar). (mouse-set-cursor)
+ * also moves the cursor to the character clicked — the default for
+ * "MOUSE-LEFT". (mouse-position) is (row . col), 0-based screen cells.
+ */
+Lisp l_mouseFocusPane(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  return editorMouseFocusPane() ? lisp_true() : lisp_false();
+}
+
+Lisp l_mouseSetCursor(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  (void)ctx;
+  editorMouseSetCursor();
+  return lisp_null();
+}
+
+Lisp l_mousePosition(Lisp args, LispError *e, LispContext ctx) {
+  (void)args;
+  (void)e;
+  return lisp_cons(lisp_make_int(E.mouse_row), lisp_make_int(E.mouse_col), ctx);
 }
 
 /***********************************************************************************************************************

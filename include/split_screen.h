@@ -74,12 +74,12 @@ int splitScreenSwitchPane(void);
  */
 int splitScreenFocusOtherRealPane(void);
 
-/**
- * @brief Updates the active pane's buffer
- * @param buffer_id New buffer ID for active pane
- * @return 0 on success, -1 on failure
- */
-int splitScreenSetPaneBuffer(int buffer_id);
+// The pane covering screen cell (row, col), both 0-based: its index in
+// E.layout.panes, or -1 for a divider, the status bar or the message line.
+int splitScreenPaneAt(int row, int col);
+
+// Gives pane `index` focus (and its buffer's focus prefix, like a switch).
+void splitScreenFocusPane(int index);
 
 /**
  * @brief Gets current screen layout
@@ -104,9 +104,5 @@ void splitScreenSaveCursor(void);
 // Rows were inserted (delta > 0) or removed (delta < 0) at row `at` of
 // `buf`: the cursors the other panes keep in it move with their lines.
 void splitScreenLinesShifted(const struct buffer_t *buf, int at, int delta);
-
-void freePane(EditorPane *pane);
-void freeScreenLayout(ScreenLayout *layout);
-
 
 #endif

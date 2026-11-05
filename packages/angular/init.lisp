@@ -42,6 +42,7 @@
 (lsp-server "html" "html"
             "ngserver" "--ngProbeLocations" "node_modules"
             "--tsProbeLocations" "node_modules" "--stdio")
+(lsp-server-install "ngserver" "any" "npm install -g @angular/language-server")
 
 ;; ─── Shared string helpers ──────────────────────────────────────────────────
 ;; Self-contained, like every other package (there's no import between

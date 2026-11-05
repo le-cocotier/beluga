@@ -6,6 +6,7 @@
 #include "../include/color.h"
 #include "../include/cJSON.h"
 #include "../include/completion.h"
+#include "../include/lsp_install.h"
 #include "../include/config_load.h"
 #include "../include/data.h"
 #include "../include/describe.h"
@@ -13,12 +14,14 @@
 #include "../include/define.h"
 #include "../include/file_finder.h"
 #include "../include/galloc.h"
+#include "../include/lisp_gc.h"
 #include "../include/macro.h"
 #include "../include/packages.h"
 #include "../include/project.h"
 #include "../include/project_search.h"
 #include "../include/split_screen.h"
 #include "../include/terminal.h"
+#include "../include/os.h"
 #include "../include/utils.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +81,7 @@ void initBuiltins(void) {
   registerBuiltin("package-state", l_packageState);
   registerBuiltin("package-version", l_packageVersion);
   registerBuiltin("package-directory", l_packageDirectory);
+  registerBuiltin("bundled-package-directory", l_bundledPackageDirectory);
   registerBuiltin("beluga-directory", l_belugaDirectory);
   registerBuiltin("beluga-version", l_belugaVersion);
   registerBuiltin("version-compare", l_versionCompare);
@@ -156,6 +160,7 @@ void initBuiltins(void) {
   registerBuiltin("buffer-line-count", bufferLineCountLisp);
   registerBuiltin("buffer-filename", bufferFilenameLisp);
   registerBuiltin("lsp-server", lspRegisterServer);
+  registerBuiltin("lsp-server-install", lspRegisterInstall);
   registerBuiltin("execute-command", editorExecuteCommand);
   registerBuiltin("editor-copy-end-line", editorCopyEndLine);
   registerBuiltin("editor-switch-buffer-popup", editorSwitchBufferPopup);
@@ -191,6 +196,10 @@ void initBuiltins(void) {
   registerBuiltin("editor-recenter", l_editorRecenter);
   registerBuiltin("pane-height", l_paneHeight);
   registerBuiltin("pane-width", l_paneWidth);
+  registerBuiltin("editor-scroll-view", l_editorScrollView);
+  registerBuiltin("mouse-focus-pane", l_mouseFocusPane);
+  registerBuiltin("mouse-set-cursor", l_mouseSetCursor);
+  registerBuiltin("mouse-position", l_mousePosition);
   registerBuiltin("expand-path", l_expandPath);
   registerBuiltin("file-attributes", l_fileAttributes);
   registerBuiltin("process-run", l_processRun);
@@ -335,6 +344,7 @@ static void initConfig(void) {
   if (!E.ctx.p->err_port)
     E.ctx.p->err_port = tmpfile();
   lisp_lib_load(E.ctx);
+  lispGcInit();
   // Init builtins lisp functions
   initBuiltins();
 
@@ -413,6 +423,47 @@ static void initBreakpointStore(void) {
   breakpointsSetStore(path);
 }
 
+/**
+ * @brief Copies one file of an installed beluga's data into ~/.beluga,
+ * unless it's there already: never overwrites what the user has.
+ */
+static void seedFile(const char *data_dir, const char *from, const char *to) {
+  OsFileInfo info;
+  char err[256];
+  char parent[OS_PATH_MAX];
+  char *src = utilFormat("%s/%s", data_dir, from);
+  char *dest = utilFormat("%s/%s", utilBelugaDir(), to);
+  const char *sources[1];
+
+  if (src && dest && os_file_info(dest, &info) != 0 && os_file_info(src, &info) == 0) {
+    utilDirname(dest, parent, sizeof(parent));
+    sources[0] = src;
+    if (os_mkdirs(parent, err, sizeof(err)) != 0 ||
+        os_copy_tree(sources, 1, dest, err, sizeof(err)) != 0)
+      appDebug("[INIT] couldn't create %s from %s: %s\n", dest, src, err);
+  }
+  gfree(src);
+  gfree(dest);
+}
+
+/**
+ * @brief A beluga installed by a package manager (Homebrew, winget, a
+ * .deb, ...) gets no install.sh to set up ~/.beluga, so its first start
+ * does it: the default config/init.lisp, a personal-config to edit and the
+ * splash screen, each only when missing. The bundled packages are not
+ * copied: add-package finds them in the install itself (utilDataDir()), so
+ * they stay in step with the editor through upgrades, and a copy in
+ * ~/.beluga/packages still wins.
+ */
+static void seedUserDir(void) {
+  const char *data_dir = utilDataDir();
+  if (!data_dir || !utilBelugaDir())
+    return;
+  seedFile(data_dir, "config/init.lisp", "config/init.lisp");
+  seedFile(data_dir, "config/personal-config.lisp", "packages/personal-config/init.lisp");
+  seedFile(data_dir, "assets/beluga.txt", "assets/beluga.txt");
+}
+
 void initEditor() {
   char *home;
   EditorPane *active = NULL;
@@ -448,6 +499,7 @@ void initEditor() {
   }
   gfree(home);
 
+  seedUserDir();
   E.init_file_path = utilFormat("%s/config/init.lisp", utilBelugaDir());
   if (!E.init_file_path) {
     die("out of memory");

@@ -74,15 +74,6 @@ int asyncProcessStreams(OsStream **streams, const int max) {
   return n;
 }
 
-int asyncProcessCount(void) {
-  int i;
-  int count = 0;
-  for (i = 0; i < MAX_ASYNC_PROCESSES; i++)
-    if (s_procs[i].in_use)
-      count++;
-  return count;
-}
-
 /**
  * @brief Appends a chunk to a process's collected output, up to the cap.
  */
@@ -133,6 +124,13 @@ static void finish(AsyncProcess *p) {
   lisp_apply(callback, lisp_cons(result, lisp_null(), E.ctx), &error, E.ctx);
   if (error != LISP_ERROR_NONE)
     appDebug("[ASYNC] process callback raised an error\n");
+}
+
+void asyncProcessVisitLispRoots(LispRootVisitor visit, LispContext ctx) {
+  int i;
+  for (i = 0; i < MAX_ASYNC_PROCESSES; i++)
+    if (s_procs[i].in_use)
+      visit(&s_procs[i].callback, ctx);
 }
 
 void asyncProcessPoll(void) {

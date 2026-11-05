@@ -141,7 +141,15 @@
 
 ;; ─── paths ──────────────────────────────────────────────────────────────────
 
-(define (package--dir name) (package-directory name))
+;; A beluga installed by a package manager (Homebrew, winget, a .deb, ...)
+;; keeps its bundled packages in the install, read-only, and add-package
+;; falls back to them; one in (package-directory) wins over it.
+(define (package--system-dir name)
+  (let ((dir (bundled-package-directory name)))
+    (if (and dir (file-attributes (string-append dir "/init.lisp"))) dir #f)))
+(define (package--system? name)
+  (and (not (file-attributes (package-directory name))) (package--system-dir name) #t))
+(define (package--dir name) (or (and (package--system? name) (package--system-dir name)) (package-directory name)))
 (define (package--staging-dir) (string-append (package-directory) "/.staging"))
 (define (package--backup-dir) (string-append (beluga-directory) "/packages.bak"))
 (define (package--lock-path) (string-append (package-directory "personal-config") "/packages.lock"))
@@ -150,7 +158,7 @@
 (define (package--exists? path) (if (file-attributes path) #t #f))
 (define (package--installed? name) (package--exists? (string-append (package--dir name) "/init.lisp")))
 (define (package--git? name) (package--exists? (string-append (package--dir name) "/.git")))
-(define (package--bundled? name) (package--exists? (string-append (package--dir name) "/.bundled")))
+(define (package--bundled? name) (or (package--system? name) (package--exists? (string-append (package--dir name) "/.bundled"))))
 (define (package--link? name)
   (let ((attrs (file-attributes (package--dir name))))
     (and attrs (car (cdr attrs)))))
@@ -737,6 +745,7 @@
     (cond ((not name) #f)
           ((string=? name "personal-config") (package--fail "package: personal-config is yours, not removing it"))
           ((not (package--exists? (package--dir name))) (package--fail (string-append "package: " name " isn't installed")))
+          ((package--system? name) (package--fail (string-append "package: " name " comes with beluga itself; leave its add-package line out of your config instead")))
           ((package--confirm? (string-append "Remove " name (if package-remove-deletes " (deleted)" " (moved to packages.bak)") "?"))
            (let ((result (if package-remove-deletes
                              (delete-path (package--dir name))
@@ -849,10 +858,18 @@
 
 ;; ─── the *packages* list ────────────────────────────────────────────────────
 
+(define (package--dir-names dir)
+  (let ((entries (if dir (list-directory dir) #f)))
+    (if entries
+        (filter (lambda (name) (not (package--starts-with? name ".")))
+                (map1 car (filter (lambda (entry) (cdr entry)) entries)))
+        '())))
+
 (define (package--installed-names)
-  (sort (filter (lambda (name) (not (package--starts-with? name ".")))
-                (map1 car (filter (lambda (entry) (cdr entry)) (list-directory (package-directory)))))
-        string<?))
+  (let ((own (package--dir-names (package-directory))))
+    (sort (append own (filter (lambda (name) (and (not (member name own)) (package--system? name)))
+                              (package--dir-names (bundled-package-directory))))
+          string<?)))
 
 (define (package--kind name)
   (cond ((string=? name "personal-config") "personal")

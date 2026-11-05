@@ -45,28 +45,10 @@ int bufferFindOtherLspOpen(struct buffer_t* buf);
 int bufferClose(int buff_id);
 
 /**
- * @brief Gets the current active buffer
- * @return Pointer to current buffer_t, NULL if none
- */
-struct buffer_t *bufferGetCurrent(void);
-
-/**
- * @brief Lists all open buffers
- * @return Number of open buffers
- */
-int bufferListAll(void);
-
-/**
  * @brief Saves current buffer to disk
  * @return 0 on success, -1 on failure
  */
 int bufferSave(void);
-
-/**
- * @brief Saves all buffers to disk
- * @return 0 on success, -1 on failure
- */
-int bufferSaveAll(void);
 
 void bufferFind(struct buffer_t *buf);
 void bufferFindReverse(struct buffer_t* buf);

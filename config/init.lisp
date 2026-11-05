@@ -22,6 +22,41 @@
 ;; CTRL-x p s shows it on demand either way. Omitting this leaves it on.
 (define LSP-SIGNATURE-HELP #t)
 
+;; Mouse: the wheel scrolls the pane under the pointer (3 lines a notch,
+;; the cursor rides along only if it would leave the pane) and a left click
+;; puts the cursor where you clicked. The keys are "WHEEL-UP", "WHEEL-DOWN"
+;; and "MOUSE-LEFT" if you'd rather map-key them to something else (see
+;; editor-scroll-view, mouse-set-cursor, mouse-position). While it's on, the
+;; terminal's own text selection needs Shift held (Option in iTerm2 and
+;; Terminal.app). Omitting this leaves it on.
+(define MOUSE #t)
+
+;; Keys with modifiers. Every Alt/Option and Ctrl combination has a name
+;; for map-key, modifiers in the order CTRL-ALT-SHIFT-:
+;;   "ALT-x" "ALT-X" (Alt+Shift+x) "ALT-1" "ALT-." "ALT-ENTER" "ALT-SPACE"
+;;   "ALT-BACKSPACE" "CTRL-ALT-k" "CTRL-1" "CTRL-." "CTRL-SHIFT-a"
+;;   "CTRL-ENTER" "SHIFT-ENTER" "SHIFT-TAB" "CTRL-\\" "CTRL-]"
+;;   "CTRL-ARROW-UP" "ALT-ARROW-LEFT" "CTRL-SHIFT-ARROW-RIGHT" "CTRL-HOME"
+;;   "ALT-DEL" "CTRL-PAGE-UP" "CTRL-F5" "CTRL-ALT-F12" ...
+;; OPTION-, META-, OPT- and Emacs's C-/M-/S- are accepted too ("M-x" is
+;; "ALT-x"). An unbound one acts as before: CTRL-ARROW-UP as ARROW-UP, an
+;; unbound ALT-a types "a" (so AZERTY's Option+( still gives "{"), ALT-f
+;; and ALT-b as ALT-ARROW-RIGHT/LEFT. describe-key (CTRL-x h k) shows
+;; what a key is called.
+;;
+;; macOS: Option types special characters (Option+f is "ƒ") unless the
+;; terminal sends it as Meta: Terminal.app > Settings > Profiles >
+;; Keyboard > "Use Option as Meta key"; iTerm2 > Settings > Profiles >
+;; Keys > Left/Right Option key: "Esc+". Then Option+key is ALT-key.
+;;
+;; Ctrl+1, Ctrl+., Ctrl+Shift+a, Ctrl+Enter only exist where the terminal
+;; can report them: beluga asks for xterm's modifyOtherKeys (xterm,
+;; WezTerm, foot, Ghostty; iTerm2's "Report keys using CSI u" works too)
+;; and reads them from the Windows console's key events. Terminal.app and
+;; the Linux console can't: there Ctrl+1 is just "1". (define EXTENDED-KEYS
+;; #f) stops asking. Omitting this leaves it on.
+(define EXTENDED-KEYS #t)
+
 ;; Every AUTOSAVE-INTERVAL seconds, files with unsaved changes are copied to
 ;; ~/.beluga/autosave/. Saving (or killing the buffer) removes the copy; after
 ;; a crash or a closed terminal, opening the file again offers to recover it.
@@ -93,6 +128,17 @@
 ;; bundled, so enabling one is just uncommenting it (or adding the line to
 ;; personal-config). Calling (lsp-server ...) directly here also works fine
 ;; for a language with no package of its own yet.
+;;
+;; When a file's server isn't on PATH, beluga offers to install it, if the
+;; package says how with
+;; (lsp-server-install "command" "os" "shell command" ["os" "shell command"]...)
+;; where os is "linux", "darwin", "windows", "unix" (all but Windows) or
+;; "any". Of the commands for your system, the first whose own program is
+;; installed (npm, brew, apt-get...) is offered; it runs in a terminal pane,
+;; *lsp-install*, where a sudo password can be typed. A later call's
+;; commands are tried first, so one in personal-config, e.g.
+;; (lsp-server-install "pyright-langserver" "any" "pipx install pyright"),
+;; is offered instead of the package's.
 ;; (add-package "c")
 ;; (add-package "python")   ; needs pyright-langserver on PATH
 ;; (add-package "rust")     ; needs rust-analyzer on PATH
@@ -358,6 +404,7 @@
 (map-key "CTRL-SPACE" editor-set-mark "no-prefix")
 (map-key "CTRL-DEL" editor-kill-region "no-prefix")
 (map-key "CTRL-w" editor-cut-region "no-prefix")
+(map-key "ALT-w" editor-copy-region "no-prefix")
 
 ;; user
 (map-key "p" '(editor-set-prefix "project") "user")
@@ -366,6 +413,7 @@
 (map-key "f" editor-open-file "user")
 (map-key "c" '(editor-set-prefix "config") "user")
 (map-key "ARROW-RIGHT" editor-switch-next-buffer "user")
+(map-key "ARROW-LEFT" editor-switch-prev-buffer "user")
 (map-key "b" editor-buffer-picker "user")
 (map-key "k" editor-kill-buffer "user")
 (map-key "\"" editor-split-screen-vertical "user")
@@ -503,9 +551,13 @@
 (map-key "n" project-add "project")
 (map-key "x" project-remove "project")
 (map-key "X" project-prune "project")
+;; Starting a language server in a project is asked once and remembered;
+;; L forgets the answers, so the next session asks again.
+(map-key "L" project-lsp-forget "project")
 
 ;; term
 (map-key "ESCAPE" '(editor-set-prefix "no-prefix") "term")
+(map-key "CTRL-x" '(editor-set-prefix "user") "term")
 
 ;; search
 (map-key "ENTER" project-search-goto "search")

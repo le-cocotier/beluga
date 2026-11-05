@@ -33,6 +33,13 @@ int editorGutterWidth(const struct buffer_t *buf);
 
 void editorScroll();
 
+// At most this many enclosing definitions pinned atop a pane.
+#define STICKY_MAX 3
+
+// The rows sticky scroll pins atop `pane` (file rows, outermost first),
+// as drawn: what a click on one of the pane's first rows lands on.
+int editorPaneStickyRows(const EditorPane *pane, const struct buffer_t *buf, int *rows);
+
 void editorDrawStatusBar(struct abuf *ab);
 
 void editorDrawMessageBar(struct abuf *ab);

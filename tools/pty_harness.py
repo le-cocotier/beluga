@@ -24,6 +24,7 @@ import subprocess
 import tempfile
 import termios
 import time
+import traceback
 
 try:
     import pyte
@@ -31,8 +32,19 @@ except ImportError:
     pyte = None
 
 
+# Every deadline (the watchdog, wait_for, wait_exit, run) is multiplied by
+# this. A passing test never waits for a deadline, so a generous one only
+# costs time when something is already wrong; a sanitizer build on a slow
+# CI machine runs several times slower than a laptop.
+TIME_SCALE = float(os.environ.get('BELUGA_TEST_TIME_SCALE', '3'))
+
+
 class Timeout(Exception):
     pass
+
+
+def _scaled(seconds):
+    return int(seconds * TIME_SCALE + 0.5)
 
 
 def _on_alarm(signum, frame):
@@ -73,6 +85,7 @@ class Beluga:
         self.fd = None
         self.status = None
         self.screen = pyte.Screen(cols, rows) if pyte else None
+        self.output = bytearray()  # everything the editor wrote
         self.stream = pyte.ByteStream(self.screen) if pyte else None
 
     # ── Lifecycle ──────────────────────────────────────────────────────
@@ -82,10 +95,13 @@ class Beluga:
             self.home = self.shared_home
             self.previous_alarm = None
             return self
-        self.home = tempfile.mkdtemp(prefix='beluga-test-')
+        # Under /tmp, not $TMPDIR: macOS's is a long path under /var/folders,
+        # and tests that look for a path on screen need it to fit the width.
+        tmp = '/tmp' if os.path.isdir('/tmp') else None
+        self.home = tempfile.mkdtemp(prefix='bt-', dir=tmp)
         install_config(self.repo, self.home)
         self.previous_alarm = signal.signal(signal.SIGALRM, _on_alarm)
-        signal.alarm(self.timeout)
+        signal.alarm(_scaled(self.timeout))
         return self
 
     def start(self, *args, cwd=None):
@@ -146,7 +162,7 @@ class Beluga:
                    SHELL='/bin/sh', PS1='$ ', **self.extra_env)
         result = subprocess.run([self.binary] + list(args), cwd=self.home, env=env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=20)
+                                stderr=subprocess.STDOUT, timeout=_scaled(20))
         return result.returncode, result.stdout.decode(errors='replace')
 
     # ── Talking to it ──────────────────────────────────────────────────
@@ -167,6 +183,7 @@ class Beluga:
                 return False
             if not data:
                 return False
+            self.output += data
             if self.stream:
                 self.stream.feed(data)
 
@@ -200,7 +217,7 @@ class Beluga:
 
     def wait_for(self, needle, seconds=10):
         """Waits until `needle` is on screen (needs pyte)."""
-        end = time.time() + seconds
+        end = time.time() + seconds * TIME_SCALE
         while time.time() < end:
             if any(needle in line for line in self.screen.display):
                 return True
@@ -233,7 +250,7 @@ class Beluga:
 
     def wait_exit(self, seconds=20):
         """Waits for the editor to exit; its wait status."""
-        end = time.time() + seconds
+        end = time.time() + seconds * TIME_SCALE
         while time.time() < end:
             done, status = os.waitpid(self.pid, os.WNOHANG)
             if done:
@@ -243,14 +260,28 @@ class Beluga:
         raise AssertionError('beluga did not exit')
 
 
+class Skip(Exception):
+    """Raised by a test that can't run here (a missing tool)."""
+
+
 def run_tests(tests, binary, repo):
-    """Runs (name, function(binary, repo)) pairs; 0 if all passed."""
-    failed = 0
+    """Runs (name, function(binary, repo)) pairs; 0 if all passed, 77
+    (meson's "skipped") if all were skipped, 1 if any failed. Any exception
+    fails only its own test: the others still run."""
+    failed = skipped = 0
     for name, test in tests:
         try:
             test(binary, repo)
-            print('ok    %s' % name)
+            print('ok    %s' % name, flush=True)
+        except Skip as e:
+            print('skip  %s: %s' % (name, e), flush=True)
+            skipped += 1
         except (AssertionError, Timeout) as e:
-            print('FAIL  %s: %s' % (name, e))
+            print('FAIL  %s: %s' % (name, e), flush=True)
             failed += 1
-    return 1 if failed else 0
+        except Exception:
+            print('FAIL  %s: %s' % (name, traceback.format_exc()), flush=True)
+            failed += 1
+    if failed:
+        return 1
+    return 77 if tests and skipped == len(tests) else 0

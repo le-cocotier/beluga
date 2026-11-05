@@ -115,6 +115,7 @@ src_files = files(
   'src/popup_ui.c',
   'src/subprocess.c',
   'src/async_process.c',
+  'src/lsp_install.c',
   'src/project.c',
   'src/project_files.c',
   'src/project_search.c',
@@ -125,6 +126,7 @@ src_files = files(
   'src/screen_diff.c',
   'src/describe.c',
   'src/settings.c',
+  'src/lisp_gc.c',
   'src/daemon.c',
   'src/daemon_client.c',
   'src/daemon_frame.c'
@@ -143,8 +145,23 @@ beluga_exe = executable('beluga',
   c_args : core_args,
   link_with : [core_lib, os_lib],
   dependencies : [m],
-  link_args : link_args
+  link_args : link_args,
+  install : true
 )
+
+# `meson install` (what Homebrew, the .deb/.rpm and the AUR package run):
+# bin/beluga, plus the default config, the bundled packages and the splash
+# screen in share/beluga. beluga finds them from its own path at start
+# (utilDataDir()), sets up ~/.beluga from them the first time, and loads
+# bundled packages from there, so they upgrade with the editor.
+# install.sh and install.ps1 don't use this: they copy into ~/.beluga.
+if not is_windows
+  beluga_data = get_option('datadir') / 'beluga'
+  install_subdir('config', install_dir : beluga_data)
+  install_subdir('packages', install_dir : beluga_data,
+    exclude_files : ['lisp_log.err'])
+  install_subdir('assets', install_dir : beluga_data)
+endif
 
 # The OS boundary, checked: no file outside src/os/ includes an OS header.
 test('os-boundary', find_program('tools/check_os_boundary.sh'),
@@ -157,7 +174,8 @@ test('galloc', find_program('tools/check_galloc.sh'),
 # Unit tests (test/): each is a small program linked against the editor's
 # code; test/test.c stands in for main.c's globals. On Windows they get
 # beluga.exe's manifest too, so file names are UTF-8 for them as well.
-foreach t : ['utf8', 'buffer', 'ansi_parser', 'os', 'completion', 'packages', 'highlight', 'lsp_symbols', 'breakpoints']
+foreach t : ['utf8', 'keys', 'buffer', 'ansi_parser', 'os', 'completion', 'packages', 'highlight', 'lsp_symbols', 'breakpoints', 'lisp_lib',
+           'utils', 'jsonrpc_stream', 'daemon_frame', 'macro', 'settings', 'lsp_install', 'lsp_completion', 'lsp_start']
   test(t, executable('test_' + t,
     files('test/test_' + t + '.c', 'test/test.c') + extra_sources,
     c_args : core_args,
@@ -175,11 +193,18 @@ if python3.found() and not is_windows
     args : [files('tools/smoke_test.py'), beluga_exe, meson.current_source_dir()],
     timeout : 60)
   # What's on screen, through pyte (tools/pty_harness.py): TAB completion,
-  # and full-screen programs (less, vim) in a terminal pane. Skipped
+  # full-screen programs (less, vim) in a terminal pane, the debugger, the
+  # daemon. One meson test per pty test, so each has its own timeout and a
+  # failure names the test; `meson test --suite pty` runs them all. Skipped
   # without pyte (python3-pyte).
-  test('pty', python3,
-    args : [files('tools/pty_tests.py'), beluga_exe, meson.current_source_dir()],
-    timeout : 300)
+  pty_tests = run_command(python3, files('tools/pty_tests.py'), '--list',
+    check : true).stdout().split()
+  foreach t : pty_tests
+    test('pty-' + t, python3,
+      args : [files('tools/pty_tests.py'), beluga_exe, meson.current_source_dir(), t],
+      suite : 'pty',
+      timeout : 240)
+  endforeach
 endif
 
 # Fuzz targets (test/fuzz/). By default each is built with a small main()
@@ -212,4 +237,9 @@ if not is_windows
     args : [beluga_exe.full_path(), meson.current_source_dir()],
     depends : beluga_exe,
     timeout : 300)
+  # An installed beluga sets up ~/.beluga and loads the bundled packages
+  # from its install (test/test_installed.sh).
+  test('installed', find_program('test/test_installed.sh'),
+    args : [beluga_exe.full_path(), meson.current_source_dir()],
+    depends : beluga_exe)
 endif

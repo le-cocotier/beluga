@@ -6,6 +6,7 @@
 
 #include "../include/pty_session.h"
 #include "../include/editor_op.h"
+#include "../include/project.h"
 #include "../include/galloc.h"
 #include "../include/terminal.h"
 #include "../include/split_screen.h"
@@ -25,7 +26,8 @@ void ptySessionSetNextProgram(const char* const* argv, const char* cwd, const ch
 
 int ptySessionSpawn(struct buffer_t* buf, const char* shell_path, const int rows, const int cols)
 {
-    char* cwd = editorGetCwd();
+    // The current project's root when there is one, like find-file.
+    char* cwd = projectRootOrCwd();
     if (s_next_argv)
         buf->pty = os_pty_spawn(s_next_argv, s_next_cwd ? s_next_cwd : cwd, s_next_env, rows, cols);
     else
@@ -64,11 +66,6 @@ OsStream *ptySessionOutput(const struct buffer_t* buf)
 long ptySessionPid(const struct buffer_t* buf)
 {
     return buf->pty ? os_pty_pid(buf->pty) : -1;
-}
-
-int ptySessionIsAlive(struct buffer_t* buf)
-{
-    return buf->pty && os_pty_alive(buf->pty);
 }
 
 void ptySessionClose(struct buffer_t* buf)

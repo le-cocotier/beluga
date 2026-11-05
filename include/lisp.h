@@ -118,6 +118,18 @@ void lisp_shutdown(LispContext ctx);
 // global env
 Lisp lisp_collect(Lisp root_to_save, LispContext ctx);
 void lisp_print_collect_stats(LispContext ctx);
+
+// beluga: values the embedding program keeps outside the Lisp heap (a key
+// binding's command, a hook's callback, ...). lisp_collect() moves every
+// object it keeps, so it calls `roots` to have each such value updated:
+// `roots` calls `visit` on the address of every one of them. The program
+// must hold no other Lisp value (in a C local, say) across a collection.
+typedef void (*LispRootVisitor)(Lisp *root, LispContext ctx);
+void lisp_set_roots(void (*roots)(LispRootVisitor visit, LispContext ctx),
+                    LispContext ctx);
+// beluga: bytes allocated on the Lisp heap, live or not, since the last
+// collection (or startup).
+size_t lisp_heap_size(LispContext ctx);
 const char *lisp_error_string(LispError error);
 
 void lisp_set_env(Lisp env, LispContext ctx);
@@ -542,6 +554,8 @@ struct LispImpl {
 
   Lisp symbol_cache[SYM_COUNT];
 
+  void (*roots)(LispRootVisitor visit, LispContext ctx);
+
   size_t gc_stat_freed;
   size_t gc_stat_time;
 };
@@ -823,6 +837,11 @@ Lisp lisp_make_vector(int n, LispContext ctx) {
   size_t size = sizeof(Vector) + sizeof(LispVal) * n + sizeof(char) * n;
   Vector *vector = gc_alloc(size, LISP_VECTOR, ctx);
   vector->block.d.vector.length = n;
+  // beluga: the collector walks every entry of a vector, so none may be
+  // left uninitialized ((make-vector n) without a fill, vector-grow's new
+  // tail, a hash table's unused value slots).
+  memset(vector->entries, 0, sizeof(LispVal) * n);
+  memset((char *)vector->entries + sizeof(LispVal) * n, LISP_NULL, n);
 
   LispVal val;
   val.ptr_val = vector;
@@ -950,8 +969,11 @@ Lisp lisp_make_table(LispContext ctx) {
 
 static void table_grow_(Lisp t, size_t new_capacity, LispContext ctx) {
   Table *table = table_get_(t);
-  if (new_capacity < 16)
-    new_capacity = 16;
+  // beluga: was 16. Every lambda call gets a table for its frame, and most
+  // frames hold one to three names: apply() sizes them with
+  // frame_capacity_() instead of paying for 16 slots each.
+  if (new_capacity < 4)
+    new_capacity = 4;
   assert(IS_POW2(new_capacity));
 
   int old_capacity = table->capacity;
@@ -975,6 +997,15 @@ static void table_grow_(Lisp t, size_t new_capacity, LispContext ctx) {
       lisp_table_set(t, key, lisp_vector_ref(old_vals, i), ctx);
   }
   assert(n == table->size);
+}
+
+// beluga: the smallest capacity that holds n names (and one internal define)
+// without lisp_table_set() growing the table.
+static int frame_capacity_(int n) {
+  int capacity = 4;
+  while (capacity <= 2 * n)
+    capacity *= 2;
+  return capacity;
 }
 
 void lisp_table_set(Lisp t, Lisp key, Lisp x, LispContext ctx) {
@@ -1769,10 +1800,10 @@ static Lisp parse_list_r(Lexer *lex, jmp_buf error_jmp, LispContext ctx) {
   int quote_type = SYM_QUOTE;
   switch (lex->token) {
   case TOKEN_NONE:
-    fprintf(ctx.p->err_port, "%llu. expected closing )\n", lexer_position_(lex));
+    fprintf(ctx.p->err_port, "%zu. expected closing )\n", lexer_position_(lex));
     longjmp(error_jmp, LISP_ERROR_READ_SYNTAX);
   case TOKEN_DOT:
-    fprintf(ctx.p->err_port, "%llu. unexpected .\n", lexer_position_(lex));
+    fprintf(ctx.p->err_port, "%zu. unexpected .\n", lexer_position_(lex));
     longjmp(error_jmp, LISP_ERROR_READ_SYNTAX);
   case TOKEN_L_PAREN: {
     Lisp tail = lisp_null();
@@ -1787,7 +1818,7 @@ static Lisp parse_list_r(Lexer *lex, jmp_buf error_jmp, LispContext ctx) {
     // A dot at the end of a list assigns the cdr
     if (lex->token == TOKEN_DOT) {
       if (lisp_is_null(tail)) {
-        fprintf(ctx.p->err_port, "%llu. unexpected .\n", lexer_position_(lex));
+        fprintf(ctx.p->err_port, "%zu. unexpected .\n", lexer_position_(lex));
         longjmp(error_jmp, LISP_ERROR_READ_SYNTAX);
       }
 
@@ -1802,7 +1833,7 @@ static Lisp parse_list_r(Lexer *lex, jmp_buf error_jmp, LispContext ctx) {
     }
 
     if (lex->token != TOKEN_R_PAREN) {
-      fprintf(ctx.p->err_port, "%llu. expected closing )\n",
+      fprintf(ctx.p->err_port, "%zu. expected closing )\n",
               lexer_position_(lex));
       longjmp(error_jmp, LISP_ERROR_READ_SYNTAX);
     }
@@ -1855,7 +1886,7 @@ static Lisp parse_list_r(Lexer *lex, jmp_buf error_jmp, LispContext ctx) {
   case TOKEN_CHAR: {
     int c = parse_char_(lex);
     if (c <= 0) {
-      fprintf(ctx.p->err_port, "%llu. unknown character\n",
+      fprintf(ctx.p->err_port, "%zu. unknown character\n",
               lexer_position_(lex));
       longjmp(error_jmp, LISP_ERROR_READ_SYNTAX);
     }
@@ -2256,6 +2287,19 @@ static int apply(Lisp operator, Lisp args, Lisp *out_result, Lisp *out_env,
     // make a new environment
     Lisp new_table = lisp_make_table(ctx);
 
+    // beluga: sized for the parameters up front. A frame with none stays
+    // empty (capacity 0) until something is defined in it.
+    int slot_count = 0;
+    Lisp it = slot_names;
+    while (lisp_is_pair(it)) {
+      ++slot_count;
+      it = lisp_cdr(it);
+    }
+    if (lisp_type(it) == LISP_SYMBOL)
+      ++slot_count;
+    if (slot_count > 0)
+      table_grow_(new_table, frame_capacity_(slot_count), ctx);
+
     // bind parameters to arguments
     // to pass into function call
     while (lisp_is_pair(slot_names) && lisp_is_pair(args)) {
@@ -2586,16 +2630,11 @@ Lisp lisp_macroexpand(Lisp lisp, LispError *out_error, LispContext ctx) {
   }
 }
 
-Lisp lisp_eval2(Lisp l, Lisp env, LispError *out_error, LispContext ctx) {
+// beluga: lisp_eval2() without the macroexpansion pass, for code that was
+// already expanded, like the body of a lambda (see apply_expanded_()).
+static Lisp eval_expanded_(Lisp expanded, Lisp env, LispError *out_error,
+                           LispContext ctx) {
   LispError error;
-  Lisp expanded = lisp_macroexpand(l, &error, ctx);
-
-  if (error != LISP_ERROR_NONE) {
-    if (out_error)
-      *out_error = error;
-    return lisp_null();
-  }
-
   size_t save_stack = ctx.p->stack_ptr;
 
   jmp_buf error_jmp;
@@ -2625,6 +2664,18 @@ Lisp lisp_eval2(Lisp l, Lisp env, LispError *out_error, LispContext ctx) {
   }
 }
 
+Lisp lisp_eval2(Lisp l, Lisp env, LispError *out_error, LispContext ctx) {
+  LispError error;
+  Lisp expanded = lisp_macroexpand(l, &error, ctx);
+
+  if (error != LISP_ERROR_NONE) {
+    if (out_error)
+      *out_error = error;
+    return lisp_null();
+  }
+  return eval_expanded_(expanded, env, out_error, ctx);
+}
+
 Lisp lisp_eval(Lisp expr, LispError *out_error, LispContext ctx) {
   return lisp_eval2(expr, lisp_env(ctx), out_error, ctx);
 }
@@ -2640,6 +2691,23 @@ Lisp lisp_apply(Lisp operator, Lisp args, LispError *out_error,
   if (*out_error != LISP_ERROR_NONE)
     return lisp_false();
   return needs_to_eval ? lisp_eval2(x, env, out_error, ctx) : x;
+}
+
+// beluga: lisp_apply() for the library's own calls (apply, map, filter,
+// sort, ...). A lambda's body was expanded along with the form that made
+// it, and eval_r() runs it as is; walking it through the expander again on
+// every call only cost time.
+static Lisp apply_expanded_(Lisp operator, Lisp args, LispError *out_error,
+                            LispContext ctx) {
+  Lisp x;
+  Lisp env;
+  int needs_to_eval;
+
+  *out_error = LISP_ERROR_NONE;
+  needs_to_eval = apply(operator, args, &x, &env, out_error, ctx);
+  if (*out_error != LISP_ERROR_NONE)
+    return lisp_false();
+  return needs_to_eval ? eval_expanded_(x, env, out_error, ctx) : x;
 }
 
 static Lisp gc_move(Lisp x, LispContext ctx) {
@@ -2717,6 +2785,10 @@ static Lisp gc_move_weak_symbols(Lisp old_table, LispContext ctx) {
   return to_table;
 }
 
+static void gc_move_root_(Lisp *root, LispContext ctx) {
+  *root = gc_move(*root, ctx);
+}
+
 Lisp lisp_collect(Lisp root_to_save, LispContext ctx) {
 #ifdef LISP_DEBUG
   time_t start_time = clock();
@@ -2734,6 +2806,8 @@ Lisp lisp_collect(Lisp root_to_save, LispContext ctx) {
 
   gc_move_v(ctx.p->symbol_cache, SYM_COUNT, ctx);
   gc_move_v(ctx.p->stack, ctx.p->stack_ptr, ctx);
+  if (ctx.p->roots)
+    ctx.p->roots(gc_move_root_, ctx);
 
   Lisp result = gc_move(root_to_save, ctx);
 
@@ -2862,16 +2936,23 @@ Lisp lisp_collect(Lisp root_to_save, LispContext ctx) {
 void lisp_print_collect_stats(LispContext ctx) {
   Page *page = ctx.p->heap.bottom;
   while (page) {
-    printf("%llu/%llu ", page->size, page->capacity);
+    printf("%zu/%zu ", page->size, page->capacity);
     page = page->next;
   }
-  fprintf(ctx.p->err_port, "\ngc collected: %llu\t time: %llu us\n",
+  fprintf(ctx.p->err_port, "\ngc collected: %zu\t time: %zu us\n",
           ctx.p->gc_stat_freed, ctx.p->gc_stat_time);
-  fprintf(ctx.p->err_port, "heap size: %llu\t pages: %llu\n", ctx.p->heap.size,
+  fprintf(ctx.p->err_port, "heap size: %zu\t pages: %zu\n", ctx.p->heap.size,
           ctx.p->heap.page_count);
-  fprintf(ctx.p->err_port, "symbols: %llu \n",
+  fprintf(ctx.p->err_port, "symbols: %zu \n",
           (size_t)lisp_table_size(ctx.p->symbols));
 }
+
+void lisp_set_roots(void (*roots)(LispRootVisitor visit, LispContext ctx),
+                    LispContext ctx) {
+  ctx.p->roots = roots;
+}
+
+size_t lisp_heap_size(LispContext ctx) { return ctx.p->heap.size; }
 
 Lisp lisp_env(LispContext ctx) { return ctx.p->env; }
 
@@ -2932,6 +3013,7 @@ LispContext lisp_init(void) {
   ctx.p->stack = galloc(sizeof(Lisp) * LISP_STACK_DEPTH);
   ctx.p->gc_stat_freed = 0;
   ctx.p->gc_stat_time = 0;
+  ctx.p->roots = NULL;
 
   heap_init(&ctx.p->heap);
 

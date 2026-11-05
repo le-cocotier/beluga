@@ -155,6 +155,8 @@ struct const_t
     int INLINE_DIAGNOSTICS; // (define INLINE-DIAGNOSTICS #t) — the message after the line
     int INLAY_HINTS;        // (define INLAY-HINTS #t) — parameter names / types inside the line
     int DEBUG_INLINE_VALUES; // (define DEBUG-INLINE-VALUES #t) — variables' values after the lines, while paused
+    int MOUSE;              // (define MOUSE #t) — wheel scrolling and click-to-place
+    int EXTENDED_KEYS;      // (define EXTENDED-KEYS #t) — ask for modifyOtherKeys (Ctrl+1, Ctrl+.)
 };
 
 /**
@@ -316,6 +318,11 @@ struct lsp_client_t
     // ── State ─────────────────────────────────────────────────────────────────
     LspState state;
     int next_id;
+    // What the server answered `initialize` with when it refused to start
+    // (e.g. typescript-language-server without a TypeScript it accepts),
+    // "" otherwise. Reported again, and the server retried, at the next
+    // file of its language (bufferMaybeStartLsp()).
+    char start_error[256];
 
     // ── Pending requests ──────────────────────────────────────────────────────
     LspPending pending[LSP_MAX_PENDING];
@@ -402,11 +409,9 @@ typedef struct
  * @brief State for the generic (editor-list-popup ...) builtin — a
  * single-instance modal picker any Lisp package can drive: pass a title,
  * a list of (label . value) pairs, and an on-select/on-cancel callback.
- * @note items/on_select/on_cancel are raw Lisp values kept alive by being
- * reachable from this global, matching how E.hooks[]/E.key_binds[] already
- * retain Lisp callbacks long-term — safe here because lisp_collect() (the
- * GC's moving compactor) is only ever invoked twice, during startup's
- * lisp_lib_load(), and never again once the editor is running.
+ * @note items/all_items/on_select/on_cancel are raw Lisp values, kept
+ * alive and updated by the collector like E.hooks[]/E.key_binds[]: see
+ * lisp_gc.c, which also clears them while the popup isn't visible.
  */
 typedef struct
 {
@@ -877,6 +882,10 @@ typedef struct editor_config_t
     // batch: no screen, messages go to stdout (beluga --sync-packages).
     int initialized;
     int batch;
+    // Screen cell (0-based, row 0 = top line) of the last mouse report,
+    // set by readUtf8Char() alongside the WHEEL-*/MOUSE-* key it returns.
+    int mouse_row;
+    int mouse_col;
 
     Buffer *buffers;
     int number_of_buffer;

@@ -30,4 +30,11 @@ void utilDirname(const char *path, char *out, size_t out_size);
 // (tests, a portable install), else ~/.beluga. Never NULL once HOME is.
 const char *utilBelugaDir(void);
 
+// Where an installed beluga's own files are (config/, packages/, assets/
+// as shipped): $BELUGA_DATA_DIR when set, else <prefix>/share/beluga next
+// to the real executable's bin/ (Homebrew, .deb, .rpm, AUR), else the
+// executable's own folder (the Windows zip, winget). NULL when none of
+// them holds a config/init.lisp, as in a build directory.
+const char *utilDataDir(void);
+
 #endif

@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+# The release zip as a portable app: winget unzips it, and beluga.exe finds
+# config\, packages\ and assets\ next to itself, setting up
+# %USERPROFILE%\.beluga from them on its first start.
+PackageIdentifier: ArthurBarraux.Beluga
+PackageVersion: "@VERSION@"
+MinimumOSVersion: 10.0.17763.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: beluga-v@VERSION@-windows-x64\beluga.exe
+    PortableCommandAlias: beluga
+Commands:
+  - beluga
+ReleaseDate: "@DATE@"
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://git.giorgio-nas.fr/arthur/beluga/releases/download/v@VERSION@/beluga-v@VERSION@-windows-x64.zip
+    InstallerSha256: "@SHA256_WINDOWS@"
+ManifestType: installer
+ManifestVersion: 1.9.0

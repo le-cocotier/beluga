@@ -344,6 +344,175 @@ static void activate(int index) {
   E.constantes = p->constantes;
 }
 
+// ─── Language servers ─────────────────────────────────────────────────────
+// What you answered the first time one of a project's files wanted its
+// language server, so later sessions don't ask again. Kept in
+// ~/.beluga/lsp-roots, one per line: "+ server<TAB>project<TAB>root" to
+// start it at root, "- server<TAB>project" not to start it.
+
+typedef struct {
+  char *server;   // the lsp-server command, argv[0]
+  char *project;  // the project's root
+  char *lsp_root; // where the server starts; NULL: declined
+} LspChoice;
+
+static LspChoice *s_lsp_choices = NULL;
+static int s_lsp_choice_count = 0;
+
+static void lspChoicesPath(char *out, size_t out_size) {
+  char *home = os_home_dir();
+  snprintf(out, out_size, "%s/.beluga/lsp-roots", home ? home : ".");
+  gfree(home);
+}
+
+static int findLspChoice(const char *project, const char *server) {
+  int i;
+  for (i = 0; i < s_lsp_choice_count; i++)
+    if (strcmp(s_lsp_choices[i].server, server) == 0 &&
+        os_path_equal(s_lsp_choices[i].project, project))
+      return i;
+  return -1;
+}
+
+static void saveLspChoices(void) {
+  char path[OS_PATH_MAX];
+  const LspChoice *c;
+  FILE *f;
+  int i;
+  if (!s_loaded)
+    return; // as saveProjects(): not over a file not read yet
+  lspChoicesPath(path, sizeof(path));
+  f = fopen(path, "w");
+  if (!f)
+    return;
+  for (i = 0; i < s_lsp_choice_count; i++) {
+    c = &s_lsp_choices[i];
+    if (c->lsp_root)
+      fprintf(f, "+ %s\t%s\t%s\n", c->server, c->project, c->lsp_root);
+    else
+      fprintf(f, "- %s\t%s\n", c->server, c->project);
+  }
+  fclose(f);
+}
+
+/**
+ * @brief Records that `server` starts at `lsp_root` (NULL: doesn't start)
+ * in `project`, replacing what was there. 0 on OOM.
+ */
+static int setLspChoice(const char *project, const char *server,
+                        const char *lsp_root) {
+  LspChoice *grown;
+  LspChoice *c;
+  char *root_copy = NULL;
+  int index = findLspChoice(project, server);
+  if (lsp_root) {
+    root_copy = utilStrdup(lsp_root);
+    if (!root_copy)
+      return 0;
+  }
+  if (index != -1) {
+    c = &s_lsp_choices[index];
+    gfree(c->lsp_root);
+    c->lsp_root = root_copy;
+    return 1;
+  }
+  grown = (LspChoice *)grealloc(s_lsp_choices,
+                                (s_lsp_choice_count + 1) * sizeof(LspChoice));
+  if (!grown) {
+    gfree(root_copy);
+    return 0;
+  }
+  s_lsp_choices = grown;
+  c = &s_lsp_choices[s_lsp_choice_count];
+  c->server = utilStrdup(server);
+  c->project = utilStrdup(project);
+  c->lsp_root = root_copy;
+  if (!c->server || !c->project) {
+    gfree(c->server);
+    gfree(c->project);
+    gfree(c->lsp_root);
+    return 0;
+  }
+  s_lsp_choice_count++;
+  return 1;
+}
+
+static void loadLspChoices(void) {
+  char path[OS_PATH_MAX];
+  char line[2 * OS_PATH_MAX + 300];
+  char *server;
+  char *project;
+  char *lsp_root;
+  char *tab;
+  FILE *f;
+  size_t len;
+  lspChoicesPath(path, sizeof(path));
+  f = fopen(path, "r");
+  if (!f)
+    return;
+  while (fgets(line, sizeof(line), f)) {
+    len = strlen(line);
+    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+      line[--len] = '\0';
+    if (len < 3 || (line[0] != '+' && line[0] != '-') || line[1] != ' ')
+      continue;
+    server = line + 2;
+    tab = strchr(server, '\t');
+    if (!tab)
+      continue;
+    *tab = '\0';
+    project = tab + 1;
+    lsp_root = NULL;
+    tab = strchr(project, '\t');
+    if (tab) {
+      *tab = '\0';
+      lsp_root = tab + 1;
+    }
+    if (line[0] == '+' && (!lsp_root || !lsp_root[0]))
+      continue;
+    setLspChoice(project, server, line[0] == '+' ? lsp_root : NULL);
+  }
+  fclose(f);
+}
+
+/** @brief Forgets every choice made in `project`; returns how many. */
+static int forgetLspChoices(const char *project) {
+  int i;
+  int kept = 0;
+  int forgotten;
+  for (i = 0; i < s_lsp_choice_count; i++) {
+    if (os_path_equal(s_lsp_choices[i].project, project)) {
+      gfree(s_lsp_choices[i].server);
+      gfree(s_lsp_choices[i].project);
+      gfree(s_lsp_choices[i].lsp_root);
+    } else {
+      s_lsp_choices[kept++] = s_lsp_choices[i];
+    }
+  }
+  forgotten = s_lsp_choice_count - kept;
+  s_lsp_choice_count = kept;
+  if (forgotten)
+    saveLspChoices();
+  return forgotten;
+}
+
+static void freeLspChoices(void) {
+  int i;
+  for (i = 0; i < s_lsp_choice_count; i++) {
+    gfree(s_lsp_choices[i].server);
+    gfree(s_lsp_choices[i].project);
+    gfree(s_lsp_choices[i].lsp_root);
+  }
+  gfree(s_lsp_choices);
+  s_lsp_choices = NULL;
+  s_lsp_choice_count = 0;
+}
+
+static int isDir(const char *path) {
+  OsFileInfo info;
+  return os_file_info(path, &info) == 0 && info.is_dir;
+}
+
 /**
  * @brief Drops the project's own config: its settings give way to
  * init.lisp's. What its init.lisp did to the editor as a whole (map-key,
@@ -366,6 +535,7 @@ static void unloadConfig(Project *p) {
 static void removeProject(int index) {
   Project *p = &E.projects[index];
   unloadConfig(p);
+  forgetLspChoices(p->root);
   p->removed = 1;
   p->trusted = 0;
   p->opened = 0;
@@ -389,6 +559,7 @@ void projectInit(void) {
   char *cwd;
   int index;
   loadProjects();
+  loadLspChoices();
   s_loaded = 1;
   // The working directory's project is current until a buffer says
   // otherwise, so (beluga with no file) inside a project still gets it.
@@ -403,6 +574,7 @@ void projectInit(void) {
 void projectFree(void) {
   int i;
   saveProjects();
+  freeLspChoices();
   for (i = 0; i < E.number_of_projects; i++)
     gfree(E.projects[i].root);
   gfree(E.projects);
@@ -476,6 +648,62 @@ char *projectRootOrCwd(void) {
   copy = utilStrdup(cwd);
   gfree(cwd);
   return copy;
+}
+
+int projectLspRoot(Buffer *buffer, const char *server, char *out,
+                   size_t out_size) {
+  Project *p;
+  Lisp val;
+  int present;
+  int index;
+  const char *dir;
+  out[0] = '\0';
+  // Makes the buffer's project current, so its config is loaded already.
+  projectActivateForBuffer(buffer);
+  if (!buffer || buffer->project <= 0)
+    return -1;
+  p = &E.projects[buffer->project - 1];
+  if (p->removed)
+    return -1;
+  if (p->has_config_env) {
+    val = lisp_env_lookup(p->config_env, lisp_make_symbol("LSP-ROOT", E.ctx),
+                          &present);
+    if (present && lisp_type(val) == LISP_STRING) {
+      dir = lisp_string(val);
+      if (os_path_is_absolute(dir) || !dir[0])
+        snprintf(out, out_size, "%s", dir[0] ? dir : p->root);
+      else
+        snprintf(out, out_size, "%s/%s", p->root, dir);
+      if (isDir(out))
+        return 1;
+      setNotice("LSP-ROOT %s isn't a directory", out);
+    } else if (present && !lisp_is_true(val)) {
+      return 0;
+    }
+  }
+  index = findLspChoice(p->root, server);
+  if (index != -1) {
+    if (!s_lsp_choices[index].lsp_root)
+      return 0;
+    snprintf(out, out_size, "%s", s_lsp_choices[index].lsp_root);
+    if (isDir(out))
+      return 1; // moved or deleted since: ask again, suggesting the project
+  }
+  snprintf(out, out_size, "%s", p->root);
+  return -1;
+}
+
+void projectLspRemember(Buffer *buffer, const char *server,
+                        const char *lsp_root) {
+  char canonical[OS_PATH_MAX];
+  if (!buffer || buffer->project <= 0 ||
+      E.projects[buffer->project - 1].removed)
+    return;
+  if (lsp_root)
+    canonicalDir(lsp_root, canonical, sizeof(canonical));
+  if (setLspChoice(E.projects[buffer->project - 1].root, server,
+                   lsp_root ? canonical : NULL))
+    saveLspChoices();
 }
 
 // ─── Builtins ──────────────────────────────────────────────────────────────
@@ -586,7 +814,12 @@ static int writeConfigTemplate(const char *path) {
           ";;\n"
           ";; Uncomment a setting to override it for this project. Each shows\n"
           ";; the value your init.lisp gives it. Save, then CTRL-x p t reloads.\n"
-          ";; (settings) lists the values in effect.\n\n");
+          ";; (settings) lists the values in effect.\n\n"
+          ";; Where this project's language servers start, relative to\n"
+          ";; PROJECT-ROOT, without asking; #f never starts them. Otherwise\n"
+          ";; you're asked once and the answer is remembered\n"
+          ";; (project-lsp-forget, CTRL-x p L, asks again).\n"
+          ";; (define LSP-ROOT \"\")\n\n");
   settingsWriteTemplate(f);
   return fclose(f) == 0;
 }
@@ -812,6 +1045,33 @@ static Lisp l_projectAdd(Lisp args, LispError *e, LispContext ctx) {
   return lisp_make_string2(canonical, ctx);
 }
 
+/**
+ * @brief (project-lsp-forget) — forgets the current project's answers to
+ * "start the language server?" and where: the next file opened asks
+ * again. A server already running keeps running.
+ */
+static Lisp l_projectLspForget(Lisp args, LispError *e, LispContext ctx) {
+  const Project *p;
+  int forgotten;
+  (void)args;
+  (void)e;
+  (void)ctx;
+  if (E.current_project < 0) {
+    editorSetStatusMessage("Not in a project");
+    return lisp_null();
+  }
+  p = &E.projects[E.current_project];
+  forgotten = forgetLspChoices(p->root);
+  if (forgotten)
+    editorSetStatusMessage("%s: language server choices forgotten, asked again "
+                           "next session",
+                           baseName(p->root));
+  else
+    editorSetStatusMessage("%s: no language server choice remembered",
+                           baseName(p->root));
+  return lisp_null();
+}
+
 /** @brief project-switch's on-select: the chosen root becomes current. */
 static Lisp projectSwitchSelected(Lisp args, LispError *e, LispContext ctx) {
   const char *root;
@@ -852,4 +1112,5 @@ void projectRegisterBuiltins(void) {
   registerBuiltin("project-remove", l_projectRemove);
   registerBuiltin("project-prune", l_projectPrune);
   registerBuiltin("project-untrust", l_projectUntrust);
+  registerBuiltin("project-lsp-forget", l_projectLspForget);
 }

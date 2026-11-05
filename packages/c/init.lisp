@@ -11,6 +11,15 @@
 
 (lsp-server "c" "c" "clangd")
 (lsp-server "h" "c" "clangd")
+;; Offered when clangd isn't on PATH (see lsp-server-install in
+;; config/init.lisp): the first command whose program is installed wins.
+(lsp-server-install "clangd"
+                    "darwin"  "xcode-select --install"
+                    "linux"   "sudo apt-get install -y clangd"
+                    "linux"   "sudo dnf install -y clang-tools-extra"
+                    "linux"   "sudo pacman -S --noconfirm clang"
+                    "linux"   "sudo zypper install -y clang-tools"
+                    "windows" "winget install -e --id LLVM.LLVM --accept-source-agreements --accept-package-agreements")
 ;; /tmp and /var are links into /private on macOS: the debug info has the
 ;; path a file was compiled by, beluga the real one, and lldb only places a
 ;; breakpoint where they match. The source map makes them the same.

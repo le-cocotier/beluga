@@ -218,6 +218,14 @@ Lisp l_editorRecenter(Lisp args, LispError *e, LispContext ctx);
 // lumns.
 Lisp l_paneHeight(Lisp args, LispError *e, LispContext ctx);
 Lisp l_paneWidth(Lisp args, LispError *e, LispContext ctx);
+// (editor-scroll-view lines) — scroll the active pane's view, negative up;
+// the cursor only moves if it would leave the pane. The wheel's default.
+Lisp l_editorScrollView(Lisp args, LispError *e, LispContext ctx);
+// (mouse-focus-pane) / (mouse-set-cursor) / (mouse-position) — the pane,
+// character and (row . col) screen cell under the last mouse report.
+Lisp l_mouseFocusPane(Lisp args, LispError *e, LispContext ctx);
+Lisp l_mouseSetCursor(Lisp args, LispError *e, LispContext ctx);
+Lisp l_mousePosition(Lisp args, LispError *e, LispContext ctx);
 
 // ─── Filesystem & process primitives (see builtins.c) ─────
 // ─────────────────── (expand-path path [base-dir]) — absolute path: "~" e

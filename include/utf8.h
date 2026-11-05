@@ -38,7 +38,6 @@ Utf8Char* utf8ReadFile(const Utf8Char* file_name);
 Utf8Char* stringToUtf8(unsigned char* string);
 unsigned char* utf8ToString(const Utf8Char* string);
 unsigned char* utf8ToNString(const Utf8Char* string, int n);
-void utf8Cat(Utf8Char** dest, const Utf8Char* src);
 const Utf8Char *lastSlashUtf8(const Utf8Char * string);
 void utf8Cpy(Utf8Char * dest, const Utf8Char * src);
 void utf8NCpy(Utf8Char * dest, const Utf8Char * src, int n);

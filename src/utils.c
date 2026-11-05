@@ -140,6 +140,62 @@ const char *utilBelugaDir(void)
     return dir;
 }
 
+static int hasDefaultConfig(const char *dir) {
+  OsFileInfo info;
+  char *path = utilFormat("%s/config/init.lisp", dir);
+  int found;
+  if (!path)
+    return 0;
+  found = os_file_info(path, &info) == 0;
+  gfree(path);
+  return found;
+}
+
+const char *utilDataDir(void) {
+  static char dir[OS_PATH_MAX];
+  static int looked;
+  const char *env;
+  char *exe;
+  char *real;
+  char bin[OS_PATH_MAX];
+  char *candidate;
+
+  if (looked)
+    return dir[0] ? dir : NULL;
+  looked = 1;
+  env = getenv("BELUGA_DATA_DIR");
+  if (env && env[0]) {
+    snprintf(dir, sizeof(dir), "%s", env);
+    os_path_to_slashes(dir);
+    return dir;
+  }
+  exe = os_exe_path();
+  if (!exe)
+    return NULL;
+  // Through any link (Homebrew's bin/beluga, winget's Links\beluga.exe)
+  // to the file itself, whose folder the data is installed next to.
+  real = os_realpath(exe);
+  if (real) {
+    gfree(exe);
+    exe = real;
+  }
+  os_path_to_slashes(exe);
+  utilDirname(exe, bin, sizeof(bin));
+  gfree(exe);
+
+  candidate = utilFormat("%s/../share/beluga", bin);
+  if (candidate && hasDefaultConfig(candidate)) {
+    real = os_realpath(candidate);
+    snprintf(dir, sizeof(dir), "%s", real ? real : candidate);
+    gfree(real);
+  } else if (hasDefaultConfig(bin)) {
+    snprintf(dir, sizeof(dir), "%s", bin);
+  }
+  gfree(candidate);
+  os_path_to_slashes(dir);
+  return dir[0] ? dir : NULL;
+}
+
 int utilPathIsUnder(const char *path, const char *dir) {
   char head[OS_PATH_MAX];
   char root[OS_PATH_MAX];

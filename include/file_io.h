@@ -5,8 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-void editorCloseFile(void);
-
 void editorOpen(struct buffer_t *buffer);
 
 // Replaces the buffer's content with the file at `path` (not its own file:

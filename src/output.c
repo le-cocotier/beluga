@@ -334,9 +334,6 @@ static void paneFitShownBuffer(EditorPane *pane, const struct buffer_t *buf) {
   pane->cursor_x = 0;
 }
 
-// At most this many enclosing definitions pinned atop a pane.
-#define STICKY_MAX 3
-
 /**
  * @brief The rows sticky scroll pins atop `pane`: the first line of each
  * function / struct / ... the pane's top row is inside of but whose own
@@ -344,7 +341,7 @@ static void paneFitShownBuffer(EditorPane *pane, const struct buffer_t *buf) {
  * that they'd cover the cursor, or a third of the pane.
  * @return how many (0 without LSP symbols for the buffer)
  */
-static int paneStickyRows(const EditorPane *pane, const struct buffer_t *buf, int *rows) {
+int editorPaneStickyRows(const EditorPane *pane, const struct buffer_t *buf, int *rows) {
   const LspSymbol *chain[STICKY_MAX];
   int n;
   int count = 0;
@@ -434,7 +431,7 @@ static void editorDrawPane(struct abuf *ab, EditorPane *pane) {
   // previous scroll position — see the comment_state fields on
   // struct buffer_t and commentStateAtRowStart()'s own doc comment.
   syntaxHighlighterSeed(commentStateAtRowStart((struct buffer_t *) buf, pane->y_offset));
-  sticky_n = paneStickyRows(pane, buf, sticky_rows);
+  sticky_n = editorPaneStickyRows(pane, buf, sticky_rows);
 
   // Draw all pane
   for (y = 0; y < pane->height; y++) {
@@ -1140,6 +1137,12 @@ void editorRefreshScreen() {
   abAppend(&ab, SHOW_CURSOR, 6);
 
   if (screenFrameChanged(ab.b, ab.len)) {
+    // Outside the frame, which screenDiffWrite() only writes the changed
+    // rows of. Repeated with each frame: harmless, and how a new daemon
+    // window or a changed MOUSE setting gets it.
+    screenWrite(E.constantes.MOUSE ? MOUSE_ON_SEQ : MOUSE_OFF_SEQ, MOUSE_SEQ_LEN);
+    screenWrite(E.constantes.EXTENDED_KEYS ? EXTENDED_KEYS_ON_SEQ : EXTENDED_KEYS_OFF_SEQ,
+                EXTENDED_KEYS_SEQ_LEN);
     screenDiffWrite(ab.b, ab.len, E.screenrows + 2, E.screencols);
     screenFrameCache(ab.b, ab.len);
   }

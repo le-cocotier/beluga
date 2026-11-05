@@ -10,9 +10,6 @@
 // Writes `frame` (`len` bytes, drawn from the top-left) for a terminal of
 // `rows` x `cols`.
 void screenDiffWrite(const char *frame, int len, int rows, int cols);
-// Forgets what the terminal shows, so the next frame is written in full
-// (after something else drew on it, or to repaint on request).
-void screenDiffInvalidate(void);
 // Frees the saved screen (at exit).
 void screenDiffFree(void);
 // Trades what the terminal shows for `*other`, the copy a daemon window

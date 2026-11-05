@@ -258,7 +258,7 @@ Lisp l_bufferLocalSet(Lisp args, LispError *e, LispContext ctx) {
   if (!buf)
     return lisp_null();
 
-  // The interpreter never collects, so a Lisp value can live in C memory.
+  // buf->locals is a collector root (lisp_gc.c), so it can live in C memory.
   for (p = buf->locals; lisp_is_pair(p); p = lisp_cdr(p))
     if (lisp_equal(lisp_car(lisp_car(p)), name)) {
       lisp_set_cdr(lisp_car(p), value);

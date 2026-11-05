@@ -185,6 +185,49 @@ static void lspReadSyncCapabilities(LspClient *lsp, cJSON *caps)
     lsp->inlay_hints = hints && !cJSON_IsFalse(hints);
 }
 
+/**
+ * @brief The server answered `initialize` with an error: it won't serve
+ * anything (typescript-language-server without a TypeScript it accepts
+ * answers every later request with an empty result). Says why on the
+ * status line instead of going on as if it had started.
+ * @note Called from lspFeed(), inside lspPoll()'s read loop: the process
+ * is only killed here, and released by lspPoll() once its output ends.
+ */
+static void lsp_on_initialize_error(LspClient *lsp, cJSON *error)
+{
+    static const char prefix[] = "Request initialize failed with message: ";
+    cJSON *message;
+    const char *text;
+    size_t len;
+    message = cJSON_GetObjectItem(error, "message");
+    text = message && cJSON_IsString(message) && message->valuestring[0]
+               ? message->valuestring : "the server refused to initialize";
+    // typescript-language-server wraps its reason in this: the reason is
+    // what fits on the status line.
+    if (strncmp(text, prefix, sizeof(prefix) - 1) == 0)
+        text += sizeof(prefix) - 1;
+
+    len = strlen(text);
+    if (len >= sizeof(lsp->start_error))
+    {
+        // Cut on a UTF-8 character boundary.
+        len = sizeof(lsp->start_error) - 1;
+        while (len > 0 && ((unsigned char) text[len] & 0xC0) == 0x80)
+            len--;
+    }
+    memcpy(lsp->start_error, text, len);
+    lsp->start_error[len] = '\0';
+
+    appDebug("[LSP] %s failed to initialize: %s\n", lsp->command, lsp->start_error);
+    editorSetStatusMessage("%s failed to start: %s", lsp->command, lsp->start_error);
+
+    // No `initialized`, and not READY: nothing more is sent to it.
+    lsp->state = LSP_SHUTDOWN;
+    lsp->pending_count = 0;
+    if (lsp->proc)
+        os_proc_kill(lsp->proc);
+}
+
 static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
 {
     cJSON *init_root;
@@ -197,12 +240,21 @@ static void lsp_on_initialize_response(LspClient *lsp, const char *result_json)
     char *msg;
     int first_buffer_id;
     struct buffer_t* b;
+    cJSON *error;
+    init_root = cJSON_Parse(result_json);
+    error = init_root ? cJSON_GetObjectItem(init_root, "error") : NULL;
+    if (error)
+    {
+        lsp_on_initialize_error(lsp, error);
+        cJSON_Delete(init_root);
+        return;
+    }
+
     // Pull completionProvider.triggerCharacters out of the server's own
     // capabilities instead of assuming word-char completion covers
     // everything — a server that only ever completes after punctuation
     // (e.g. "." for member access) would otherwise never get asked.
     lsp->num_trigger_chars = 0;
-    init_root = cJSON_Parse(result_json);
     if (init_root)
     {
         result = cJSON_GetObjectItem(init_root, "result");
@@ -341,8 +393,41 @@ void lspFeed(LspClient *lsp, const char *data, size_t len)
 // ─── Response handlers ─────────────────────────────────────────────────────
 
 
+/**
+ * @brief The word before the cursor in the active buffer, as UTF-8: what
+ * the completion list is filtered on. Same word lspAcceptCompletion()
+ * replaces when an item has no range ('#' ends it, see there).
+ */
+static void lspTypedWord(char *out, const size_t out_size)
+{
+    EditorPane *active = splitScreenGetActivePane();
+    struct buffer_t *buf = bufferFindById(active->buffer_id);
+    struct row_t *row;
+    int start;
+    int i;
+    size_t n = 0;
+    int k;
+    out[0] = '\0';
+    if (!buf || buf->y < 0 || buf->y >= buf->numrows)
+        return;
+    row = &buf->row[buf->y];
+    start = buf->x > row->size ? row->size : buf->x;
+    while (start > 0 && is_word_char(&row->characters[start - 1]) &&
+           row->characters[start - 1].character[0] != '#')
+        start--;
+    for (i = start; i < buf->x && i < row->size; i++)
+    {
+        if (n + (size_t) row->characters[i].length >= out_size)
+            break;
+        for (k = 0; k < row->characters[i].length; k++)
+            out[n++] = (char) row->characters[i].character[k];
+    }
+    out[n] = '\0';
+}
+
 static void lsp_on_completion_response(LspClient *lsp, const char *result_json)
 {
+    char typed[128];
     // A newer completion request may have been sent (and superseded this one)
     // while this response was in flight — e.g. the user kept typing. Drop
     // anything that isn't the response to the most recently sent request so
@@ -364,8 +449,10 @@ static void lsp_on_completion_response(LspClient *lsp, const char *result_json)
         return;
     }
 
+    lspTypedWord(typed, sizeof(typed));
     lspParseCompletion(result_json, &E.lsp_completion,
-                           lsp->completion_cursor_x, lsp->completion_cursor_y);
+                           lsp->completion_cursor_x, lsp->completion_cursor_y,
+                           typed);
     lsp->completion_just_arrived = 1;
     lsp->completion_requested = 0;
 }
@@ -1145,7 +1232,7 @@ static void lsp_on_signature_help_response(LspClient *lsp, const char *result_js
              doc_text ? "\n\n" : "", doc_text ? doc_text : "");
 
     lsp_cursor_screen_pos(&x, &y);
-    lspUiSetInfo(&E.lsp_info, LSP_INFO_SIGNATURE, text, x, y);
+    lspUiSetInfo(&E.lsp_info, LSP_INFO_SIGNATURE, text, x, y - 1);
     if (E.lsp_info.count > 0 && hl_end > hl_start &&
         hl_end <= (int) strlen(E.lsp_info.lines[0]))
     {
@@ -1663,7 +1750,10 @@ int lspStart(LspClient *lsp, const char *project_root, char *const server_argv[]
         lsp->next_id = 1;
         lsp->state = LSP_INITIALIZING;
         lsp->pending_count = 0;
-        memset(&lsp->recv, 0, sizeof(lsp->recv));
+        // A restart (after a failed initialize, or an install) can find
+        // the last run's partial message still buffered.
+        jsonRpcStreamFree(&lsp->recv);
+        lsp->start_error[0] = '\0';
         lsp->completion_debounce_pending = 0;
         lsp->completion_debounce_deadline_ms = 0;
         lsp->completion_latest_request_id = 0;

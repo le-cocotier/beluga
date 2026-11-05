@@ -471,6 +471,69 @@ static int resolveProgram(const char *name, wchar_t *out, const DWORD out_len, i
     return found;
 }
 
+/**
+ * @brief The Path value under `root`\`subkey` in the registry, with its
+ * %VARIABLES% expanded, appended to `b` (after a ';' if `b` isn't empty).
+ */
+static void appendRegistryPath(HKEY root, const wchar_t *subkey, WBuf *b)
+{
+    const DWORD max_chars = 32767; // an environment variable's limit
+    wchar_t *raw = galloc(max_chars * sizeof(wchar_t));
+    wchar_t *expanded = galloc(max_chars * sizeof(wchar_t));
+    DWORD size = max_chars * sizeof(wchar_t);
+    DWORD n;
+
+    if (raw && expanded &&
+        RegGetValueW(root, subkey, L"Path", RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
+                     NULL, raw, &size) == ERROR_SUCCESS)
+    {
+        n = ExpandEnvironmentStringsW(raw, expanded, max_chars);
+        if (n > 0 && n <= max_chars)
+        {
+            if (b->len > 0)
+                wbufAppend(b, L";");
+            wbufAppend(b, expanded);
+        }
+    }
+    gfree(raw);
+    gfree(expanded);
+}
+
+char *os_find_program(const char *name)
+{
+    wchar_t found[MAX_PATH * 2];
+    WBuf path;
+    int is_batch;
+    char *utf8;
+
+    if (!name || !*name)
+        return NULL;
+    if (!resolveProgram(name, found, sizeof(found) / sizeof(found[0]), &is_batch))
+    {
+        // Installed since the editor started? Installers change the PATH
+        // in the registry, which a running process never sees. The
+        // registry's entries go after this process's own, so whatever the
+        // shell beluga started from added (a venv, ...) still comes first.
+        memset(&path, 0, sizeof(path));
+        if (_wgetenv(L"PATH"))
+            wbufAppend(&path, _wgetenv(L"PATH"));
+        appendRegistryPath(HKEY_LOCAL_MACHINE,
+                           L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+                           &path);
+        appendRegistryPath(HKEY_CURRENT_USER, L"Environment", &path);
+        if (!path.s)
+            return NULL;
+        SetEnvironmentVariableW(L"PATH", path.s);
+        _wputenv_s(L"PATH", path.s); // _wgetenv() reads the CRT's copy
+        gfree(path.s);
+        if (!resolveProgram(name, found, sizeof(found) / sizeof(found[0]), &is_batch))
+            return NULL;
+    }
+    utf8 = toUtf8(found);
+    backslashesToSlashes(utf8);
+    return utf8;
+}
+
 static int comspec(wchar_t *out, const DWORD out_len)
 {
     DWORD n = GetEnvironmentVariableW(L"ComSpec", out, out_len);
@@ -864,6 +927,8 @@ static DWORD s_orig_in_mode;
 static DWORD s_orig_out_mode;
 static int s_raw;
 static int s_vt_input; // the console accepted ENABLE_VIRTUAL_TERMINAL_INPUT
+static int s_mouse;    // the editor asked for mouse reports (see watchMouseMode())
+static DWORD s_mouse_buttons; // button state of the last mouse record
 static OsStream s_term_input = { STREAM_CONSOLE, NULL, NULL, 0 };
 
 static void inputQueueClear(void);
@@ -909,6 +974,50 @@ void os_term_leave_raw(void)
     SetConsoleMode(consoleIn(), s_orig_in_mode);
     SetConsoleMode(consoleOut(), s_orig_out_mode);
     s_raw = 0;
+    s_mouse = 0;
+}
+
+/**
+ * @brief Console mouse input on or off, following the xterm mouse modes
+ * the editor turns on and off through its output (MOUSE_ON_SEQ in
+ * define.h), so it works the same for a daemon window, whose client only
+ * relays what the daemon draws.
+ * @details Windows Terminal (conpty) answers the xterm request itself and
+ * sends the SGR sequences through VT input. Classic conhost delivers
+ * MOUSE_EVENT records instead, and only with QuickEdit off (it keeps the
+ * clicks for its own selection otherwise); drainConsoleEvents() turns those
+ * into the same sequences.
+ */
+static void watchMouseMode(const char *buf, const size_t n)
+{
+    static const char on_seq[] = "\x1b[?1000h";
+    static const char off_seq[] = "\x1b[?1000l";
+    const size_t len = sizeof(on_seq) - 1;
+    DWORD in_mode;
+    int on = -1;
+    size_t i;
+
+    for (i = 0; i + len <= n; i++)
+    {
+        if (buf[i] != '\x1b')
+            continue;
+        if (memcmp(buf + i, on_seq, len) == 0)
+            on = 1;
+        else if (memcmp(buf + i, off_seq, len) == 0)
+            on = 0;
+    }
+    if (on < 0 || on == s_mouse || !s_raw)
+        return;
+    if (GetConsoleMode(consoleIn(), &in_mode))
+    {
+        if (on)
+            in_mode = (in_mode | ENABLE_MOUSE_INPUT) & ~(DWORD) ENABLE_QUICK_EDIT_MODE;
+        else
+            in_mode = (in_mode & ~(DWORD) ENABLE_MOUSE_INPUT) | (s_orig_in_mode & ENABLE_QUICK_EDIT_MODE);
+        SetConsoleMode(consoleIn(), in_mode | ENABLE_EXTENDED_FLAGS);
+    }
+    s_mouse = on;
+    s_mouse_buttons = 0;
 }
 
 int os_term_size(int *rows, int *cols)
@@ -926,6 +1035,7 @@ void os_term_write(const void *buf, const size_t n)
     const char *p = buf;
     size_t left = n;
     DWORD written;
+    watchMouseMode(buf, n);
     while (left > 0)
     {
         if (!WriteFile(consoleOut(), p, (DWORD) (left > 65536 ? 65536 : left), &written, NULL) ||
@@ -1071,6 +1181,53 @@ static int vkSequence(const WORD vk, const DWORD state, char *out, const size_t 
 }
 
 /**
+ * @brief Writes xterm's modifyOtherKeys report (ESC [27;<mod>;<code>~) for
+ * a key whose modifiers its character alone loses: Ctrl+digit,
+ * Ctrl+punctuation, Ctrl+Shift+letter, Ctrl/Shift+Enter, Ctrl+Tab, and
+ * Shift+Tab as ESC [Z. 0 for any other key.
+ * @details The key parser reads these as it does from a terminal, so
+ * "CTRL-1", "CTRL-SHIFT-a", "SHIFT-ENTER" bind the same on every platform.
+ * AltGr (Ctrl+Alt typing a character) is left alone.
+ */
+static int modifiedKeyReport(const KEY_EVENT_RECORD *k, char *out, const size_t out_size)
+{
+    const WORD vk = k->wVirtualKeyCode;
+    const wchar_t c = k->uChar.UnicodeChar;
+    const int shift = (k->dwControlKeyState & SHIFT_PRESSED) != 0;
+    const int alt = (k->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+    const int ctrl = (k->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+    UINT code = 0;
+
+    if (ctrl && alt && c >= 0x20)
+        return 0; // AltGr
+    if (vk == VK_TAB && shift && !ctrl && !alt)
+        return snprintf(out, out_size, "\x1b[Z");
+    if ((vk == VK_RETURN || vk == VK_TAB) && (ctrl || shift))
+        code = vk == VK_RETURN ? '\r' : '\t';
+    else if (vk == VK_BACK && (ctrl || shift))
+        code = 127;
+    else if (!ctrl)
+        return 0;
+    else if (vk >= '0' && vk <= '9' && vk != '2') // Ctrl+2 is Ctrl+Space's NUL
+        code = vk;
+    else if (vk >= 'A' && vk <= 'Z' && shift)
+        code = vk | 0x20;
+    else if ((vk >= VK_OEM_1 && vk <= VK_OEM_3) || (vk >= VK_OEM_4 && vk <= VK_OEM_8) ||
+             vk == VK_OEM_102)
+    {
+        // The key's character on this layout, unshifted ("," "." "-" ...);
+        // Ctrl+[ \ ] keep the bytes they already have.
+        code = MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR) & 0x7FFF;
+        if (c != 0 || code == 0)
+            return 0;
+    }
+    if (code == 0)
+        return 0;
+    return snprintf(out, out_size, "\x1b[27;%d;%u~",
+                    1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0), code);
+}
+
+/**
  * @brief Turns one console key event into input bytes.
  */
 static void translateKeyEvent(const KEY_EVENT_RECORD *k)
@@ -1091,12 +1248,19 @@ static void translateKeyEvent(const KEY_EVENT_RECORD *k)
 
     while (repeat-- > 0)
     {
-        if (c)
+        // With VT input the console encodes keys itself; one it had no
+        // sequence for still arrives with no character.
+        if ((!s_vt_input || !c) && modifiedKeyReport(k, seq, sizeof(seq)))
+            inputQueuePush((const unsigned char *) seq, strlen(seq));
+        else if (!s_vt_input && c == 8 && k->wVirtualKeyCode == VK_BACK)
+            inputQueuePush((const unsigned char *) "\x7f", 1); // Backspace, as terminals send it
+        else if (c)
         {
             // Without VT input, Alt+key arrives as the bare character with
             // ALT set; a terminal sends ESC first ("ALT-x" in keybindings).
-            // (AltGr reports Ctrl+Alt and types a real character: no ESC.)
-            if (!s_vt_input && alt && !ctrl)
+            // (AltGr reports Ctrl+Alt and types a real character: no ESC;
+            // a real Ctrl+Alt+letter gives a control character.)
+            if (!s_vt_input && alt && (!ctrl || c < 0x20))
                 inputQueuePush((const unsigned char *) "\x1b", 1);
             inputQueuePushChar(c);
         }
@@ -1106,6 +1270,50 @@ static void translateKeyEvent(const KEY_EVENT_RECORD *k)
             inputQueuePush((const unsigned char *) seq, strlen(seq));
         // Anything else without a character (Shift, Ctrl, ...): nothing.
     }
+}
+
+/**
+ * @brief Turns one console mouse event into the SGR sequence a terminal
+ * would have sent: wheel notches, and left button presses and releases.
+ */
+static void translateMouseEvent(const MOUSE_EVENT_RECORD *m)
+{
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    char seq[32];
+    int x;
+    int y;
+    int button;
+    char final = 'M';
+    const DWORD left_was = s_mouse_buttons & FROM_LEFT_1ST_BUTTON_PRESSED;
+    const DWORD left_is = m->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED;
+
+    // Positions are in screen-buffer coordinates; the editor counts from
+    // the top-left of the visible window.
+    x = m->dwMousePosition.X + 1;
+    y = m->dwMousePosition.Y + 1;
+    if (GetConsoleScreenBufferInfo(consoleOut(), &info))
+    {
+        x -= info.srWindow.Left;
+        y -= info.srWindow.Top;
+    }
+
+    if (m->dwEventFlags & MOUSE_WHEELED)
+        // The high word is the signed wheel delta: positive is away from
+        // the user (up).
+        button = (short) HIWORD(m->dwButtonState) > 0 ? 64 : 65;
+    else if (m->dwEventFlags & (MOUSE_MOVED | MOUSE_HWHEELED))
+        return; // only presses and the vertical wheel are reported (1000)
+    else
+    {
+        s_mouse_buttons = m->dwButtonState;
+        if (left_is == left_was)
+            return; // another button: not reported
+        button = 0;
+        if (!left_is)
+            final = 'm';
+    }
+    snprintf(seq, sizeof(seq), "\x1b[<%d;%d;%d%c", button, x, y, final);
+    inputQueuePush((const unsigned char *) seq, strlen(seq));
 }
 
 /**
@@ -1124,10 +1332,14 @@ static void drainConsoleEvents(void)
         if (!ReadConsoleInputW(consoleIn(), records, 64, &got) || got == 0)
             return;
         for (i = 0; i < got; i++)
+        {
             if (records[i].EventType == KEY_EVENT)
                 translateKeyEvent(&records[i].Event.KeyEvent);
-        // Resizes, focus and mouse events: dropped. The main loop notices
-        // a resize on its own by polling the window size.
+            else if (records[i].EventType == MOUSE_EVENT && s_mouse)
+                translateMouseEvent(&records[i].Event.MouseEvent);
+        }
+        // Resizes and focus events: dropped. The main loop notices a
+        // resize on its own by polling the window size.
     }
 }
 

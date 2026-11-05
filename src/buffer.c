@@ -4,6 +4,7 @@
  */
 
 #include "../include/buffer.h"
+#include "../include/lsp_install.h"
 #include "../include/breakpoints.h"
 #include "../include/ansi_parser.h"
 #include "../include/autosave.h"
@@ -11,6 +12,7 @@
 #include "../include/editor_op.h"
 #include "../include/file_io.h"
 #include "../include/galloc.h"
+#include "../include/project.h"
 #include "../include/split_screen.h"
 #include "../include/utils.h"
 
@@ -1296,15 +1298,6 @@ int bufferClose(int buff_id) {
 }
 
 /**
- * @brief Gets the current active buffer
- * @return Pointer to current buffer_t, NULL if none
- */
-struct buffer_t *bufferGetCurrent(void) {
-  EditorPane *active = splitScreenGetActivePane();
-  return bufferFindById(active->buffer_id);
-}
-
-/**
  * @brief Finds the registered lsp-server config matching a filename's
  * extension (see the Lisp `lsp-server` builtin), or NULL if none was
  * registered for it.
@@ -1388,6 +1381,9 @@ static LspClient *lspNewClient(const struct lspServerConfig_t *cfg) {
  * is. Asked once per server: each language gets its own server, running
  * side by side, and a decline (or ESC) leaves that server's client in
  * LSP_SHUTDOWN so it isn't asked about again this session.
+ * @details Inside a project the answer is remembered (project.c), so
+ * the next session starts the server, or doesn't, without asking; the
+ * project's LSP-ROOT answers for it. ESC isn't remembered.
  * @note Called before editorOpen() loads the buffer's content — it only
  * needs the filename, not the text. See bufferMaybeSyncLsp() for buffers
  * created *after* their server's already running, which does need the text
@@ -1398,22 +1394,57 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   LspClient *lsp;
   Utf8Char *answer;
   Utf8Char *default_root;
+  Utf8Char *project_root;
   Utf8Char *root;
   char *root_str;
   char question[256];
+  char known_root[OS_PATH_MAX];
+  int known;
   if (!E.constantes.LSP)
     return;
 
   cfg = lspServerConfigFor(buf->filename);
   if (!cfg)
     return; // no server registered for this extension
-  if (lspClientForConfig(cfg))
+  lsp = lspClientForConfig(cfg);
+  if (lsp && lsp->state == LSP_SHUTDOWN && lsp->start_error[0] && !lsp->proc) {
+    // It refused to initialize last time (lsp_on_initialize_error()):
+    // whatever it lacked may be there now, so try again. Still failing,
+    // it says why again.
+    lsp->state = LSP_NOT_STARTED;
+  }
+  if (lsp && lsp->state != LSP_NOT_STARTED)
     return; // already asked about this server: running, starting or declined
 
-  lsp = lspNewClient(cfg);
+  // LSP_NOT_STARTED: never asked yet, or asked again now that an install
+  // offered for it has ended (lsp_install.c).
+  if (!lsp)
+    lsp = lspNewClient(cfg);
   if (!lsp) {
     editorSetStatusMessage("Too many language servers (%d) - not starting %s",
                            LSP_MAX_CLIENTS, cfg->argv[0]);
+    return;
+  }
+
+  // Declined in this project (or its LSP-ROOT is #f): not even an install.
+  known = projectLspRoot(buf, cfg->argv[0], known_root, sizeof(known_root));
+  if (known == 0) {
+    lsp->state = LSP_SHUTDOWN;
+    return;
+  }
+
+  // Not on PATH: offer to install it instead. A yes starts the install,
+  // and asks the question below once it's done.
+  if (lspInstallOffer(buf, cfg)) {
+    lsp->state = LSP_SHUTDOWN;
+    return;
+  }
+
+  if (known == 1) {
+    if (lspStart(lsp, known_root, cfg->argv) != 0) {
+      editorSetStatusMessage("Failed to start %s", cfg->argv[0]);
+      lsp->state = LSP_SHUTDOWN; // don't ask again this session
+    }
     return;
   }
 
@@ -1426,15 +1457,20 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   answer = editorPrompt(question, NULL, 0);
   if (!answer || answer->length != 1 ||
       (answer->character[0] != 'y' && answer->character[0] != 'Y')) {
+    if (answer) // a no, not ESC: not asked again in this project either
+      projectLspRemember(buf, cfg->argv[0], NULL);
     gfree(answer);
     lsp->state = LSP_SHUTDOWN; // declined — don't ask again this session
     return;
   }
   gfree(answer);
 
-  default_root = buf->path ? buf->path : buf->fullname;
+  // The project's root when there is one, else the file's directory.
+  project_root = known_root[0] ? stringToUtf8((unsigned char *)known_root) : NULL;
+  default_root = project_root ? project_root : buf->path ? buf->path : buf->fullname;
   root = editorPrompt("Project root: %u", default_root,
                       1); // bPathMode=1: Tab completes paths
+  gfree(project_root);
   if (!root) {
     lsp->state = LSP_SHUTDOWN;
     return;
@@ -1443,8 +1479,12 @@ void bufferMaybeStartLsp(struct buffer_t *buf) {
   root_str = (char *)utf8ToString(root);
   gfree(root);
 
-  if (lspStart(lsp, root_str, cfg->argv) != 0)
+  if (lspStart(lsp, root_str, cfg->argv) != 0) {
     editorSetStatusMessage("Failed to start %s", cfg->argv[0]);
+    lsp->state = LSP_SHUTDOWN; // don't ask again this session
+  } else {
+    projectLspRemember(buf, cfg->argv[0], root_str);
+  }
 
   gfree(root_str);
 }
@@ -1483,40 +1523,6 @@ void bufferMaybeSyncLsp(struct buffer_t *buf) {
 }
 
 /**
- * @brief Lists all open buffers
- * @details Prints buffer information to status message
- * @return Number of open buffers
- */
-int bufferListAll(void) {
-  char buf[256] = "";
-  int offset;
-  EditorPane *active;
-  int first_buffer_id;
-  struct buffer_t *b;
-  char marker;
-  char *name;
-  if (E.number_of_buffer == 0) {
-    editorSetStatusMessage("No buffers open");
-    return 0;
-  }
-
-  offset = 0;
-  active = splitScreenGetActivePane();
-  first_buffer_id = E.buffers->buffer_id;
-  b = E.buffers;
-  do {
-    marker = (b->buffer_id == active->buffer_id) ? '*' : ' ';
-    name = b->filename ? (char *)utf8ToString(b->filename) : NULL;
-    offset += snprintf(&buf[offset], sizeof(buf) - offset, "%c%d:%s ", marker,
-                       b->buffer_id, name ? name : "[No Name]");
-    gfree(name);
-    b = b->next;
-  } while (b->buffer_id != first_buffer_id && offset < (int)sizeof(buf) - 1);
-  editorSetStatusMessage("Buffers: %s", buf);
-  return E.number_of_buffer;
-}
-
-/**
  * @brief Saves current buffer to disk
  * @return 0 on success, -1 on failure
  */
@@ -1529,33 +1535,6 @@ int bufferSave(void) {
 
   editorSave();
   return 0;
-}
-
-/**
- * @brief Saves all buffers to disk
- * @details Iterates through all buffers, saves each one
- * @return 0 on success, -1 on failure
- */
-int bufferSaveAll(void) {
-  int saved = 0;
-  int failed = 0;
-
-  int first_buffer_id = E.buffers[0].buffer_id;
-  struct buffer_t *b = E.buffers;
-
-  do {
-    if (bufferSwitch(b->buffer_id) == 0) {
-      if (E.dirty && bufferSave() == 0) {
-        saved++;
-      }
-    } else {
-      failed++;
-    }
-    b = b->next;
-  } while (b->buffer_id != first_buffer_id);
-
-  editorSetStatusMessage("Saved %d buffers (%d failed)", saved, failed);
-  return (failed == 0) ? 0 : -1;
 }
 
 /**

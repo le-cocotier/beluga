@@ -4,15 +4,14 @@
  */
 
 #include "../include/split_screen.h"
-#include "../include/galloc.h"
 #include "../include/buffer.h"
 #include "../include/editor_op.h"
+#include "../include/galloc.h"
 #include "../include/pty_session.h"
 #include "include/builtins.h"
 #include "include/data.h"
 #include <stdlib.h>
 #include <string.h>
-
 
 extern EditorConfig E;
 
@@ -22,32 +21,32 @@ extern EditorConfig E;
  *   - E.panes.layout
  */
 void splitScreenInit(void) {
-    EditorPane *new_panes;
-    E.layout.mode = SPLIT_NONE;
-    E.layout.num_panes = 1;
-    E.layout.active_pane = 0;
+  EditorPane *new_panes;
+  E.layout.mode = SPLIT_NONE;
+  E.layout.num_panes = 1;
+  E.layout.active_pane = 0;
 
-    new_panes = grealloc(E.layout.panes, sizeof(EditorPane) * 2);
-    if (!new_panes) {
-        editorSetStatusMessage("Error: realloc failed");
-        return;
-    }
-    E.layout.panes = new_panes;
+  new_panes = grealloc(E.layout.panes, sizeof(EditorPane) * 2);
+  if (!new_panes) {
+    editorSetStatusMessage("Error: realloc failed");
+    return;
+  }
+  E.layout.panes = new_panes;
 
-    // Initialize single fullscreen pane
-    E.layout.panes[0].buffer_id = -1; // No buffer for now
-    E.layout.panes[0].origin_y = 0;
-    E.layout.panes[0].origin_x = 0;
-    E.layout.panes[0].height = E.screenrows; // already excludes the 2 status rows
-    E.layout.panes[0].width = E.screencols;
-    E.layout.panes[0].cursor_x = 0;
-    E.layout.panes[0].cursor_y = 0;
-    E.layout.panes[0].y_offset = 0;
-    E.layout.panes[0].x_offset = 0;
-    E.layout.panes[0].shown_buffer_id = -1;
-    E.layout.panes[0].is_active = 1;
-    E.layout.panes[0].id = 0;
-    E.layout.panes[0].saved_buffer_id = -1;
+  // Initialize single fullscreen pane
+  E.layout.panes[0].buffer_id = -1; // No buffer for now
+  E.layout.panes[0].origin_y = 0;
+  E.layout.panes[0].origin_x = 0;
+  E.layout.panes[0].height = E.screenrows; // already excludes the 2 status rows
+  E.layout.panes[0].width = E.screencols;
+  E.layout.panes[0].cursor_x = 0;
+  E.layout.panes[0].cursor_y = 0;
+  E.layout.panes[0].y_offset = 0;
+  E.layout.panes[0].x_offset = 0;
+  E.layout.panes[0].shown_buffer_id = -1;
+  E.layout.panes[0].is_active = 1;
+  E.layout.panes[0].id = 0;
+  E.layout.panes[0].saved_buffer_id = -1;
 }
 
 /**
@@ -59,9 +58,9 @@ void splitScreenInit(void) {
  * "explorer" for every scratch buffer created before this field existed.
  */
 static const char *bufferFocusPrefix(const struct buffer_t *buf) {
-    if (buf && buf->focus_prefix[0])
-        return buf->focus_prefix;
-    return "explorer";
+  if (buf && buf->focus_prefix[0])
+    return buf->focus_prefix;
+  return "explorer";
 }
 
 /**
@@ -82,22 +81,23 @@ static const char *bufferFocusPrefix(const struct buffer_t *buf) {
  * see the arrow keys.
  */
 static void splitScreenApplyFocusPrefix(void) {
-    const Buffer *buf = bufferFindById(E.layout.panes[E.layout.active_pane].buffer_id);
-    const char *name = NULL;
-    struct prefix_t prefix;
+  const Buffer *buf =
+      bufferFindById(E.layout.panes[E.layout.active_pane].buffer_id);
+  const char *name = NULL;
+  struct prefix_t prefix;
 
-    if (buf && buf->type == TERMINAL_BUFF)
-        name = "term";
-    else if (buf && buf->type == EXPLORER_BUFF)
-        name = bufferFocusPrefix(buf);
+  if (buf && buf->type == TERMINAL_BUFF)
+    name = "term";
+  else if (buf && buf->type == EXPLORER_BUFF)
+    name = bufferFocusPrefix(buf);
 
-    if (name) {
-        prefix = find_prefix(name);
-        if (prefix.prefix_id != -1)
-            E.prefix_state = prefix.prefix_id;
-    } else {
-        E.prefix_state = 0;
-    }
+  if (name) {
+    prefix = find_prefix(name);
+    if (prefix.prefix_id != -1)
+      E.prefix_state = prefix.prefix_id;
+  } else {
+    E.prefix_state = 0;
+  }
 }
 
 /**
@@ -128,74 +128,75 @@ static void splitScreenApplyFocusPrefix(void) {
  * @return 0 on success, -1 if the pane is too small to divide.
  */
 int splitScreenSplitActive(const SplitMode direction) {
-    // Below this a pane has no room for a gutter plus readable text, and
-    // halving it repeatedly would eventually produce zero/negative sizes.
-    const int MIN_WIDTH  = 20;
-    const int MIN_HEIGHT = 4;
+  // Below this a pane has no room for a gutter plus readable text, and
+  // halving it repeatedly would eventually produce zero/negative sizes.
+  const int MIN_WIDTH = 20;
+  const int MIN_HEIGHT = 4;
 
-    EditorPane *active = &E.layout.panes[E.layout.active_pane];
-    EditorPane *grown;
-    EditorPane *fresh;
-    int left;
-    int top;
+  EditorPane *active = &E.layout.panes[E.layout.active_pane];
+  EditorPane *grown;
+  EditorPane *fresh;
+  int left;
+  int top;
 
-    if (direction == SPLIT_VERTICAL && active->width < MIN_WIDTH * 2 + 1) {
-        editorSetStatusMessage("Pane too narrow to split");
-        return -1;
-    }
-    if (direction == SPLIT_HORIZONTAL && active->height < MIN_HEIGHT * 2 + 1) {
-        editorSetStatusMessage("Pane too short to split");
-        return -1;
-    }
+  if (direction == SPLIT_VERTICAL && active->width < MIN_WIDTH * 2 + 1) {
+    editorSetStatusMessage("Pane too narrow to split");
+    return -1;
+  }
+  if (direction == SPLIT_HORIZONTAL && active->height < MIN_HEIGHT * 2 + 1) {
+    editorSetStatusMessage("Pane too short to split");
+    return -1;
+  }
 
-    grown = grealloc(E.layout.panes,
-                                sizeof(EditorPane) * (size_t)(E.layout.num_panes + 1));
-    if (!grown) {
-        editorSetStatusMessage("Error: realloc failed");
-        return -1;
-    }
-    E.layout.panes = grown;
-    // realloc may have moved the array — re-derive rather than reusing the
-    // pointer taken above it.
-    active = &E.layout.panes[E.layout.active_pane];
+  grown = grealloc(E.layout.panes,
+                   sizeof(EditorPane) * (size_t)(E.layout.num_panes + 1));
+  if (!grown) {
+    editorSetStatusMessage("Error: realloc failed");
+    return -1;
+  }
+  E.layout.panes = grown;
+  // realloc may have moved the array — re-derive rather than reusing the
+  // pointer taken above it.
+  active = &E.layout.panes[E.layout.active_pane];
 
-    fresh = &E.layout.panes[E.layout.num_panes];
-    *fresh = *active;              // inherit buffer and geometry, then carve
-    fresh->id = 0;                 // a pane of its own, starting at active's cursor
-    fresh->saved_buffer_id = -1;
-    fresh->cursor_x = 0;
-    fresh->cursor_y = 0;
-    fresh->x_offset = 0;
-    fresh->y_offset = 0;
+  fresh = &E.layout.panes[E.layout.num_panes];
+  *fresh = *active; // inherit buffer and geometry, then carve
+  fresh->id = 0;    // a pane of its own, starting at active's cursor
+  fresh->saved_buffer_id = -1;
+  fresh->cursor_x = 0;
+  fresh->cursor_y = 0;
+  fresh->x_offset = 0;
+  fresh->y_offset = 0;
 
-    if (direction == SPLIT_VERTICAL) {
-        left = (active->width - 1) / 2;   // -1 for the divider column
-        fresh->origin_x = active->origin_x + left + 1;
-        fresh->width    = active->width - left - 1;
-        active->width   = left;
-    } else {
-        top = (active->height - 1) / 2;   // -1 for the divider row
-        fresh->origin_y = active->origin_y + top + 1;
-        fresh->height   = active->height - top - 1;
-        active->height  = top;
-    }
+  if (direction == SPLIT_VERTICAL) {
+    left = (active->width - 1) / 2; // -1 for the divider column
+    fresh->origin_x = active->origin_x + left + 1;
+    fresh->width = active->width - left - 1;
+    active->width = left;
+  } else {
+    top = (active->height - 1) / 2; // -1 for the divider row
+    fresh->origin_y = active->origin_y + top + 1;
+    fresh->height = active->height - top - 1;
+    active->height = top;
+  }
 
-    active->is_active = 0;
-    fresh->is_active = 1;
-    E.layout.active_pane = E.layout.num_panes;
-    E.layout.num_panes++;
-    E.layout.mode = direction;
-    splitScreenApplyFocusPrefix();
+  active->is_active = 0;
+  fresh->is_active = 1;
+  E.layout.active_pane = E.layout.num_panes;
+  E.layout.num_panes++;
+  E.layout.mode = direction;
+  splitScreenApplyFocusPrefix();
 
-    // The active pane's cursor may now sit outside its narrower/shorter
-    // rectangle; editorScroll() pulls it back on the next redraw, but the
-    // PTY behind a terminal buffer has to be told directly.
-    splitScreenSyncTerminalSizes();
+  // The active pane's cursor may now sit outside its narrower/shorter
+  // rectangle; editorScroll() pulls it back on the next redraw, but the
+  // PTY behind a terminal buffer has to be told directly.
+  splitScreenSyncTerminalSizes();
 
-    editorSetStatusMessage("Split %s — %d panes",
-                           direction == SPLIT_VERTICAL ? "vertically" : "horizontally",
-                           E.layout.num_panes);
-    return 0;
+  editorSetStatusMessage("Split %s — %d panes",
+                         direction == SPLIT_VERTICAL ? "vertically"
+                                                     : "horizontally",
+                         E.layout.num_panes);
+  return 0;
 }
 
 /**
@@ -228,31 +229,31 @@ int splitScreenSplitActive(const SplitMode direction) {
  * it through a collapse with the wrong prefix, then edit).
  */
 void splitScreenUnify(void) {
-    int keep_buffer_id = E.layout.panes[0].buffer_id;
-    int i;
-    struct buffer_t *b;
-    for (i = 0; i < E.layout.num_panes; i++) {
-        b = bufferFindById(E.layout.panes[i].buffer_id);
-        if (b && b->type != EXPLORER_BUFF) {
-            keep_buffer_id = E.layout.panes[i].buffer_id;
-            break;
-        }
+  int keep_buffer_id = E.layout.panes[0].buffer_id;
+  int i;
+  struct buffer_t *b;
+  for (i = 0; i < E.layout.num_panes; i++) {
+    b = bufferFindById(E.layout.panes[i].buffer_id);
+    if (b && b->type != EXPLORER_BUFF) {
+      keep_buffer_id = E.layout.panes[i].buffer_id;
+      break;
     }
+  }
 
-    E.layout.mode = SPLIT_NONE;
-    E.layout.num_panes = 1;
-    E.layout.active_pane = 0;
+  E.layout.mode = SPLIT_NONE;
+  E.layout.num_panes = 1;
+  E.layout.active_pane = 0;
 
-    E.layout.panes[0].buffer_id = keep_buffer_id;
-    E.layout.panes[0].origin_x = 0;
-    E.layout.panes[0].origin_y = 0;
-    E.layout.panes[0].height = E.screenrows;
-    E.layout.panes[0].width = E.screencols;
-    E.layout.panes[0].is_active = 1;
+  E.layout.panes[0].buffer_id = keep_buffer_id;
+  E.layout.panes[0].origin_x = 0;
+  E.layout.panes[0].origin_y = 0;
+  E.layout.panes[0].height = E.screenrows;
+  E.layout.panes[0].width = E.screencols;
+  E.layout.panes[0].is_active = 1;
 
-    splitScreenApplyFocusPrefix();
-    editorSetStatusMessage("Unified view");
-    splitScreenSyncTerminalSizes();
+  splitScreenApplyFocusPrefix();
+  editorSetStatusMessage("Unified view");
+  splitScreenSyncTerminalSizes();
 }
 
 /**
@@ -275,30 +276,29 @@ void splitScreenUnify(void) {
  * size for the rest of the session.
  */
 void splitScreenSyncTerminalSizes(void) {
-    const ScreenLayout *layout = &E.layout;
-    int i;
-    EditorPane *pane;
-    struct buffer_t *buf;
-    for (i = 0; i < layout->num_panes; i++) {
-        pane = &layout->panes[i];
-        buf = bufferFindById(pane->buffer_id);
-        if (!buf || buf->type != TERMINAL_BUFF || !buf->pty)
-            continue;
-        ptySessionResize(buf, pane->height, pane->width);
-        buf->term_state.pane_height = pane->height;
-        buf->term_state.pane_width = pane->width;
-    }
+  const ScreenLayout *layout = &E.layout;
+  int i;
+  EditorPane *pane;
+  struct buffer_t *buf;
+  for (i = 0; i < layout->num_panes; i++) {
+    pane = &layout->panes[i];
+    buf = bufferFindById(pane->buffer_id);
+    if (!buf || buf->type != TERMINAL_BUFF || !buf->pty)
+      continue;
+    ptySessionResize(buf, pane->height, pane->width);
+    buf->term_state.pane_height = pane->height;
+    buf->term_state.pane_width = pane->width;
+  }
 }
-
 
 /**
  * @brief Where an edge at `v` of a `from`-cell span lands in a `to`-cell
  * span, rounded to the nearest cell.
  */
 static int scaleEdge(const int v, const int from, const int to) {
-    if (from <= 0)
-        return v;
-    return (v * to + from / 2) / from;
+  if (from <= 0)
+    return v;
+  return (v * to + from / 2) / from;
 }
 
 /**
@@ -307,14 +307,14 @@ static int scaleEdge(const int v, const int from, const int to) {
  * them (splits), and that decides how a pane's origin is rescaled.
  */
 static int edgeEndsAPane(const int x, const int vertical_axis) {
-    int i;
-    const EditorPane *p;
-    for (i = 0; i < E.layout.num_panes; i++) {
-        p = &E.layout.panes[i];
-        if ((vertical_axis ? p->origin_y + p->height : p->origin_x + p->width) == x)
-            return 1;
-    }
-    return 0;
+  int i;
+  const EditorPane *p;
+  for (i = 0; i < E.layout.num_panes; i++) {
+    p = &E.layout.panes[i];
+    if ((vertical_axis ? p->origin_y + p->height : p->origin_x + p->width) == x)
+      return 1;
+  }
+  return 0;
 }
 
 /**
@@ -322,24 +322,25 @@ static int edgeEndsAPane(const int x, const int vertical_axis) {
  * mapped the same way for every pane, so neighbours stay adjacent and a
  * divider stays one cell wide.
  */
-static void scaleSpan(int *origin, int *size, const int old_total, const int new_total,
-                      const int vertical_axis) {
-    const int start = *origin;
-    const int end = start + *size;
-    int new_start;
-    int new_end;
+static void scaleSpan(int *origin, int *size, const int old_total,
+                      const int new_total, const int vertical_axis) {
+  const int start = *origin;
+  const int end = start + *size;
+  int new_start;
+  int new_end;
 
-    if (start == 0)
-        new_start = 0;
-    else if (edgeEndsAPane(start, vertical_axis))
-        new_start = scaleEdge(start, old_total, new_total); // touching panes
-    else
-        new_start = scaleEdge(start - 1, old_total, new_total) + 1; // after a divider
-    new_end = end >= old_total ? new_total : scaleEdge(end, old_total, new_total);
-    if (new_end <= new_start)
-        new_end = new_start + 1;
-    *origin = new_start;
-    *size = new_end - new_start;
+  if (start == 0)
+    new_start = 0;
+  else if (edgeEndsAPane(start, vertical_axis))
+    new_start = scaleEdge(start, old_total, new_total); // touching panes
+  else
+    new_start =
+        scaleEdge(start - 1, old_total, new_total) + 1; // after a divider
+  new_end = end >= old_total ? new_total : scaleEdge(end, old_total, new_total);
+  if (new_end <= new_start)
+    new_end = new_start + 1;
+  *origin = new_start;
+  *size = new_end - new_start;
 }
 
 /**
@@ -350,96 +351,99 @@ static void scaleSpan(int *origin, int *size, const int old_total, const int new
  * pane's edges are rescaled from the old size to the new one.
  */
 void splitScreenResize(const int old_rows, const int old_cols) {
-    int i;
-    int origin_x[64];
-    int origin_y[64];
-    int width[64];
-    int height[64];
-    EditorPane *p;
-    const int n = E.layout.num_panes < 64 ? E.layout.num_panes : 64;
+  int i;
+  int origin_x[64];
+  int origin_y[64];
+  int width[64];
+  int height[64];
+  EditorPane *p;
+  const int n = E.layout.num_panes < 64 ? E.layout.num_panes : 64;
 
-    if (old_rows == E.screenrows && old_cols == E.screencols)
-        return;
-    // Computed from the old geometry first, then applied, since
-    // edgeEndsAPane() looks at the other panes.
-    for (i = 0; i < n; i++) {
-        p = &E.layout.panes[i];
-        origin_x[i] = p->origin_x;
-        width[i] = p->width;
-        origin_y[i] = p->origin_y;
-        height[i] = p->height;
-        scaleSpan(&origin_x[i], &width[i], old_cols, E.screencols, 0);
-        scaleSpan(&origin_y[i], &height[i], old_rows, E.screenrows, 1);
-    }
-    for (i = 0; i < n; i++) {
-        p = &E.layout.panes[i];
-        p->origin_x = origin_x[i];
-        p->width = width[i];
-        p->origin_y = origin_y[i];
-        p->height = height[i];
-    }
+  if (old_rows == E.screenrows && old_cols == E.screencols)
+    return;
+  // Computed from the old geometry first, then applied, since
+  // edgeEndsAPane() looks at the other panes.
+  for (i = 0; i < n; i++) {
+    p = &E.layout.panes[i];
+    origin_x[i] = p->origin_x;
+    width[i] = p->width;
+    origin_y[i] = p->origin_y;
+    height[i] = p->height;
+    scaleSpan(&origin_x[i], &width[i], old_cols, E.screencols, 0);
+    scaleSpan(&origin_y[i], &height[i], old_rows, E.screenrows, 1);
+  }
+  for (i = 0; i < n; i++) {
+    p = &E.layout.panes[i];
+    p->origin_x = origin_x[i];
+    p->width = width[i];
+    p->origin_y = origin_y[i];
+    p->height = height[i];
+  }
 }
 
 /**
  * @brief Splits the screen vertically with a fixed-width left pane
  * (e.g. an explorer sidebar) and the rest of the screen on the right.
  */
-int splitScreenWithSidebar(const int sidebar_buffer_id, const int main_buffer_id, int sidebar_width) {
-    int pane_height;
-    struct prefix_t prefix;
-    if (bufferFindById(sidebar_buffer_id) == NULL ||
-        bufferFindById(main_buffer_id) == NULL) {
-        editorSetStatusMessage("Error: invalid buffer IDs");
-        return -1;
-    }
+int splitScreenWithSidebar(const int sidebar_buffer_id,
+                           const int main_buffer_id, int sidebar_width) {
+  int pane_height;
+  struct prefix_t prefix;
+  if (bufferFindById(sidebar_buffer_id) == NULL ||
+      bufferFindById(main_buffer_id) == NULL) {
+    editorSetStatusMessage("Error: invalid buffer IDs");
+    return -1;
+  }
 
-    E.layout.panes = grealloc(E.layout.panes, sizeof(EditorPane) * 2);
-    E.layout.mode = SPLIT_VERTICAL;
-    E.layout.num_panes = 2;
-    E.layout.active_pane = 0;
+  E.layout.panes = grealloc(E.layout.panes, sizeof(EditorPane) * 2);
+  E.layout.mode = SPLIT_VERTICAL;
+  E.layout.num_panes = 2;
+  E.layout.active_pane = 0;
 
-    if (sidebar_width < 1) sidebar_width = 1;
-    if (sidebar_width > E.screencols - 1) sidebar_width = E.screencols - 1;
-    pane_height = E.screenrows;
+  if (sidebar_width < 1)
+    sidebar_width = 1;
+  if (sidebar_width > E.screencols - 1)
+    sidebar_width = E.screencols - 1;
+  pane_height = E.screenrows;
 
-    // Sidebar pane
-    E.layout.panes[0].buffer_id = sidebar_buffer_id;
-    E.layout.panes[0].origin_y = 0;
-    E.layout.panes[0].origin_x = 0;
-    E.layout.panes[0].height = pane_height;
-    E.layout.panes[0].width = sidebar_width;
-    E.layout.panes[0].cursor_x = 0;
-    E.layout.panes[0].cursor_y = 0;
-    E.layout.panes[0].y_offset = 0;
-    E.layout.panes[0].x_offset = 0;
-    E.layout.panes[0].shown_buffer_id = -1;
-    E.layout.panes[0].is_active = 1;
-    E.layout.panes[0].id = 0;
-    E.layout.panes[0].saved_buffer_id = -1;
+  // Sidebar pane
+  E.layout.panes[0].buffer_id = sidebar_buffer_id;
+  E.layout.panes[0].origin_y = 0;
+  E.layout.panes[0].origin_x = 0;
+  E.layout.panes[0].height = pane_height;
+  E.layout.panes[0].width = sidebar_width;
+  E.layout.panes[0].cursor_x = 0;
+  E.layout.panes[0].cursor_y = 0;
+  E.layout.panes[0].y_offset = 0;
+  E.layout.panes[0].x_offset = 0;
+  E.layout.panes[0].shown_buffer_id = -1;
+  E.layout.panes[0].is_active = 1;
+  E.layout.panes[0].id = 0;
+  E.layout.panes[0].saved_buffer_id = -1;
 
-    // Main pane
-    E.layout.panes[1].buffer_id = main_buffer_id;
-    E.layout.panes[1].origin_y = 0;
-    E.layout.panes[1].origin_x = sidebar_width;
-    E.layout.panes[1].height = pane_height;
-    E.layout.panes[1].width = E.screencols - sidebar_width;
-    E.layout.panes[1].cursor_x = 0;
-    E.layout.panes[1].cursor_y = 0;
-    E.layout.panes[1].y_offset = 0;
-    E.layout.panes[1].x_offset = 0;
-    E.layout.panes[1].shown_buffer_id = -1;
-    E.layout.panes[1].is_active = 0;
-    E.layout.panes[1].id = 0;
-    E.layout.panes[1].saved_buffer_id = -1;
+  // Main pane
+  E.layout.panes[1].buffer_id = main_buffer_id;
+  E.layout.panes[1].origin_y = 0;
+  E.layout.panes[1].origin_x = sidebar_width;
+  E.layout.panes[1].height = pane_height;
+  E.layout.panes[1].width = E.screencols - sidebar_width;
+  E.layout.panes[1].cursor_x = 0;
+  E.layout.panes[1].cursor_y = 0;
+  E.layout.panes[1].y_offset = 0;
+  E.layout.panes[1].x_offset = 0;
+  E.layout.panes[1].shown_buffer_id = -1;
+  E.layout.panes[1].is_active = 0;
+  E.layout.panes[1].id = 0;
+  E.layout.panes[1].saved_buffer_id = -1;
 
-    // Focus starts on the sidebar — the whole point of just having opened
-    // it is to pick something in it.
-    prefix = find_prefix(bufferFocusPrefix(bufferFindById(sidebar_buffer_id)));
-    E.prefix_state = prefix.prefix_id;
+  // Focus starts on the sidebar — the whole point of just having opened
+  // it is to pick something in it.
+  prefix = find_prefix(bufferFocusPrefix(bufferFindById(sidebar_buffer_id)));
+  E.prefix_state = prefix.prefix_id;
 
-    splitScreenSyncTerminalSizes();
-    editorSetStatusMessage("Explorer opened");
-    return 0;
+  splitScreenSyncTerminalSizes();
+  editorSetStatusMessage("Explorer opened");
+  return 0;
 }
 
 /**
@@ -456,9 +460,7 @@ int splitScreenWithSidebar(const int sidebar_buffer_id, const int main_buffer_id
  * no-prefix (see splitScreenUnify()'s own doc comment for why that
  * particular mismatch is a real memory-safety bug, not just a UX one).
  */
-void splitScreenCloseSidebar(void) {
-    splitScreenUnify();
-}
+void splitScreenCloseSidebar(void) { splitScreenUnify(); }
 
 /**
  * @brief Moves focus to some other pane that isn't a sidebar-style
@@ -475,27 +477,58 @@ void splitScreenCloseSidebar(void) {
  * @return 1 if focus moved to a different pane, 0 if it stayed put.
  */
 int splitScreenFocusOtherRealPane(void) {
-    int start;
-    int step;
-    int i;
-    struct buffer_t *b;
-    if (E.layout.num_panes < 2)
-        return 0;
-
-    start = E.layout.active_pane;
-    for (step = 1; step < E.layout.num_panes; step++) {
-        i = (start + step) % E.layout.num_panes;
-        b = bufferFindById(E.layout.panes[i].buffer_id);
-        if (b && b->type == EXPLORER_BUFF)
-            continue;
-
-        E.layout.panes[start].is_active = 0;
-        E.layout.active_pane = i;
-        E.layout.panes[i].is_active = 1;
-        splitScreenApplyFocusPrefix();
-        return 1;
-    }
+  int start;
+  int step;
+  int i;
+  struct buffer_t *b;
+  if (E.layout.num_panes < 2)
     return 0;
+
+  start = E.layout.active_pane;
+  for (step = 1; step < E.layout.num_panes; step++) {
+    i = (start + step) % E.layout.num_panes;
+    b = bufferFindById(E.layout.panes[i].buffer_id);
+    if (b && b->type == EXPLORER_BUFF)
+      continue;
+
+    E.layout.panes[start].is_active = 0;
+    E.layout.active_pane = i;
+    E.layout.panes[i].is_active = 1;
+    splitScreenApplyFocusPrefix();
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * @brief The pane covering screen cell (row, col), both 0-based.
+ * @return Its index in E.layout.panes, or -1 (a divider, the status bar,
+ * the message line).
+ */
+int splitScreenPaneAt(const int row, const int col) {
+  const EditorPane *p;
+  int i;
+  for (i = 0; i < E.layout.num_panes; i++) {
+    p = &E.layout.panes[i];
+    if (row >= p->origin_y && row < p->origin_y + p->height &&
+        col >= p->origin_x && col < p->origin_x + p->width)
+      return i;
+  }
+  return -1;
+}
+
+/**
+ * @brief Moves focus to pane `index`, as splitScreenSwitchPane() would if
+ * it got there. Nothing happens for an index out of range or the pane
+ * that already has focus.
+ */
+void splitScreenFocusPane(const int index) {
+  if (index < 0 || index >= E.layout.num_panes || index == E.layout.active_pane)
+    return;
+  E.layout.panes[E.layout.active_pane].is_active = 0;
+  E.layout.active_pane = index;
+  E.layout.panes[index].is_active = 1;
+  splitScreenApplyFocusPrefix();
 }
 
 /**
@@ -503,66 +536,41 @@ int splitScreenFocusOtherRealPane(void) {
  * @return 0 on success, -1 on failure
  */
 int splitScreenSwitchPane(void) {
-    if (E.layout.num_panes < 2) {
-        editorSetStatusMessage("No split to switch");
-        return -1;
-    }
+  if (E.layout.num_panes < 2) {
+    editorSetStatusMessage("No split to switch");
+    return -1;
+  }
 
-    // Deactivate current pane
-    E.layout.panes[E.layout.active_pane].is_active = 0;
+  // Deactivate current pane
+  E.layout.panes[E.layout.active_pane].is_active = 0;
 
-    // Move to next pane
-    E.layout.active_pane = (E.layout.active_pane + 1) % E.layout.num_panes;
-    splitScreenApplyFocusPrefix();
+  // Move to next pane
+  E.layout.active_pane = (E.layout.active_pane + 1) % E.layout.num_panes;
+  splitScreenApplyFocusPrefix();
 
-    // Activate new pane
-    E.layout.panes[E.layout.active_pane].is_active = 1;
+  // Activate new pane
+  E.layout.panes[E.layout.active_pane].is_active = 1;
 
-    editorSetStatusMessage("Switched to pane %d (buffer %d)",
-                          E.layout.active_pane,
-                          E.layout.panes[E.layout.active_pane].buffer_id);
-    return 0;
-}
-
-/**
- * @brief Updates the active pane's buffer
- * @param buffer_id New buffer ID for active pane
- * @return 0 on success, -1 on failure
- */
-int splitScreenSetPaneBuffer(const int buffer_id) {
-    EditorPane *active;
-    if (bufferFindById(buffer_id) == NULL) {
-        editorSetStatusMessage("Error: invalid buffer ID");
-        return -1;
-    }
-
-    active = &E.layout.panes[E.layout.active_pane];
-    active->buffer_id = buffer_id;
-    active->cursor_x = 0;
-    active->cursor_y = 0;
-    active->origin_x = 0;
-    active->origin_y = 0;
-
-    editorSetStatusMessage("Pane %d now showing buffer %d",
-                          E.layout.active_pane, buffer_id);
-    return 0;
+  editorSetStatusMessage("Switched to pane %d (buffer %d)",
+                         E.layout.active_pane,
+                         E.layout.panes[E.layout.active_pane].buffer_id);
+  return 0;
 }
 
 /**
  * @brief Gets current screen layout
  * @return Pointer to current ScreenLayout
  */
-ScreenLayout *splitScreenGetLayout(void) {
-    return &E.layout;
-}
+ScreenLayout *splitScreenGetLayout(void) { return &E.layout; }
 
 /**
  * @brief Gets active pane
  * @return Pointer to active EditorPane
  */
 EditorPane *splitScreenGetActivePane(void) {
-    if (E.layout.num_panes == 0) return NULL;
-    return &E.layout.panes[E.layout.active_pane];
+  if (E.layout.num_panes == 0)
+    return NULL;
+  return &E.layout.panes[E.layout.active_pane];
 }
 
 /***********************************************************************************************************************
@@ -577,91 +585,84 @@ static int s_focus_pane = 0;
 static int s_focus_buffer = -1;
 
 static EditorPane *paneById(const int id) {
-    int i;
-    for (i = 0; id > 0 && i < E.layout.num_panes; i++)
-        if (E.layout.panes[i].id == id)
-            return &E.layout.panes[i];
-    return NULL;
+  int i;
+  for (i = 0; id > 0 && i < E.layout.num_panes; i++)
+    if (E.layout.panes[i].id == id)
+      return &E.layout.panes[i];
+  return NULL;
 }
 
 // Pane `id` loses focus: it keeps buf's cursor as its own.
 static void leaveCursor(const int id, struct buffer_t *buf) {
-    EditorPane *pane = paneById(id);
-    if (pane && pane->buffer_id == buf->buffer_id) {
-        pane->saved_x = buf->x;
-        pane->saved_y = buf->y;
-        pane->saved_buffer_id = buf->buffer_id;
-    }
-    buf->cursor_pane = id;
-    buf->cursor_left_x = buf->x;
-    buf->cursor_left_y = buf->y;
+  EditorPane *pane = paneById(id);
+  if (pane && pane->buffer_id == buf->buffer_id) {
+    pane->saved_x = buf->x;
+    pane->saved_y = buf->y;
+    pane->saved_buffer_id = buf->buffer_id;
+  }
+  buf->cursor_pane = id;
+  buf->cursor_left_x = buf->x;
+  buf->cursor_left_y = buf->y;
 }
 
 void splitScreenSyncCursor(void) {
-    EditorPane *active = splitScreenGetActivePane();
-    struct buffer_t *buf;
-    if (!active)
-        return;
-    if (active->id == 0)
-        active->id = s_next_pane_id++;
-    if (active->id == s_focus_pane && active->buffer_id == s_focus_buffer)
-        return;
-    buf = s_focus_pane ? bufferFindById(s_focus_buffer) : NULL;
-    if (buf)
-        leaveCursor(s_focus_pane, buf);
-    buf = bufferFindById(active->buffer_id);
-    // Back to where this pane's cursor was, unless the cursor is already
-    // its own, or was moved on purpose since another pane left it.
-    if (buf && active->saved_buffer_id == buf->buffer_id && buf->cursor_pane != active->id &&
-        buf->x == buf->cursor_left_x && buf->y == buf->cursor_left_y) {
-        buf->y = active->saved_y < buf->numrows ? active->saved_y
-                                                : (buf->numrows > 0 ? buf->numrows - 1 : 0);
-        buf->x = active->saved_x;
-        if (buf->y < buf->numrows && buf->x > buf->row[buf->y].size)
-            buf->x = buf->row[buf->y].size;
-        if (buf->x < 0)
-            buf->x = 0;
-        // The view follows: fitted around the cursor again if it's off screen.
-        if (buf->y < active->y_offset || buf->y >= active->y_offset + active->height)
-            active->shown_buffer_id = -1;
-    }
-    if (buf)
-        buf->cursor_pane = active->id;
-    s_focus_pane = active->id;
-    s_focus_buffer = active->buffer_id;
+  EditorPane *active = splitScreenGetActivePane();
+  struct buffer_t *buf;
+  if (!active)
+    return;
+  if (active->id == 0)
+    active->id = s_next_pane_id++;
+  if (active->id == s_focus_pane && active->buffer_id == s_focus_buffer)
+    return;
+  buf = s_focus_pane ? bufferFindById(s_focus_buffer) : NULL;
+  if (buf)
+    leaveCursor(s_focus_pane, buf);
+  buf = bufferFindById(active->buffer_id);
+  // Back to where this pane's cursor was, unless the cursor is already
+  // its own, or was moved on purpose since another pane left it.
+  if (buf && active->saved_buffer_id == buf->buffer_id &&
+      buf->cursor_pane != active->id && buf->x == buf->cursor_left_x &&
+      buf->y == buf->cursor_left_y) {
+    buf->y = active->saved_y < buf->numrows
+                 ? active->saved_y
+                 : (buf->numrows > 0 ? buf->numrows - 1 : 0);
+    buf->x = active->saved_x;
+    if (buf->y < buf->numrows && buf->x > buf->row[buf->y].size)
+      buf->x = buf->row[buf->y].size;
+    if (buf->x < 0)
+      buf->x = 0;
+    // The view follows: fitted around the cursor again if it's off screen.
+    if (buf->y < active->y_offset ||
+        buf->y >= active->y_offset + active->height)
+      active->shown_buffer_id = -1;
+  }
+  if (buf)
+    buf->cursor_pane = active->id;
+  s_focus_pane = active->id;
+  s_focus_buffer = active->buffer_id;
 }
 
 void splitScreenSaveCursor(void) {
-    struct buffer_t *buf = s_focus_pane ? bufferFindById(s_focus_buffer) : NULL;
-    if (buf)
-        leaveCursor(s_focus_pane, buf);
-    s_focus_pane = 0;
-    s_focus_buffer = -1;
+  struct buffer_t *buf = s_focus_pane ? bufferFindById(s_focus_buffer) : NULL;
+  if (buf)
+    leaveCursor(s_focus_pane, buf);
+  s_focus_pane = 0;
+  s_focus_buffer = -1;
 }
 
-void splitScreenLinesShifted(const struct buffer_t *buf, const int at, const int delta) {
-    EditorPane *pane;
-    int i;
-    for (i = 0; i < E.layout.num_panes; i++) {
-        pane = &E.layout.panes[i];
-        if (pane->id == buf->cursor_pane || pane->saved_buffer_id != buf->buffer_id ||
-            pane->saved_y < at)
-            continue;
-        if (delta < 0 && pane->saved_y < at - delta)
-            pane->saved_y = at > 0 ? at - 1 : 0; // its line went: where the text joined
-        else
-            pane->saved_y += delta;
-    }
-}
-
-void freeScreenLayout(ScreenLayout *layout) {
-    if (layout) {
-        gfree(layout->panes);
-        layout->panes = NULL;
-    }
-}
-
-void freePane(EditorPane *pane)
-{
-    gfree(pane);
+void splitScreenLinesShifted(const struct buffer_t *buf, const int at,
+                             const int delta) {
+  EditorPane *pane;
+  int i;
+  for (i = 0; i < E.layout.num_panes; i++) {
+    pane = &E.layout.panes[i];
+    if (pane->id == buf->cursor_pane ||
+        pane->saved_buffer_id != buf->buffer_id || pane->saved_y < at)
+      continue;
+    if (delta < 0 && pane->saved_y < at - delta)
+      pane->saved_y =
+          at > 0 ? at - 1 : 0; // its line went: where the text joined
+    else
+      pane->saved_y += delta;
+  }
 }
