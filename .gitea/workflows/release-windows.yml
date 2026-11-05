@@ -1,4 +1,6 @@
-# Windows release package.
+# Release packages: the Windows zip (windows-package) and the Linux
+# packages and source tarball (linux-packages, at the end).
+#
 #
 # Pushing a tag that starts with "v" (git tag v3.3 && git push origin v3.3)
 # cross-compiles beluga.exe on Linux and publishes
@@ -19,7 +21,7 @@
 # with the "write:package" scope and save it as the Actions secret
 # PACKAGE_TOKEN.
 
-name: Release Windows package
+name: Release packages
 
 on:
   push:
@@ -126,3 +128,81 @@ jobs:
         with:
           name: beluga-windows-x64
           path: dist/*.zip
+
+  # Linux packages and the source tarball, attached to the same release
+  # once the Windows job has created it:
+  #   beluga-<version>.tar.gz          what Homebrew and the AUR build from
+  #   beluga_<version>_amd64.deb       also in Gitea's Debian registry
+  #   beluga-<version>-1.x86_64.rpm    also in Gitea's RPM registry
+  # The registries use the same tokens as above (PACKAGE_TOKEN for the
+  # registries, RELEASE_TOKEN for the release, else GITEA_TOKEN). After the
+  # release, packaging/render.sh <version> fills in the Homebrew, winget and
+  # AUR recipes (see packaging/README.md).
+  linux-packages:
+    runs-on: giorgio-runner
+    needs: windows-package
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build gcc rpm curl jq
+
+      - name: Build the source tarball, .deb and .rpm
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="beluga-$VERSION/" -o "dist/beluga-$VERSION.tar.gz" HEAD
+          packaging/linux/build-packages.sh "$VERSION" dist
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Attach them to the release
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITEA_TOKEN }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          api() { curl -sS --fail-with-body -H "Authorization: token $TOKEN" "$@"; }
+          ID=$(api "$API/releases/tags/$TAG" | jq -er '.id')
+          for FILE in dist/*.tar.gz dist/*.deb dist/*.rpm; do
+            NAME=$(basename "$FILE")
+            for OLD in $(api "$API/releases/$ID/assets" | jq -r --arg n "$NAME" '.[] | select(.name == $n) | .id'); do
+              api -X DELETE "$API/releases/$ID/assets/$OLD"
+            done
+            api -X POST -F "attachment=@$FILE" "$API/releases/$ID/assets?name=$NAME" \
+              | jq -er '"Published: " + .browser_download_url'
+          done
+
+      - name: Publish to Gitea's Debian and RPM registries
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.PACKAGE_TOKEN || secrets.GITEA_TOKEN }}
+          SERVER: ${{ github.server_url }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          api() { curl -sS --fail-with-body -H "Authorization: token $TOKEN" "$@"; }
+          DEB=$(ls dist/*.deb); RPM=$(ls dist/*.rpm)
+
+          # A re-run on the same tag replaces what the last one uploaded
+          # (Gitea refuses a second upload of a version with HTTP 409).
+          curl -sS -o /dev/null -X DELETE -H "Authorization: token $TOKEN" \
+            "$SERVER/api/packages/$OWNER/debian/pool/stable/main/beluga/$VERSION/amd64" || true
+          api --upload-file "$DEB" "$SERVER/api/packages/$OWNER/debian/pool/stable/main/upload"
+          echo "Published $DEB to $SERVER/api/packages/$OWNER/debian (stable main)"
+
+          curl -sS -o /dev/null -X DELETE -H "Authorization: token $TOKEN" \
+            "$SERVER/api/packages/$OWNER/rpm/package/beluga/$VERSION-1/x86_64" || true
+          api --upload-file "$RPM" "$SERVER/api/packages/$OWNER/rpm/upload"
+          echo "Published $RPM to $SERVER/api/packages/$OWNER/rpm"
+
+          for TYPE in debian rpm; do
+            curl -sS -o /dev/null -X POST -H "Authorization: token $TOKEN" \
+              "$SERVER/api/v1/packages/$OWNER/$TYPE/beluga/-/link/$REPO" || true
+          done

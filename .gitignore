@@ -11,3 +11,4 @@ beluga.wiki
 *.log
 *.err
 __pycache__/
+dist/

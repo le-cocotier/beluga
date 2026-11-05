@@ -1,0 +1,36 @@
+# Maintainer: Arthur Barraux <arthurbarraux@icloud.com>
+#
+# AUR package "beluga-editor" ("beluga" alone is taken by other projects
+# on the AUR). packaging/render.sh VERSION fills in pkgver and sha256sums;
+# regenerate .SRCINFO with: makepkg --printsrcinfo > .SRCINFO
+pkgname=beluga-editor
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Terminal text editor configured in Lisp, with LSP and a debugger"
+arch=('x86_64' 'aarch64')
+url="https://git.giorgio-nas.fr/arthur/beluga"
+license=('MIT')
+depends=('glibc')
+makedepends=('meson' 'ninja')
+checkdepends=('git')
+optdepends=('git: git integration, project search in repositories'
+            'gdb: debugging C programs'
+            'clangd: C language server')
+provides=('beluga')
+conflicts=('beluga')
+source=("beluga-$pkgver.tar.gz::$url/releases/download/v$pkgver/beluga-$pkgver.tar.gz")
+sha256sums=('@SHA256_SOURCE@')
+
+build() {
+  arch-meson "beluga-$pkgver" build
+  meson compile -C build
+}
+
+check() {
+  meson test -C build --print-errorlogs --no-suite pty
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 "beluga-$pkgver/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

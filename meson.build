@@ -145,8 +145,23 @@ beluga_exe = executable('beluga',
   c_args : core_args,
   link_with : [core_lib, os_lib],
   dependencies : [m],
-  link_args : link_args
+  link_args : link_args,
+  install : true
 )
+
+# `meson install` (what Homebrew, the .deb/.rpm and the AUR package run):
+# bin/beluga, plus the default config, the bundled packages and the splash
+# screen in share/beluga. beluga finds them from its own path at start
+# (utilDataDir()), sets up ~/.beluga from them the first time, and loads
+# bundled packages from there, so they upgrade with the editor.
+# install.sh and install.ps1 don't use this: they copy into ~/.beluga.
+if not is_windows
+  beluga_data = get_option('datadir') / 'beluga'
+  install_subdir('config', install_dir : beluga_data)
+  install_subdir('packages', install_dir : beluga_data,
+    exclude_files : ['lisp_log.err'])
+  install_subdir('assets', install_dir : beluga_data)
+endif
 
 # The OS boundary, checked: no file outside src/os/ includes an OS header.
 test('os-boundary', find_program('tools/check_os_boundary.sh'),

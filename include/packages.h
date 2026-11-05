@@ -26,6 +26,7 @@ Lisp l_belugaVersion(Lisp args, LispError *e, LispContext ctx);
 Lisp l_versionCompare(Lisp args, LispError *e, LispContext ctx);
 Lisp l_belugaDirectory(Lisp args, LispError *e, LispContext ctx);
 Lisp l_packageDirectory(Lisp args, LispError *e, LispContext ctx);
+Lisp l_bundledPackageDirectory(Lisp args, LispError *e, LispContext ctx);
 Lisp l_readDataFile(Lisp args, LispError *e, LispContext ctx);
 Lisp l_writeDataFile(Lisp args, LispError *e, LispContext ctx);
 
